@@ -48,3 +48,6 @@ dist/
 build/
 coverage/
 htmlcov/
+
+# Repository metadata
+.github/
