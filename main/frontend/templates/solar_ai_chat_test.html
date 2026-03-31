@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Solar AI Chat Test{% endblock %}
+
+{% block content %}
+<section class="hero compact">
+    <p class="kicker">Solar AI Chat</p>
+    <h1>Vietnamese Query Test Console</h1>
+    <p class="subtitle">Send role-based Vietnamese questions and inspect response payload with source metadata.</p>
+</section>
+
+<section class="chat-test-layout">
+    <form id="chat-form" class="panel" novalidate>
+        <h2>Request</h2>
+
+        <label for="role">Role</label>
+        <select id="role" name="role" required>
+            <option value="viewer">Viewer</option>
+            <option value="data_analyst">Data Analyst</option>
+            <option value="data_engineer">Data Engineer</option>
+            <option value="ml_engineer">ML Engineer</option>
+            <option value="admin">Admin</option>
+        </select>
+
+        <label for="session_id">Session ID</label>
+        <input id="session_id" name="session_id" value="manual-ui-session" maxlength="100">
+
+        <label for="message">Vietnamese Question</label>
+        <textarea id="message" name="message" rows="5" required>Cho toi tong quan he thong hom nay: san luong, r-squared, chat luong du lieu va so co so</textarea>
+
+        <button type="submit" id="submit-button" class="btn btn-primary">Send Query</button>
+        <p id="status-text" class="status-text" role="status"></p>
+    </form>
+
+    <section class="panel">
+        <h2>Response</h2>
+        <pre id="response-output">No request sent yet.</pre>
+    </section>
+</section>
+
+<script src="{{ url_for('static', path='js/chatbot-test.js') }}" defer></script>
+{% endblock %}

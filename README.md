@@ -111,3 +111,65 @@ deactivate
 
 - Keep real secrets only in `.env` files that are ignored by Git.
 - Keep templates and documentation tracked in Git (`.env_example`, `.env.requirements.md`).
+
+## Solar AI Chat (Vietnamese Natural Language)
+
+Solar AI Chat endpoint is available at:
+
+- `POST /solar-ai-chat/query`
+
+### Request body
+
+```json
+{
+	"message": "Cho toi tong quan he thong va san luong",
+	"role": "viewer"
+}
+```
+
+Supported role values:
+
+- `data_engineer`
+- `ml_engineer`
+- `data_analyst`
+- `viewer`
+- `admin`
+
+### Model routing
+
+- Primary model: `gemini-2.5-flash-lite`
+- Fallback model: `gemini-2.5-flash`
+
+If the primary model is unavailable, the service automatically retries with the fallback model.
+If both models are unavailable, the service returns a safe data-backed summary with warning metadata.
+
+### Development environment variables
+
+Solar AI Chat environment templates are in `dev/config`:
+
+- `dev/config/.env_example`
+- `dev/config/.env.requirements.md`
+
+Create local runtime values with:
+
+```powershell
+Copy-Item dev/config/.env_example dev/config/.env -Force
+```
+
+## Basic Frontend Pages
+
+FastAPI now serves a basic web UI for module navigation and chatbot testing:
+
+- Home page with 8 module cards: `GET /`
+- Solar AI Chat test page: `GET /solar-ai-chat/test`
+
+Run locally:
+
+```powershell
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
+```
+
+Then open:
+
+- `http://127.0.0.1:8000/`
+- `http://127.0.0.1:8000/solar-ai-chat/test`
