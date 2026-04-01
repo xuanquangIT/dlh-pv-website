@@ -1,0 +1,33 @@
+{
+  "session_id": "5bf7061d1e15",
+  "title": "Chat 15:40:49 1/4/2026",
+  "role": "data_engineer",
+  "created_at": "2026-04-01T08:40:49.842678+00:00",
+  "updated_at": "2026-04-01T08:40:53.366979+00:00",
+  "messages": [
+    {
+      "id": "734ef5fb4a06",
+      "session_id": "5bf7061d1e15",
+      "sender": "user",
+      "content": "cho tôi aqi cao nhất 5/5/2025",
+      "timestamp": "2026-04-01T08:40:53.354584+00:00",
+      "topic": null,
+      "sources": null
+    },
+    {
+      "id": "551df88a5b7c",
+      "session_id": "5bf7061d1e15",
+      "sender": "assistant",
+      "content": "Chào bạn, đây là thông tin bạn cần:\n\n*   **Chỉ số chính:** Chỉ số chất lượng không khí (AQI) cao nhất vào ngày 05/05/2025.\n*   **Y nghĩa ngữ cảnh:** AQI cao nhất là 23.0, được ghi nhận tại trạm Limondale 2 và Bomen. Mức này thuộc nhóm \"Tốt\".\n*   **Nguồn dữ liệu:** Silver (lh\\_silver\\_clean\\_hourly\\_air\\_quality).\n*   **Dữ liệu bổ sung:** Các trạm khác như Finley, Avonlie, Emerald cũng có AQI ở mức \"Tốt\".\n*   **Thời điểm ghi nhận:** Ghi nhận lúc 22:00 ngày 04/05/2025.",
+      "timestamp": "2026-04-01T08:40:53.366979+00:00",
+      "topic": "data_quality_issues",
+      "sources": [
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_air_quality",
+          "data_source": "trino"
+        }
+      ]
+    }
+  ]
+}

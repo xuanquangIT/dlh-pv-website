@@ -49,7 +49,18 @@ function renderMessage(msg) {
     const div = document.createElement("div");
     div.className = "chat-msg chat-msg-" + msg.sender;
     const label = msg.sender === "user" ? "You" : "Assistant";
-    div.innerHTML = "<strong>" + escapeHtml(label) + ":</strong> " + escapeHtml(msg.content);
+    let html = "<strong>" + escapeHtml(label) + ":</strong> " + escapeHtml(msg.content);
+    if (msg.sender === "assistant" && Array.isArray(msg.sources) && msg.sources.length > 0) {
+        const uniqueSources = msg.sources.filter(
+            (s, i, arr) => arr.findIndex(x => x.data_source === s.data_source) === i
+        );
+        const tags = uniqueSources.map(function (s) {
+            const cls = s.data_source === "trino" ? "source-tag source-tag-trino" : "source-tag source-tag-csv";
+            return '<span class="' + cls + '">' + escapeHtml(s.data_source.toUpperCase()) + '</span>';
+        }).join(" ");
+        html += ' <span class="source-tag-row">' + tags + '</span>';
+    }
+    div.innerHTML = html;
     return div;
 }
 
@@ -211,7 +222,10 @@ form.addEventListener("submit", async function (event) {
         responseOutput.textContent = "Waiting for response...";
 
         const result = await querySolarChat(payload);
-        setStatus("OK  Topic: " + result.topic + "  |  Model: " + result.model_used, false);
+        const sourceLabel = Array.isArray(result.sources) && result.sources.length > 0
+            ? result.sources[0].data_source.toUpperCase()
+            : "unknown";
+        setStatus("OK  Topic: " + result.topic + "  |  Model: " + result.model_used + "  |  Source: " + sourceLabel, false);
         responseOutput.textContent = JSON.stringify(result, null, 2);
         messageArea.value = "";
         await selectSession(activeSessionId);

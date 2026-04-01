@@ -8,6 +8,7 @@ from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 class SourceMetadata(BaseModel):
     layer: str = Field(description="Data layer name. Accepted values: Silver or Gold.")
     dataset: str = Field(description="Dataset name used to answer the query.")
+    data_source: str = Field(default="trino", description="Backend used to retrieve data. Values: trino or csv.")
 
 
 class SolarChatRequest(BaseModel):

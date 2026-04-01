@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -47,6 +48,15 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
         app.dependency_overrides[get_solar_ai_chat_service] = get_test_solar_ai_chat_service
         app.dependency_overrides[_get_history_repository] = _get_test_history_repository
         cls.client = TestClient(app)
+        cls._trino_patcher = patch(
+            "app.repositories.solar_ai_chat.chat_repository.SolarChatRepository._execute_query",
+            side_effect=ConnectionError("Trino not available in tests"),
+        )
+        cls._trino_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._trino_patcher.stop()
 
     def test_returns_system_overview_for_viewer(self) -> None:
         response = self.client.post(

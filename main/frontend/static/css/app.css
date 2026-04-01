@@ -407,3 +407,32 @@ pre {
     text-align: center;
     padding: 20px 0;
 }
+
+.source-tag-row {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+}
+
+.source-tag {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+}
+
+.source-tag-trino {
+    background: #e8f4e8;
+    color: #1a5e1a;
+    border: 1px solid #a5d6a7;
+}
+
+.source-tag-csv {
+    background: #fff3e0;
+    color: #7c4300;
+    border: 1px solid #ffcc80;
+}

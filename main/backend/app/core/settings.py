@@ -33,6 +33,12 @@ class SolarChatSettings(BaseSettings):
     )
     data_root: str | None = Field(default=None, alias="SOLAR_CHAT_DATA_ROOT")
 
+    trino_host: str = Field(default="localhost", alias="TRINO_HOST")
+    trino_port: int = Field(default=8081, alias="TRINO_PORT")
+    trino_user: str = Field(default="trino", alias="TRINO_USER")
+    trino_catalog: str = Field(default="postgresql", alias="TRINO_CATALOG")
+    trino_schema: str = Field(default="public", alias="TRINO_SCHEMA")
+
     @property
     def resolved_data_root(self) -> Path:
         if self.data_root:
