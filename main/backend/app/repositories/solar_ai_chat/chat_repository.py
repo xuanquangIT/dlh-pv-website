@@ -17,6 +17,8 @@ class SolarChatRepository:
         self._data_root = settings.resolved_data_root
 
     def fetch_topic_metrics(self, topic: ChatTopic) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        if topic is ChatTopic.GENERAL:
+            return self._general_greeting()
         handlers: dict[ChatTopic, Any] = {
             ChatTopic.SYSTEM_OVERVIEW: self._system_overview,
             ChatTopic.ENERGY_PERFORMANCE: self._energy_performance,
@@ -27,50 +29,6 @@ class SolarChatRepository:
         }
         return handlers[topic]()
 
-    def fetch_lowest_aqi_by_date(self, query_date: date) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self.fetch_extreme_aqi(query_type="lowest", timeframe="day", anchor_date=query_date)
-
-    def fetch_highest_aqi_by_date(self, query_date: date) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self.fetch_extreme_aqi(query_type="highest", timeframe="day", anchor_date=query_date)
-
-    def fetch_lowest_energy_by_date(self, query_date: date) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self.fetch_extreme_energy(query_type="lowest", timeframe="day", anchor_date=query_date)
-
-    def fetch_highest_energy_by_date(self, query_date: date) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self.fetch_extreme_energy(query_type="highest", timeframe="day", anchor_date=query_date)
-
-    def fetch_lowest_weather_by_date(
-        self,
-        query_date: date,
-        weather_metric: str,
-        weather_metric_label: str,
-        weather_unit: str,
-    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self.fetch_extreme_weather(
-            query_type="lowest",
-            timeframe="day",
-            anchor_date=query_date,
-            weather_metric=weather_metric,
-            weather_metric_label=weather_metric_label,
-            weather_unit=weather_unit,
-        )
-
-    def fetch_highest_weather_by_date(
-        self,
-        query_date: date,
-        weather_metric: str,
-        weather_metric_label: str,
-        weather_unit: str,
-    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self.fetch_extreme_weather(
-            query_type="highest",
-            timeframe="day",
-            anchor_date=query_date,
-            weather_metric=weather_metric,
-            weather_metric_label=weather_metric_label,
-            weather_unit=weather_unit,
-        )
-
     def fetch_extreme_aqi(
         self,
         query_type: str,
@@ -78,12 +36,38 @@ class SolarChatRepository:
         anchor_date: date | None,
         specific_hour: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._fetch_extreme_aqi_by_period(
-            timeframe=timeframe,
-            anchor_date=anchor_date,
-            highest=query_type == "highest",
-            specific_hour=specific_hour,
+        station_rows, qt, period_label, resolved_date = self._run_extreme_query(
+            csv_filename="lh_silver_clean_hourly_air_quality.csv",
+            value_key="aqi_value",
+            observed_at_keys=("date_hour", "timestamp"),
+            query_type=query_type, timeframe=timeframe,
+            anchor_date=anchor_date, specific_hour=specific_hour,
+            metric_label="AQI",
+            extra_keys=("aqi_category",),
         )
+        selected = station_rows[0]
+        metrics = {
+            "query_date": resolved_date.isoformat(),
+            "timeframe": timeframe,
+            "period_label": period_label,
+            "specific_hour": specific_hour,
+            "extreme_metric": "aqi",
+            "query_type": qt,
+            "aqi_query_type": qt,
+            f"{qt}_station": selected["facility"],
+            f"{qt}_aqi_value": round(selected["metric_value"], 2),
+            f"{qt}_aqi_category": selected.get("aqi_category", "Unknown"),
+            "observed_at": selected["observed_at"],
+            f"top_{qt}_stations": [
+                {
+                    "facility": s["facility"],
+                    "aqi_value": round(s["metric_value"], 2),
+                    "aqi_category": s.get("aqi_category", "Unknown"),
+                }
+                for s in station_rows[:5]
+            ],
+        }
+        return metrics, [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality"}]
 
     def fetch_extreme_energy(
         self,
@@ -92,12 +76,34 @@ class SolarChatRepository:
         anchor_date: date | None,
         specific_hour: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._fetch_extreme_energy_by_period(
-            timeframe=timeframe,
-            anchor_date=anchor_date,
-            highest=query_type == "highest",
-            specific_hour=specific_hour,
+        station_rows, qt, period_label, resolved_date = self._run_extreme_query(
+            csv_filename="lh_silver_clean_hourly_energy.csv",
+            value_key="energy_mwh",
+            observed_at_keys=("date_hour", "timestamp"),
+            query_type=query_type, timeframe=timeframe,
+            anchor_date=anchor_date, specific_hour=specific_hour,
+            metric_label="Energy",
         )
+        selected = station_rows[0]
+        metrics = {
+            "query_date": resolved_date.isoformat(),
+            "timeframe": timeframe,
+            "period_label": period_label,
+            "specific_hour": specific_hour,
+            "extreme_metric": "energy",
+            "query_type": qt,
+            f"{qt}_station": selected["facility"],
+            f"{qt}_energy_mwh": round(selected["metric_value"], 2),
+            "observed_at": selected["observed_at"],
+            f"top_{qt}_stations": [
+                {
+                    "facility": s["facility"],
+                    "energy_mwh": round(s["metric_value"], 2),
+                }
+                for s in station_rows[:5]
+            ],
+        }
+        return metrics, [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"}]
 
     def fetch_extreme_weather(
         self,
@@ -109,224 +115,41 @@ class SolarChatRepository:
         weather_unit: str,
         specific_hour: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._fetch_extreme_weather_by_period(
-            timeframe=timeframe,
-            anchor_date=anchor_date,
-            highest=query_type == "highest",
-            specific_hour=specific_hour,
-            weather_metric=weather_metric,
-            weather_metric_label=weather_metric_label,
-            weather_unit=weather_unit,
-        )
-
-    def _fetch_extreme_aqi_by_period(
-        self,
-        timeframe: str,
-        anchor_date: date | None,
-        highest: bool,
-        specific_hour: int | None = None,
-    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        silver_air_rows = self._load_csv(self._dataset_path("lh_silver_clean_hourly_air_quality.csv"))
-
-        target_rows, period_label, resolved_date = self._filter_rows_by_timeframe(
-            rows=silver_air_rows,
-            timeframe=timeframe,
-            anchor_date=anchor_date,
-            specific_hour=specific_hour,
-        )
-        if not target_rows:
-            raise ValueError(
-                f"No AQI data is available for timeframe '{timeframe}' around '{period_label}'."
-            )
-
-        facility_extreme_aqi: dict[str, dict[str, Any]] = {}
-        for row in target_rows:
-            facility = row.get("facility_name") or row.get("facility_code") or "Unknown"
-            aqi_value = self._to_float(row.get("aqi_value"), default=float("nan"))
-            if aqi_value != aqi_value:
-                continue
-
-            current_entry = facility_extreme_aqi.get(facility)
-            should_replace = current_entry is None
-            if current_entry is not None:
-                should_replace = aqi_value > current_entry["aqi_value"] if highest else aqi_value < current_entry["aqi_value"]
-
-            if should_replace:
-                facility_extreme_aqi[facility] = {
-                    "facility": facility,
-                    "aqi_value": aqi_value,
-                    "aqi_category": row.get("aqi_category") or "Unknown",
-                    "observed_at": row.get("date_hour") or row.get("timestamp") or "",
-                }
-
-        if not facility_extreme_aqi:
-            raise ValueError(
-                f"AQI values are missing for timeframe '{timeframe}' around '{period_label}'."
-            )
-
-        ranked_stations = sorted(
-            facility_extreme_aqi.values(),
-            key=lambda item: item["aqi_value"],
-            reverse=highest,
-        )
-        selected_station = ranked_stations[0]
-        query_type = "highest" if highest else "lowest"
-        resolved_period_label = period_label
-        if timeframe == "hour" and specific_hour is None:
-            resolved_period_label = self._format_hour_label(
-                selected_station.get("observed_at"),
-                fallback=period_label,
-            )
-
-        metrics = {
-            "query_date": resolved_date.isoformat(),
-            "timeframe": timeframe,
-            "period_label": resolved_period_label,
-            "specific_hour": specific_hour,
-            "extreme_metric": "aqi",
-            "query_type": query_type,
-            "aqi_query_type": query_type,
-            f"{query_type}_station": selected_station["facility"],
-            f"{query_type}_aqi_value": round(selected_station["aqi_value"], 2),
-            f"{query_type}_aqi_category": selected_station["aqi_category"],
-            "observed_at": selected_station["observed_at"],
-            f"top_{query_type}_stations": [
-                {
-                    "facility": station["facility"],
-                    "aqi_value": round(station["aqi_value"], 2),
-                    "aqi_category": station["aqi_category"],
-                }
-                for station in ranked_stations[:5]
-            ],
-        }
-        sources = [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality"}]
-        return metrics, sources
-
-    def _fetch_extreme_energy_by_period(
-        self,
-        timeframe: str,
-        anchor_date: date | None,
-        highest: bool,
-        specific_hour: int | None = None,
-    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        silver_energy_rows = self._load_csv(self._dataset_path("lh_silver_clean_hourly_energy.csv"))
-        target_rows, period_label, resolved_date = self._filter_rows_by_timeframe(
-            rows=silver_energy_rows,
-            timeframe=timeframe,
-            anchor_date=anchor_date,
-            specific_hour=specific_hour,
-        )
-        if not target_rows:
-            raise ValueError(
-                f"No energy data is available for timeframe '{timeframe}' around '{period_label}'."
-            )
-
-        station_rows = self._build_station_extremes(
-            rows=target_rows,
-            value_key="energy_mwh",
-            observed_at_keys=("date_hour", "timestamp"),
-            highest=highest,
-        )
-        if not station_rows:
-            raise ValueError(
-                f"Energy values are missing for timeframe '{timeframe}' around '{period_label}'."
-            )
-
-        query_type = "highest" if highest else "lowest"
-        selected_station = station_rows[0]
-        resolved_period_label = period_label
-        if timeframe == "hour" and specific_hour is None:
-            resolved_period_label = self._format_hour_label(
-                selected_station.get("observed_at"),
-                fallback=period_label,
-            )
-
-        metrics = {
-            "query_date": resolved_date.isoformat(),
-            "timeframe": timeframe,
-            "period_label": resolved_period_label,
-            "specific_hour": specific_hour,
-            "extreme_metric": "energy",
-            "query_type": query_type,
-            f"{query_type}_station": selected_station["facility"],
-            f"{query_type}_energy_mwh": round(selected_station["metric_value"], 2),
-            "observed_at": selected_station["observed_at"],
-            f"top_{query_type}_stations": [
-                {
-                    "facility": station["facility"],
-                    "energy_mwh": round(station["metric_value"], 2),
-                }
-                for station in station_rows[:5]
-            ],
-        }
-        sources = [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"}]
-        return metrics, sources
-
-    def _fetch_extreme_weather_by_period(
-        self,
-        timeframe: str,
-        anchor_date: date | None,
-        highest: bool,
-        weather_metric: str,
-        weather_metric_label: str,
-        weather_unit: str,
-        specific_hour: int | None = None,
-    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        silver_weather_rows = self._load_csv(self._dataset_path("lh_silver_clean_hourly_weather.csv"))
-        target_rows, period_label, resolved_date = self._filter_rows_by_timeframe(
-            rows=silver_weather_rows,
-            timeframe=timeframe,
-            anchor_date=anchor_date,
-            specific_hour=specific_hour,
-        )
-        if not target_rows:
-            raise ValueError(
-                f"No weather data is available for timeframe '{timeframe}' around '{period_label}'."
-            )
-
-        station_rows = self._build_station_extremes(
-            rows=target_rows,
+        station_rows, qt, period_label, resolved_date = self._run_extreme_query(
+            csv_filename="lh_silver_clean_hourly_weather.csv",
             value_key=weather_metric,
             observed_at_keys=("date_hour", "timestamp"),
-            highest=highest,
+            query_type=query_type, timeframe=timeframe,
+            anchor_date=anchor_date, specific_hour=specific_hour,
+            metric_label="Weather",
         )
-        if not station_rows:
-            raise ValueError(
-                f"Weather metric '{weather_metric}' is missing for timeframe '{timeframe}' around '{period_label}'."
-            )
-
-        query_type = "highest" if highest else "lowest"
-        selected_station = station_rows[0]
-        resolved_period_label = period_label
-        if timeframe == "hour" and specific_hour is None:
-            resolved_period_label = self._format_hour_label(
-                selected_station.get("observed_at"),
-                fallback=period_label,
-            )
-
+        selected = station_rows[0]
         metrics = {
             "query_date": resolved_date.isoformat(),
             "timeframe": timeframe,
-            "period_label": resolved_period_label,
+            "period_label": period_label,
             "specific_hour": specific_hour,
             "extreme_metric": "weather",
-            "query_type": query_type,
+            "query_type": qt,
             "weather_metric": weather_metric,
             "weather_metric_label": weather_metric_label,
             "weather_unit": weather_unit,
-            f"{query_type}_station": selected_station["facility"],
-            f"{query_type}_weather_value": round(selected_station["metric_value"], 2),
-            "observed_at": selected_station["observed_at"],
-            f"top_{query_type}_stations": [
+            f"{qt}_station": selected["facility"],
+            f"{qt}_weather_value": round(selected["metric_value"], 2),
+            "observed_at": selected["observed_at"],
+            f"top_{qt}_stations": [
                 {
-                    "facility": station["facility"],
-                    "weather_value": round(station["metric_value"], 2),
+                    "facility": s["facility"],
+                    "weather_value": round(s["metric_value"], 2),
                 }
-                for station in station_rows[:5]
+                for s in station_rows[:5]
             ],
         }
-        sources = [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather"}]
-        return metrics, sources
+        return metrics, [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather"}]
+
+    def _general_greeting(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        topics = [t.value for t in ChatTopic if t is not ChatTopic.GENERAL]
+        return {"available_topics": topics}, [{"layer": "Gold", "dataset": "system_metadata"}]
 
     def _system_overview(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
         gold_fact_rows = self._load_csv(self._dataset_path("lh_gold_fact_solar_environmental.csv"))
@@ -601,6 +424,7 @@ class SolarChatRepository:
         value_key: str,
         observed_at_keys: tuple[str, ...],
         highest: bool,
+        extra_keys: tuple[str, ...] = (),
     ) -> list[dict[str, Any]]:
         station_values: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -623,17 +447,63 @@ class SolarChatRepository:
                 for observed_key in observed_at_keys:
                     observed_at = row.get(observed_key) or observed_at
 
-                station_values[facility] = {
+                entry: dict[str, Any] = {
                     "facility": facility,
                     "metric_value": metric_value,
                     "observed_at": observed_at,
                 }
+                for extra_key in extra_keys:
+                    entry[extra_key] = row.get(extra_key) or "Unknown"
+                station_values[facility] = entry
 
         return sorted(
             station_values.values(),
             key=lambda item: item["metric_value"],
             reverse=highest,
         )
+
+    def _run_extreme_query(
+        self,
+        csv_filename: str,
+        value_key: str,
+        observed_at_keys: tuple[str, ...],
+        query_type: str,
+        timeframe: str,
+        anchor_date: date | None,
+        specific_hour: int | None,
+        metric_label: str,
+        extra_keys: tuple[str, ...] = (),
+    ) -> tuple[list[dict[str, Any]], str, str, date]:
+        highest = query_type == "highest"
+        rows = self._load_csv(self._dataset_path(csv_filename))
+        target_rows, period_label, resolved_date = self._filter_rows_by_timeframe(
+            rows=rows, timeframe=timeframe, anchor_date=anchor_date, specific_hour=specific_hour,
+        )
+        if not target_rows:
+            raise ValueError(
+                f"No {metric_label} data is available for timeframe '{timeframe}' around '{period_label}'."
+            )
+
+        station_rows = self._build_station_extremes(
+            rows=target_rows,
+            value_key=value_key,
+            observed_at_keys=observed_at_keys,
+            highest=highest,
+            extra_keys=extra_keys,
+        )
+        if not station_rows:
+            raise ValueError(
+                f"{metric_label} values are missing for timeframe '{timeframe}' around '{period_label}'."
+            )
+
+        query_type_label = "highest" if highest else "lowest"
+        resolved_period_label = period_label
+        if timeframe == "hour" and specific_hour is None:
+            resolved_period_label = self._format_hour_label(
+                station_rows[0].get("observed_at"), fallback=period_label,
+            )
+
+        return station_rows, query_type_label, resolved_period_label, resolved_date
 
     def _filter_rows_by_timeframe(
         self,
@@ -686,8 +556,6 @@ class SolarChatRepository:
                 hour_start = day_start + timedelta(hours=specific_hour)
                 hour_end = hour_start + timedelta(hours=1)
                 return hour_start, hour_end, hour_start.isoformat(timespec="minutes")
-            # For "hour" queries, scan all hourly records in the requested day,
-            # then select the extreme hour in downstream ranking logic.
             day_end = day_start + timedelta(days=1)
             return day_start, day_end, resolved_anchor_date.isoformat()
 
@@ -734,7 +602,6 @@ class SolarChatRepository:
         normalized = observed_at.replace("Z", "")
         try:
             parsed = datetime.fromisoformat(normalized)
-            # Keep the source wall-clock hour for user-facing labels.
             return parsed.replace(tzinfo=None).isoformat(timespec="minutes")
         except ValueError:
             parsed_fallback = self._parse_datetime(observed_at)

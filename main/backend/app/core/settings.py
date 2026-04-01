@@ -9,7 +9,7 @@ class SolarChatSettings(BaseSettings):
     """Runtime settings for Solar AI Chat module."""
 
     model_config = SettingsConfigDict(
-        env_file=("dev/config/.env", "main/docker/.env"),
+        env_file=(".env", "dev/config/.env", "main/docker/.env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

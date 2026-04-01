@@ -25,7 +25,7 @@ class FrontendPagesIntegrationTests(unittest.TestCase):
         self.assertEqual(html.count('class="module-card"'), 8)
 
     def test_chatbot_test_page_renders_form(self) -> None:
-        response = self.client.get("/solar-ai-chat/test")
+        response = self.client.get("/solar-ai-chat")
         self.assertEqual(response.status_code, 200)
 
         html = response.text

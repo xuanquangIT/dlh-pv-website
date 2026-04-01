@@ -7,7 +7,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.core.settings import SolarChatSettings
-from app.services.gemini_client import GeminiModelRouter, ModelUnavailableError
+from app.services.solar_ai_chat.gemini_client import GeminiModelRouter, ModelUnavailableError
 
 
 class GeminiModelRouterTests(unittest.TestCase):

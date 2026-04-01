@@ -1,4 +1,6 @@
+import shutil
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -10,11 +12,21 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.main import create_app
-from app.api.solar_ai_chat import get_solar_ai_chat_service
+from app.api.solar_ai_chat import get_solar_ai_chat_service, _get_history_repository
 from app.core.settings import SolarChatSettings
-from app.repositories.solar_chat_repository import SolarChatRepository
-from app.services.solar_ai_chat_service import SolarAIChatService
-from app.services.solar_chat_intent_service import VietnameseIntentService
+from app.repositories.solar_ai_chat import ChatHistoryRepository
+from app.repositories.solar_ai_chat import SolarChatRepository
+from app.services.solar_ai_chat import SolarAIChatService
+from app.services.solar_ai_chat import VietnameseIntentService
+
+_TEST_HISTORY_DIR: Path | None = None
+
+
+def _get_test_history_repository() -> ChatHistoryRepository:
+    global _TEST_HISTORY_DIR
+    if _TEST_HISTORY_DIR is None:
+        _TEST_HISTORY_DIR = Path(tempfile.mkdtemp(prefix="chat_history_test_"))
+    return ChatHistoryRepository(storage_dir=_TEST_HISTORY_DIR)
 
 
 def get_test_solar_ai_chat_service() -> SolarAIChatService:
@@ -24,6 +36,7 @@ def get_test_solar_ai_chat_service() -> SolarAIChatService:
         repository=SolarChatRepository(settings=settings),
         intent_service=VietnameseIntentService(),
         model_router=None,
+        history_repository=_get_test_history_repository(),
     )
 
 
@@ -32,6 +45,7 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         app = create_app()
         app.dependency_overrides[get_solar_ai_chat_service] = get_test_solar_ai_chat_service
+        app.dependency_overrides[_get_history_repository] = _get_test_history_repository
         cls.client = TestClient(app)
 
     def test_returns_system_overview_for_viewer(self) -> None:
@@ -295,6 +309,70 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
         self.assertEqual(body["key_metrics"]["timeframe"], "year")
         self.assertIn("period_label", body["key_metrics"])
 
+    def test_admin_can_access_all_topics(self) -> None:
+        admin_queries = [
+            {"message": "Cho toi tong quan he thong", "role": "admin"},
+            {"message": "Top nha may hieu suat cao nhat", "role": "admin"},
+            {"message": "So sanh mo hinh GBT-v4.2 voi v4.1", "role": "admin"},
+            {"message": "Cho toi trang thai pipeline va ETA", "role": "admin"},
+            {"message": "Du bao 72 gio va khoang tin cay", "role": "admin"},
+            {"message": "Cho toi danh sach co so diem thap va nguyen nhan", "role": "admin"},
+        ]
+        for query in admin_queries:
+            response = self.client.post("/solar-ai-chat/query", json=query)
+            self.assertEqual(
+                response.status_code,
+                200,
+                msg=f"Admin should access topic for: {query['message']}",
+            )
+
+    def test_data_engineer_denied_ml_model(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi tham so mo hinh GBT-v4.2 va so sanh voi v4.1",
+                "role": "data_engineer",
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("not allowed", response.json()["detail"])
+
+    def test_ml_engineer_denied_pipeline_status(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi trang thai pipeline, tien do cac stage va ETA",
+                "role": "ml_engineer",
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("not allowed", response.json()["detail"])
+
+    def test_viewer_denied_data_quality_issues(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi danh sach co so diem chat luong thap va nguyen nhan",
+                "role": "viewer",
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("not allowed", response.json()["detail"])
+
+    def test_returns_warning_message_when_model_router_absent(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi tong quan he thong hom nay",
+                "role": "viewer",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["model_used"], "deterministic-summary")
+        self.assertIsNotNone(body["warning_message"])
+        self.assertIn("Gemini API key", body["warning_message"])
+
     def test_standard_queries_under_four_seconds(self) -> None:
         standard_queries = [
             {
@@ -333,6 +411,132 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
                 4000,
                 msg=f"End-to-end latency exceeded 4s for query: {query['message']}",
             )
+
+
+class ChatSessionApiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        global _TEST_HISTORY_DIR
+        _TEST_HISTORY_DIR = Path(tempfile.mkdtemp(prefix="chat_session_api_test_"))
+        app = create_app()
+        app.dependency_overrides[get_solar_ai_chat_service] = get_test_solar_ai_chat_service
+        app.dependency_overrides[_get_history_repository] = _get_test_history_repository
+        cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        global _TEST_HISTORY_DIR
+        if _TEST_HISTORY_DIR and _TEST_HISTORY_DIR.exists():
+            shutil.rmtree(_TEST_HISTORY_DIR, ignore_errors=True)
+            _TEST_HISTORY_DIR = None
+
+    def test_create_and_list_sessions(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/sessions",
+            json={"role": "viewer", "title": "Test session"},
+        )
+        self.assertEqual(response.status_code, 201)
+        session = response.json()
+        self.assertEqual(session["title"], "Test session")
+        self.assertEqual(session["role"], "viewer")
+        self.assertEqual(session["message_count"], 0)
+
+        list_response = self.client.get("/solar-ai-chat/sessions")
+        self.assertEqual(list_response.status_code, 200)
+        sessions = list_response.json()
+        session_ids = [s["session_id"] for s in sessions]
+        self.assertIn(session["session_id"], session_ids)
+
+    def test_get_session_detail(self) -> None:
+        create = self.client.post(
+            "/solar-ai-chat/sessions",
+            json={"role": "admin", "title": "Detail test"},
+        )
+        session_id = create.json()["session_id"]
+
+        detail = self.client.get(f"/solar-ai-chat/sessions/{session_id}")
+        self.assertEqual(detail.status_code, 200)
+        body = detail.json()
+        self.assertEqual(body["session_id"], session_id)
+        self.assertEqual(body["messages"], [])
+
+    def test_get_nonexistent_session_returns_404(self) -> None:
+        response = self.client.get("/solar-ai-chat/sessions/nonexistent")
+        self.assertEqual(response.status_code, 404)
+
+    def test_delete_session(self) -> None:
+        create = self.client.post(
+            "/solar-ai-chat/sessions",
+            json={"role": "viewer", "title": "To delete"},
+        )
+        session_id = create.json()["session_id"]
+
+        delete = self.client.delete(f"/solar-ai-chat/sessions/{session_id}")
+        self.assertEqual(delete.status_code, 204)
+
+        get = self.client.get(f"/solar-ai-chat/sessions/{session_id}")
+        self.assertEqual(get.status_code, 404)
+
+    def test_delete_nonexistent_session_returns_404(self) -> None:
+        response = self.client.delete("/solar-ai-chat/sessions/nonexistent")
+        self.assertEqual(response.status_code, 404)
+
+    def test_query_persists_messages_in_session(self) -> None:
+        create = self.client.post(
+            "/solar-ai-chat/sessions",
+            json={"role": "viewer", "title": "Persist test"},
+        )
+        session_id = create.json()["session_id"]
+
+        self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi tong quan he thong",
+                "role": "viewer",
+                "session_id": session_id,
+            },
+        )
+
+        detail = self.client.get(f"/solar-ai-chat/sessions/{session_id}")
+        body = detail.json()
+        self.assertEqual(len(body["messages"]), 2)
+        self.assertEqual(body["messages"][0]["sender"], "user")
+        self.assertEqual(body["messages"][1]["sender"], "assistant")
+
+    def test_fork_session_copies_messages(self) -> None:
+        create = self.client.post(
+            "/solar-ai-chat/sessions",
+            json={"role": "admin", "title": "Original"},
+        )
+        session_id = create.json()["session_id"]
+
+        self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi tong quan he thong",
+                "role": "admin",
+                "session_id": session_id,
+            },
+        )
+
+        fork = self.client.post(
+            f"/solar-ai-chat/sessions/{session_id}/fork",
+            json={"title": "Forked session", "role": "admin"},
+        )
+        self.assertEqual(fork.status_code, 201)
+        fork_body = fork.json()
+        self.assertEqual(fork_body["title"], "Forked session")
+        self.assertEqual(fork_body["message_count"], 2)
+
+        fork_detail = self.client.get(f"/solar-ai-chat/sessions/{fork_body['session_id']}")
+        self.assertEqual(len(fork_detail.json()["messages"]), 2)
+
+    def test_fork_nonexistent_session_returns_404(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/sessions/nonexistent/fork",
+            json={"title": "Fork"},
+        )
+        self.assertEqual(response.status_code, 404)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,55 @@
+{
+  "session_id": "e87637cd4103",
+  "title": "Chat 14:37:37 1/4/2026",
+  "role": "viewer",
+  "created_at": "2026-04-01T07:37:37.239025+00:00",
+  "updated_at": "2026-04-01T07:37:53.533776+00:00",
+  "messages": [
+    {
+      "id": "3c8e84cbdc5c",
+      "session_id": "e87637cd4103",
+      "sender": "user",
+      "content": "hello",
+      "timestamp": "2026-04-01T07:37:41.101438+00:00",
+      "topic": null,
+      "sources": null
+    },
+    {
+      "id": "a8c1fd1a0c92",
+      "session_id": "e87637cd4103",
+      "sender": "assistant",
+      "content": "Xin chào! Tôi là trợ lý AI Solar.\nTôi có thể giúp bạn với các chủ đề sau:\n* Tổng quan về hệ thống\n* Hiệu suất năng lượng\n* Mô hình học máy\n* Trạng thái đường ống\n* Dự báo 72 giờ\n* Các vấn đề về chất lượng dữ liệu\n\nDữ liệu này đến từ nguồn Gold.",
+      "timestamp": "2026-04-01T07:37:41.109085+00:00",
+      "topic": "general",
+      "sources": [
+        {
+          "layer": "Gold",
+          "dataset": "system_metadata"
+        }
+      ]
+    },
+    {
+      "id": "ff81af286371",
+      "session_id": "e87637cd4103",
+      "sender": "user",
+      "content": "hello",
+      "timestamp": "2026-04-01T07:37:53.502093+00:00",
+      "topic": null,
+      "sources": null
+    },
+    {
+      "id": "dd84fdd87b5a",
+      "session_id": "e87637cd4103",
+      "sender": "assistant",
+      "content": "Xin chào! Tôi là trợ lý AI Solar.\n\nTôi có thể giúp bạn với các chủ đề sau:\n* Tổng quan về hệ thống\n* Hiệu suất năng lượng\n* Mô hình học máy\n* Trạng thái đường ống\n* Dự báo 72 giờ\n* Các vấn đề về chất lượng dữ liệu\n\nDữ liệu này đến từ nguồn **Gold**.",
+      "timestamp": "2026-04-01T07:37:53.533776+00:00",
+      "topic": "general",
+      "sources": [
+        {
+          "layer": "Gold",
+          "dataset": "system_metadata"
+        }
+      ]
+    }
+  ]
+}

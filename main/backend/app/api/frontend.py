@@ -56,7 +56,7 @@ MODULE_CARDS = [
         "name": "Solar AI Chat",
         "description": "Vietnamese natural language assistant for business users.",
         "endpoint": "/solar-ai-chat/topics",
-        "ui_path": "/solar-ai-chat/test",
+        "ui_path": "/solar-ai-chat",
     },
 ]
 
@@ -70,7 +70,7 @@ def home_page(request: Request) -> HTMLResponse:
     )
 
 
-@router.get("/solar-ai-chat/test", response_class=HTMLResponse)
+@router.get("/solar-ai-chat", response_class=HTMLResponse)
 def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,

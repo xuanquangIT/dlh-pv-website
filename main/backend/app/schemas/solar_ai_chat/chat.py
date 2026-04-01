@@ -1,24 +1,8 @@
-from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-class ChatRole(str, Enum):
-    DATA_ENGINEER = "data_engineer"
-    ML_ENGINEER = "ml_engineer"
-    DATA_ANALYST = "data_analyst"
-    VIEWER = "viewer"
-    ADMIN = "admin"
-
-
-class ChatTopic(str, Enum):
-    SYSTEM_OVERVIEW = "system_overview"
-    ENERGY_PERFORMANCE = "energy_performance"
-    ML_MODEL = "ml_model"
-    PIPELINE_STATUS = "pipeline_status"
-    FORECAST_72H = "forecast_72h"
-    DATA_QUALITY_ISSUES = "data_quality_issues"
+from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 
 
 class SourceMetadata(BaseModel):

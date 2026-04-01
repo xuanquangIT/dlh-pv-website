@@ -5,18 +5,19 @@ import time
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
-from unicodedata import normalize
 
-from app.repositories.solar_chat_repository import SolarChatRepository
+from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
+from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.schemas.solar_ai_chat import (
+    ChatMessage,
     ChatRole,
     ChatTopic,
     SolarChatRequest,
     SolarChatResponse,
     SourceMetadata,
 )
-from app.services.gemini_client import GeminiModelRouter, ModelUnavailableError
-from app.services.solar_chat_intent_service import VietnameseIntentService
+from app.services.solar_ai_chat.gemini_client import GeminiModelRouter, ModelUnavailableError
+from app.services.solar_ai_chat.intent_service import VietnameseIntentService, normalize_vietnamese_text
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +81,24 @@ class SolarAIChatService:
         r"\bmoi\s+gio\b",
     )
 
+    _HOUR_PATTERNS: tuple[re.Pattern[str], ...] = (
+        re.compile(
+            r"\b(?:vao\s+luc|luc|vao)\s*(?P<hour>\d{1,2})(?:\s*[:h]\s*(?P<minute>\d{1,2}))?\s*(?:gio)?\s*(?P<period>sang|chieu|toi|dem|am|pm)?\b"
+        ),
+        re.compile(r"\b(?P<hour>\d{1,2})\s*gio\s*(?P<period>sang|chieu|toi|dem)\b"),
+        re.compile(r"\b(?P<hour>\d{1,2})\s*(?::|h)\s*(?P<minute>\d{1,2})\s*(?P<period>am|pm)?\b"),
+    )
+
+    _DATE_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+        (re.compile(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b"), ("day", "month", "year")),
+        (re.compile(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"), ("year", "month", "day")),
+        (re.compile(r"(?<!\d)(\d{1,2})[/-](\d{4})(?!\d)"), ("month", "year")),
+        (re.compile(r"\b(19\d{2}|20\d{2})\b"), ("year",)),
+    )
+
     _ROLE_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatRole.DATA_ENGINEER: {
+            ChatTopic.GENERAL,
             ChatTopic.SYSTEM_OVERVIEW,
             ChatTopic.ENERGY_PERFORMANCE,
             ChatTopic.PIPELINE_STATUS,
@@ -89,12 +106,14 @@ class SolarAIChatService:
             ChatTopic.DATA_QUALITY_ISSUES,
         },
         ChatRole.ML_ENGINEER: {
+            ChatTopic.GENERAL,
             ChatTopic.SYSTEM_OVERVIEW,
             ChatTopic.ENERGY_PERFORMANCE,
             ChatTopic.ML_MODEL,
             ChatTopic.FORECAST_72H,
         },
         ChatRole.DATA_ANALYST: {
+            ChatTopic.GENERAL,
             ChatTopic.SYSTEM_OVERVIEW,
             ChatTopic.ENERGY_PERFORMANCE,
             ChatTopic.ML_MODEL,
@@ -102,11 +121,13 @@ class SolarAIChatService:
             ChatTopic.DATA_QUALITY_ISSUES,
         },
         ChatRole.VIEWER: {
+            ChatTopic.GENERAL,
             ChatTopic.SYSTEM_OVERVIEW,
             ChatTopic.ENERGY_PERFORMANCE,
             ChatTopic.FORECAST_72H,
         },
         ChatRole.ADMIN: {
+            ChatTopic.GENERAL,
             ChatTopic.SYSTEM_OVERVIEW,
             ChatTopic.ENERGY_PERFORMANCE,
             ChatTopic.ML_MODEL,
@@ -121,10 +142,12 @@ class SolarAIChatService:
         repository: SolarChatRepository,
         intent_service: VietnameseIntentService,
         model_router: GeminiModelRouter | None,
+        history_repository: ChatHistoryRepository | None = None,
     ) -> None:
         self._repository = repository
         self._intent_service = intent_service
         self._model_router = model_router
+        self._history_repository = history_repository
 
     def handle_query(self, request: SolarChatRequest) -> SolarChatResponse:
         started = time.perf_counter()
@@ -158,12 +181,15 @@ class SolarAIChatService:
         fallback_used = False
         model_used = "deterministic-summary"
 
+        history_messages = self._load_history(request.session_id)
+
         prompt = self._build_prompt(
             user_message=request.message,
             role=request.role,
             topic=response_topic,
             metrics=metrics,
             sources=sources,
+            history=history_messages,
         )
 
         if self._model_router is not None:
@@ -191,6 +217,15 @@ class SolarAIChatService:
             warning_message = "Gemini API key is not configured. Returned a data-backed summary."
 
         latency_ms = int((time.perf_counter() - started) * 1000)
+
+        self._persist_exchange(
+            session_id=request.session_id,
+            user_message=request.message,
+            answer=answer,
+            topic=response_topic,
+            sources=sources,
+        )
+
         logger.info(
             "solar_chat_request_completed",
             extra={
@@ -229,19 +264,59 @@ class SolarAIChatService:
         topic: ChatTopic,
         metrics: dict[str, Any],
         sources: list[SourceMetadata],
+        history: list[ChatMessage] | None = None,
     ) -> str:
         source_text = ", ".join(f"{source.layer}:{source.dataset}" for source in sources)
         metrics_json = json.dumps(metrics, ensure_ascii=False)
 
-        return (
-            "Bạn là trợ lý Solar AI Chat cho người dùng không kỹ thuật. "
-            "Hãy trả lời bằng tiếng Việt ngắn gọn, rõ ràng, tối đa 5 câu. "
-            "Cần nêu chỉ số chính, ý nghĩa ngữ cảnh và nhắc nguồn dữ liệu Silver/Gold.\n"
-            f"Vai trò người dùng: {role.value}\n"
-            f"Chủ đề: {topic.value}\n"
-            f"Câu hỏi: {user_message}\n"
-            f"Nguồn dữ liệu: {source_text}\n"
-            f"Chỉ số đã truy xuất: {metrics_json}"
+        parts = [
+            "Ban la tro ly Solar AI Chat cho nguoi dung khong ky thuat. "
+            "Hay tra loi bang tieng Viet ngan gon, ro rang, toi da 5 cau. "
+            "Can neu chi so chinh, y nghia ngu canh va nhac nguon du lieu Silver/Gold.",
+        ]
+
+        if history:
+            parts.append("Lich su hoi thoai gan day:")
+            for msg in history[-6:]:
+                label = "Nguoi dung" if msg.sender == "user" else "Tro ly"
+                parts.append(f"  {label}: {msg.content[:300]}")
+
+        parts.extend([
+            f"Vai tro nguoi dung: {role.value}",
+            f"Chu de: {topic.value}",
+            f"Cau hoi: {user_message}",
+            f"Nguon du lieu: {source_text}",
+            f"Chi so da truy xuat: {metrics_json}",
+        ])
+
+        return "\n".join(parts)
+
+    def _load_history(self, session_id: str | None) -> list[ChatMessage]:
+        if not session_id or not self._history_repository:
+            return []
+        return self._history_repository.get_recent_messages(session_id, limit=10)
+
+    def _persist_exchange(
+        self,
+        session_id: str | None,
+        user_message: str,
+        answer: str,
+        topic: ChatTopic,
+        sources: list[SourceMetadata],
+    ) -> None:
+        if not session_id or not self._history_repository:
+            return
+        self._history_repository.add_message(
+            session_id=session_id,
+            sender="user",
+            content=user_message,
+        )
+        self._history_repository.add_message(
+            session_id=session_id,
+            sender="assistant",
+            content=answer,
+            topic=topic,
+            sources=sources,
         )
 
     @staticmethod
@@ -251,6 +326,14 @@ class SolarAIChatService:
         sources: list[SourceMetadata],
     ) -> str:
         source_text = ", ".join(f"{source.layer}:{source.dataset}" for source in sources)
+
+        if topic is ChatTopic.GENERAL:
+            return (
+                "Xin chao! Toi la tro ly Solar AI Chat. Ban co the hoi toi ve: "
+                "tong quan he thong, hieu suat nang luong, mo hinh ML, "
+                "trang thai pipeline, du bao 72 gio, hoac chat luong du lieu. "
+                f"Nguon: {source_text}."
+            )
 
         if topic is ChatTopic.SYSTEM_OVERVIEW:
             return (
@@ -287,46 +370,48 @@ class SolarAIChatService:
                 f"Số mốc dự báo: {len(metrics.get('daily_forecast', []))}. Nguồn: {source_text}."
             )
 
-        if metrics.get("extreme_metric") == "aqi":
-            query_type = metrics.get("query_type", "")
-            station_key = f"{query_type}_station"
-            value_key = f"{query_type}_aqi_value"
-            category_key = f"{query_type}_aqi_category"
-            timeframe_text = SolarAIChatService._describe_timeframe(metrics)
+        extreme_metric = metrics.get("extreme_metric")
+        if extreme_metric is not None:
+            return SolarAIChatService._format_extreme_fallback(metrics, extreme_metric, source_text)
+
+        if topic is ChatTopic.DATA_QUALITY_ISSUES:
+            return (
+                "Các cơ sở có điểm chất lượng thấp đã được xác định kèm nguyên nhân khả dĩ từ cờ chất lượng. "
+                f"Nguồn: {source_text}."
+            )
+
+        raise ValueError(f"No fallback summary defined for topic '{topic.value}'.")
+
+    @staticmethod
+    def _format_extreme_fallback(
+        metrics: dict[str, Any],
+        extreme_metric: str,
+        source_text: str,
+    ) -> str:
+        query_type = metrics.get("query_type", "")
+        station = metrics.get(f"{query_type}_station", "Unknown")
+        timeframe_text = SolarAIChatService._describe_timeframe(metrics)
+
+        if extreme_metric == "aqi":
             return (
                 f"AQI {query_type} theo truy vấn là "
-                f"{metrics.get(value_key, 0)} tại trạm {metrics.get(station_key, 'Unknown')} "
+                f"{metrics.get(f'{query_type}_aqi_value', 0)} tại trạm {station} "
                 f"{timeframe_text}. "
-                f"Phân loại AQI: {metrics.get(category_key, 'Unknown')}. "
+                f"Phân loại AQI: {metrics.get(f'{query_type}_aqi_category', 'Unknown')}. "
                 f"Nguồn: {source_text}."
             )
 
-        if metrics.get("extreme_metric") == "energy":
-            query_type = metrics.get("query_type", "")
-            station_key = f"{query_type}_station"
-            value_key = f"{query_type}_energy_mwh"
-            timeframe_text = SolarAIChatService._describe_timeframe(metrics)
+        if extreme_metric == "energy":
             return (
-                f"Sản lượng năng lượng {query_type} là {metrics.get(value_key, 0)} MWh "
-                f"tại trạm {metrics.get(station_key, 'Unknown')} {timeframe_text}. "
-                f"Nguồn: {source_text}."
-            )
-
-        if metrics.get("extreme_metric") == "weather":
-            query_type = metrics.get("query_type", "")
-            station_key = f"{query_type}_station"
-            value_key = f"{query_type}_weather_value"
-            timeframe_text = SolarAIChatService._describe_timeframe(metrics)
-            return (
-                f"Chỉ số thời tiết {metrics.get('weather_metric_label', 'weather')} {query_type} là "
-                f"{metrics.get(value_key, 0)} {metrics.get('weather_unit', '')} "
-                f"tại trạm {metrics.get(station_key, 'Unknown')} {timeframe_text}. "
-                f"Nguồn: {source_text}."
+                f"Sản lượng năng lượng {query_type} là "
+                f"{metrics.get(f'{query_type}_energy_mwh', 0)} MWh "
+                f"tại trạm {station} {timeframe_text}. Nguồn: {source_text}."
             )
 
         return (
-            "Các cơ sở có điểm chất lượng thấp đã được xác định kèm nguyên nhân khả dĩ từ cờ chất lượng. "
-            f"Nguồn: {source_text}."
+            f"Chỉ số thời tiết {metrics.get('weather_metric_label', 'weather')} {query_type} là "
+            f"{metrics.get(f'{query_type}_weather_value', 0)} {metrics.get('weather_unit', '')} "
+            f"tại trạm {station} {timeframe_text}. Nguồn: {source_text}."
         )
 
     def _fetch_extreme_metrics(
@@ -370,12 +455,12 @@ class SolarAIChatService:
 
     @staticmethod
     def _extract_extreme_metric_query(message: str) -> ExtremeMetricQuery | None:
-        normalized_message = SolarAIChatService._normalize_text(message)
+        normalized_message = normalize_vietnamese_text(message)
 
         query_type: str | None = None
         if any(marker in normalized_message for marker in ("thap nhat", "nho nhat", "min")):
             query_type = "lowest"
-        if any(marker in normalized_message for marker in ("cao nhat", "lon nhat", "max")):
+        elif any(marker in normalized_message for marker in ("cao nhat", "lon nhat", "max")):
             query_type = "highest"
         if query_type is None:
             return None
@@ -425,7 +510,7 @@ class SolarAIChatService:
         return None
 
     def _resolve_weather_metric(self, message: str) -> dict[str, Any]:
-        normalized_message = self._normalize_text(message)
+        normalized_message = normalize_vietnamese_text(message)
         sanitized_message = self._strip_timeframe_noise(normalized_message)
 
         selected_metric = self._WEATHER_METRIC_CATALOG[0]
@@ -459,39 +544,22 @@ class SolarAIChatService:
             score += len(matches) * token_weight
         return score
 
-    @staticmethod
-    def _extract_query_date(message: str) -> date | None:
-        normalized_message = SolarAIChatService._normalize_text(message)
-
-        ddmmyyyy_match = re.search(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", normalized_message)
-        if ddmmyyyy_match:
-            day, month, year = (int(value) for value in ddmmyyyy_match.groups())
+    @classmethod
+    def _extract_query_date(cls, message: str) -> date | None:
+        normalized_message = normalize_vietnamese_text(message)
+        for pattern, field_names in cls._DATE_PATTERNS:
+            match = pattern.search(normalized_message)
+            if not match:
+                continue
+            parts = {name: int(value) for name, value in zip(field_names, match.groups())}
             try:
-                return date(year=year, month=month, day=day)
+                return date(
+                    year=parts["year"],
+                    month=parts.get("month", 1),
+                    day=parts.get("day", 1),
+                )
             except ValueError:
-                return None
-
-        yyyymmdd_match = re.search(r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b", normalized_message)
-        if yyyymmdd_match:
-            year, month, day = (int(value) for value in yyyymmdd_match.groups())
-            try:
-                return date(year=year, month=month, day=day)
-            except ValueError:
-                return None
-
-        mmyyyy_match = re.search(r"(?<!\d)(\d{1,2})[/-](\d{4})(?!\d)", normalized_message)
-        if mmyyyy_match:
-            month, year = (int(value) for value in mmyyyy_match.groups())
-            try:
-                return date(year=year, month=month, day=1)
-            except ValueError:
-                return None
-
-        year_match = re.search(r"\b(19\d{2}|20\d{2})\b", normalized_message)
-        if year_match:
-            year = int(year_match.group(1))
-            return date(year=year, month=1, day=1)
-
+                continue
         return None
 
     @staticmethod
@@ -509,21 +577,13 @@ class SolarAIChatService:
             return "week"
         if "thang" in normalized_message:
             return "month"
-        if "nam" in normalized_message:
+        if any(marker in normalized_message for marker in ("theo nam", "trong nam", "ca nam", "nam nay", "nam ngoai")) or re.search(r"\bnam\s+\d{4}\b", normalized_message):
             return "year"
         return "day"
 
-    @staticmethod
-    def _extract_specific_hour(normalized_message: str) -> int | None:
-        patterns = (
-            re.compile(
-                r"\b(?:vao\s+luc|luc|vao)\s*(?P<hour>\d{1,2})(?:\s*[:h]\s*(?P<minute>\d{1,2}))?\s*(?:gio)?\s*(?P<period>sang|chieu|toi|dem|am|pm)?\b"
-            ),
-            re.compile(r"\b(?P<hour>\d{1,2})\s*gio\s*(?P<period>sang|chieu|toi|dem)\b"),
-            re.compile(r"\b(?P<hour>\d{1,2})\s*(?::|h)\s*(?P<minute>\d{1,2})\s*(?P<period>am|pm)?\b"),
-        )
-
-        for pattern in patterns:
+    @classmethod
+    def _extract_specific_hour(cls, normalized_message: str) -> int | None:
+        for pattern in cls._HOUR_PATTERNS:
             match = pattern.search(normalized_message)
             if not match:
                 continue
@@ -577,9 +637,3 @@ class SolarAIChatService:
         if timeframe == "year":
             return f"trong năm {period_label}"
         return f"vào ngày {period_label}"
-
-    @staticmethod
-    def _normalize_text(value: str) -> str:
-        lowered = value.strip().lower()
-        without_marks = normalize("NFD", lowered)
-        return "".join(character for character in without_marks if ord(character) < 128)

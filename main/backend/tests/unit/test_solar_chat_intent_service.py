@@ -7,7 +7,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.schemas.solar_ai_chat import ChatTopic
-from app.services.solar_chat_intent_service import VietnameseIntentService
+from app.services.solar_ai_chat.intent_service import VietnameseIntentService, normalize_vietnamese_text
 
 
 class VietnameseIntentServiceTests(unittest.TestCase):
@@ -39,9 +39,22 @@ class VietnameseIntentServiceTests(unittest.TestCase):
         result = self.service.detect_intent("Nhiet do weather thap nhat cac tram vao ngay 2/1/2026")
         self.assertEqual(result.topic, ChatTopic.ENERGY_PERFORMANCE)
 
-    def test_raises_for_unsupported_intent(self) -> None:
-        with self.assertRaises(ValueError):
-            self.service.detect_intent("Ke cho toi mot cau chuyen vui")
+    def test_returns_general_for_unsupported_intent(self) -> None:
+        result = self.service.detect_intent("Ke cho toi mot cau chuyen vui")
+        self.assertEqual(result.topic, ChatTopic.GENERAL)
+        self.assertLessEqual(result.confidence, 0.5)
+
+    def test_returns_general_for_greeting(self) -> None:
+        result = self.service.detect_intent("hello")
+        self.assertEqual(result.topic, ChatTopic.GENERAL)
+
+    def test_normalize_vietnamese_text_strips_diacritics(self) -> None:
+        result = normalize_vietnamese_text("Năm nay chất lượng tốt")
+        self.assertEqual(result, "nam nay chat luong tot")
+
+    def test_normalize_vietnamese_text_is_ascii_only(self) -> None:
+        result = normalize_vietnamese_text("Nhiệt độ tối đa")
+        self.assertTrue(result.isascii())
 
 
 if __name__ == "__main__":

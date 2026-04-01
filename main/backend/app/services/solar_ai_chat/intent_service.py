@@ -4,6 +4,13 @@ from unicodedata import normalize
 from app.schemas.solar_ai_chat import ChatTopic
 
 
+def normalize_vietnamese_text(value: str) -> str:
+    """Normalize Vietnamese text: lowercase, strip diacritics, ASCII-only."""
+    lowered = value.strip().lower()
+    without_marks = normalize("NFD", lowered)
+    return "".join(character for character in without_marks if ord(character) < 128)
+
+
 @dataclass(frozen=True)
 class IntentDetectionResult:
     topic: ChatTopic
@@ -84,7 +91,7 @@ class VietnameseIntentService:
     }
 
     def detect_intent(self, message: str) -> IntentDetectionResult:
-        normalized_message = self._normalize_text(message)
+        normalized_message = normalize_vietnamese_text(message)
         if not normalized_message:
             raise ValueError("The question cannot be empty.")
 
@@ -98,15 +105,7 @@ class VietnameseIntentService:
                 matched_score = topic_score
 
         if matched_topic is None:
-            raise ValueError(
-                "Unsupported question. Please ask about supported Solar AI Chat topics."
-            )
+            return IntentDetectionResult(topic=ChatTopic.GENERAL, confidence=0.3)
 
         confidence = min(0.99, 0.5 + (matched_score * 0.15))
         return IntentDetectionResult(topic=matched_topic, confidence=round(confidence, 2))
-
-    @staticmethod
-    def _normalize_text(value: str) -> str:
-        lowered = value.strip().lower()
-        without_marks = normalize("NFD", lowered)
-        return "".join(character for character in without_marks if ord(character) < 128)
