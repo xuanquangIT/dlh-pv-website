@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import json
 import logging
 import re
 import time
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
@@ -16,8 +18,17 @@ from app.schemas.solar_ai_chat import (
     SolarChatResponse,
     SourceMetadata,
 )
-from app.services.solar_ai_chat.gemini_client import GeminiModelRouter, ModelUnavailableError
+from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
+from app.services.solar_ai_chat.gemini_client import (
+    GeminiModelRouter,
+    ModelUnavailableError,
+)
 from app.services.solar_ai_chat.intent_service import VietnameseIntentService, normalize_vietnamese_text
+from app.services.solar_ai_chat.tool_executor import ToolExecutor
+
+if TYPE_CHECKING:
+    from app.repositories.solar_ai_chat.vector_repository import VectorRepository
+    from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 
 logger = logging.getLogger(__name__)
 
@@ -143,15 +154,93 @@ class SolarAIChatService:
         intent_service: VietnameseIntentService,
         model_router: GeminiModelRouter | None,
         history_repository: ChatHistoryRepository | None = None,
+        vector_repo: "VectorRepository | None" = None,
+        embedding_client: "GeminiEmbeddingClient | None" = None,
     ) -> None:
         self._repository = repository
         self._intent_service = intent_service
         self._model_router = model_router
         self._history_repository = history_repository
+        self._tool_executor = ToolExecutor(
+            repository,
+            vector_repo=vector_repo,
+            embedding_client=embedding_client,
+        )
 
     def handle_query(self, request: SolarChatRequest) -> SolarChatResponse:
         started = time.perf_counter()
+        history_messages = self._load_history(request.session_id)
 
+        if self._model_router is not None:
+            try:
+                return self._handle_with_tools(request, started, history_messages)
+            except ModelUnavailableError:
+                logger.warning("solar_chat_tool_path_unavailable, falling back to regex intent")
+            except Exception as tool_err:
+                logger.warning("solar_chat_tool_path_failed (%s), falling back to regex intent", tool_err)
+
+        return self._handle_with_regex_fallback(request, started, history_messages)
+
+    def _handle_with_tools(
+        self,
+        request: SolarChatRequest,
+        started: float,
+        history_messages: list[ChatMessage],
+    ) -> SolarChatResponse:
+        messages = self._build_tool_messages(request, history_messages)
+        tool_result = self._model_router.generate_with_tools(messages, TOOL_DECLARATIONS)
+
+        if tool_result.text is not None:
+            topic = self._detect_topic_from_text(request.message)
+            return self._finalize_response(
+                request=request,
+                answer=tool_result.text,
+                topic=topic,
+                metrics={},
+                sources=[],
+                model_used=tool_result.model_used,
+                fallback_used=tool_result.fallback_used,
+                started=started,
+                intent_confidence=0.85,
+            )
+
+        fc = tool_result.function_call
+        metrics, source_rows = self._tool_executor.execute(fc.name, fc.arguments, request.role)
+        sources = [SourceMetadata(**row) for row in source_rows]
+        topic = ChatTopic(TOOL_NAME_TO_TOPIC.get(fc.name, "general"))
+
+        messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
+        messages.append({
+            "role": "user",
+            "parts": [{
+                "functionResponse": {
+                    "name": fc.name,
+                    "response": {"result": metrics},
+                },
+            }],
+        })
+
+        final_result = self._model_router.send_tool_result(messages, tool_result.model_used)
+        answer = final_result.text or self._build_fallback_summary(topic, metrics, sources)
+
+        return self._finalize_response(
+            request=request,
+            answer=answer,
+            topic=topic,
+            metrics=metrics,
+            sources=sources,
+            model_used=tool_result.model_used,
+            fallback_used=tool_result.fallback_used,
+            started=started,
+            intent_confidence=0.95,
+        )
+
+    def _handle_with_regex_fallback(
+        self,
+        request: SolarChatRequest,
+        started: float,
+        history_messages: list[ChatMessage],
+    ) -> SolarChatResponse:
         response_topic: ChatTopic
         intent_confidence: float
 
@@ -159,9 +248,7 @@ class SolarAIChatService:
         if extreme_query is not None:
             response_topic = self._topic_for_extreme_metric(extreme_query.metric_name)
             self._validate_role(topic=response_topic, role=request.role)
-
             query_date = self._extract_query_date(request.message)
-
             metrics, source_rows = self._fetch_extreme_metrics(
                 extreme_query=extreme_query,
                 query_date=query_date,
@@ -172,16 +259,14 @@ class SolarAIChatService:
             detection = self._intent_service.detect_intent(request.message)
             response_topic = detection.topic
             intent_confidence = detection.confidence
-
             self._validate_role(topic=response_topic, role=request.role)
             metrics, source_rows = self._repository.fetch_topic_metrics(response_topic)
-        sources = [SourceMetadata(**source_row) for source_row in source_rows]
+
+        sources = [SourceMetadata(**row) for row in source_rows]
 
         warning_message: str | None = None
-        fallback_used = False
         model_used = "deterministic-summary"
-
-        history_messages = self._load_history(request.session_id)
+        fallback_used = False
 
         prompt = self._build_prompt(
             user_message=request.message,
@@ -199,37 +284,53 @@ class SolarAIChatService:
                 fallback_used = model_result.fallback_used
                 model_used = model_result.model_used
             except ModelUnavailableError:
-                answer = self._build_fallback_summary(
-                    topic=response_topic,
-                    metrics=metrics,
-                    sources=sources,
-                )
-                warning_message = (
-                    "The AI model is temporarily unavailable. Returned a data-backed summary instead."
-                )
+                answer = self._build_fallback_summary(response_topic, metrics, sources)
+                warning_message = "The AI model is temporarily unavailable. Returned a data-backed summary instead."
                 fallback_used = True
         else:
-            answer = self._build_fallback_summary(
-                topic=response_topic,
-                metrics=metrics,
-                sources=sources,
-            )
+            answer = self._build_fallback_summary(response_topic, metrics, sources)
             warning_message = "Gemini API key is not configured. Returned a data-backed summary."
 
+        return self._finalize_response(
+            request=request,
+            answer=answer,
+            topic=response_topic,
+            metrics=metrics,
+            sources=sources,
+            model_used=model_used,
+            fallback_used=fallback_used,
+            started=started,
+            intent_confidence=intent_confidence,
+            warning_message=warning_message,
+        )
+
+    def _finalize_response(
+        self,
+        request: SolarChatRequest,
+        answer: str,
+        topic: ChatTopic,
+        metrics: dict[str, Any],
+        sources: list[SourceMetadata],
+        model_used: str,
+        fallback_used: bool,
+        started: float,
+        intent_confidence: float,
+        warning_message: str | None = None,
+    ) -> SolarChatResponse:
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         self._persist_exchange(
             session_id=request.session_id,
             user_message=request.message,
             answer=answer,
-            topic=response_topic,
+            topic=topic,
             sources=sources,
         )
 
         logger.info(
             "solar_chat_request_completed",
             extra={
-                "topic": response_topic.value,
+                "topic": topic.value,
                 "role": request.role.value,
                 "model_used": model_used,
                 "fallback_used": fallback_used,
@@ -239,7 +340,7 @@ class SolarAIChatService:
 
         return SolarChatResponse(
             answer=answer,
-            topic=response_topic,
+            topic=topic,
             role=request.role,
             sources=sources,
             key_metrics=metrics,
@@ -256,6 +357,37 @@ class SolarAIChatService:
             raise PermissionError(
                 f"Role '{role.value}' is not allowed to access topic '{topic.value}'."
             )
+
+    @staticmethod
+    def _build_tool_messages(
+        request: SolarChatRequest,
+        history: list[ChatMessage] | None = None,
+    ) -> list[dict[str, object]]:
+        messages: list[dict[str, object]] = []
+
+        system_text = (
+            "Ban la tro ly Solar AI Chat cho nguoi dung khong ky thuat. "
+            "Hay tra loi bang tieng Viet ngan gon, ro rang, toi da 5 cau. "
+            f"Vai tro nguoi dung: {request.role.value}. "
+            "Su dung tool de lay du lieu truoc khi tra loi."
+        )
+        messages.append({"role": "user", "parts": [{"text": system_text}]})
+        messages.append({"role": "model", "parts": [{"text": "Da hieu. Toi se su dung tool de tra loi."}]})
+
+        if history:
+            for msg in history[-6:]:
+                role = "user" if msg.sender == "user" else "model"
+                messages.append({"role": role, "parts": [{"text": msg.content[:300]}]})
+
+        messages.append({"role": "user", "parts": [{"text": request.message}]})
+        return messages
+
+    def _detect_topic_from_text(self, message: str) -> ChatTopic:
+        try:
+            detection = self._intent_service.detect_intent(message)
+            return detection.topic
+        except Exception:
+            return ChatTopic.GENERAL
 
     @staticmethod
     def _build_prompt(

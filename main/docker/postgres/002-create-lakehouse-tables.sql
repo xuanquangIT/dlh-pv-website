@@ -129,3 +129,20 @@ CREATE TABLE IF NOT EXISTS lh_gold_dim_facility (
     total_capacity_registered_mw DOUBLE PRECISION,
     total_capacity_maximum_mw   DOUBLE PRECISION
 );
+
+-- RAG: pgvector extension and document chunks
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS rag_documents (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    doc_type     VARCHAR(50)  NOT NULL,
+    source_file  VARCHAR(500) NOT NULL,
+    chunk_index  INTEGER      NOT NULL,
+    content      TEXT         NOT NULL,
+    embedding    vector(768),
+    created_at   TIMESTAMPTZ  DEFAULT now(),
+    UNIQUE(source_file, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_embedding
+    ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50);

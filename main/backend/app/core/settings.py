@@ -28,7 +28,7 @@ class SolarChatSettings(BaseSettings):
         alias="SOLAR_CHAT_FALLBACK_MODEL",
     )
     request_timeout_seconds: float = Field(
-        default=3.2,
+        default=15.0,
         alias="SOLAR_CHAT_REQUEST_TIMEOUT_SECONDS",
     )
     data_root: str | None = Field(default=None, alias="SOLAR_CHAT_DATA_ROOT")
@@ -38,6 +38,24 @@ class SolarChatSettings(BaseSettings):
     trino_user: str = Field(default="trino", alias="TRINO_USER")
     trino_catalog: str = Field(default="postgresql", alias="TRINO_CATALOG")
     trino_schema: str = Field(default="public", alias="TRINO_SCHEMA")
+
+    pg_host: str = Field(default="localhost", alias="POSTGRES_HOST")
+    pg_port: int = Field(default=5432, alias="POSTGRES_PORT")
+    pg_database: str = Field(default="pvlakehouse", alias="POSTGRES_DB")
+    pg_user: str = Field(default="pvlakehouse", alias="POSTGRES_USER")
+    pg_password: str = Field(default="pvlakehouse", alias="POSTGRES_PASSWORD")
+
+    embedding_model: str = Field(
+        default="text-embedding-004",
+        alias="SOLAR_CHAT_EMBEDDING_MODEL",
+    )
+    embedding_dimensions: int = Field(
+        default=768,
+        alias="SOLAR_CHAT_EMBEDDING_DIMENSIONS",
+    )
+    rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
+    rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
+    rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
 
     @property
     def resolved_data_root(self) -> Path:

@@ -13,7 +13,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.main import create_app
-from app.api.solar_ai_chat import get_solar_ai_chat_service, _get_history_repository
+from app.api.solar_ai_chat.routes import get_solar_ai_chat_service, _get_history_repository
 from app.core.settings import SolarChatSettings
 from app.repositories.solar_ai_chat import ChatHistoryRepository
 from app.repositories.solar_ai_chat import SolarChatRepository
@@ -547,6 +547,285 @@ class ChatSessionApiTests(unittest.TestCase):
             json={"title": "Fork"},
         )
         self.assertEqual(response.status_code, 404)
+
+
+class FunctionCallingIntegrationTests(unittest.TestCase):
+    """Integration tests for the Gemini Function Calling flow with mocked Gemini API."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        app = create_app()
+        app.dependency_overrides[_get_history_repository] = _get_test_history_repository
+        cls.client = TestClient(app)
+        cls._trino_patcher = patch(
+            "app.repositories.solar_ai_chat.chat_repository.SolarChatRepository._execute_query",
+            side_effect=ConnectionError("Trino not available in tests"),
+        )
+        cls._trino_patcher.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._trino_patcher.stop()
+
+    def _make_service_with_mock_router(self, responses: list[dict]) -> SolarAIChatService:
+        from app.services.solar_ai_chat.gemini_client import GeminiModelRouter
+        call_index = {"n": 0}
+
+        def mock_executor(url: str, payload: dict, timeout: float) -> dict:
+            idx = call_index["n"]
+            call_index["n"] += 1
+            return responses[idx]
+
+        settings = SolarChatSettings()
+        settings.gemini_api_key = "test-key-fc"
+        router = GeminiModelRouter(settings=settings, request_executor=mock_executor)
+
+        return SolarAIChatService(
+            repository=SolarChatRepository(settings=SolarChatSettings()),
+            intent_service=VietnameseIntentService(),
+            model_router=router,
+            history_repository=_get_test_history_repository(),
+        )
+
+    def test_tool_call_flow_system_overview(self) -> None:
+        gemini_responses = [
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "name": "get_system_overview",
+                                "args": {},
+                            }
+                        }]
+                    }
+                }]
+            },
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "He thong dang hoat dong tot voi san luong 4000 MWh."}]
+                    }
+                }]
+            },
+        ]
+        service = self._make_service_with_mock_router(gemini_responses)
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={"message": "Cho toi tong quan he thong", "role": "admin"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["topic"], "system_overview")
+        self.assertIn("4000 MWh", body["answer"])
+        self.assertIn("gemini", body["model_used"])
+        self.assertEqual(body["intent_confidence"], 0.95)
+
+    def test_tool_call_flow_extreme_aqi(self) -> None:
+        gemini_responses = [
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "name": "get_extreme_aqi",
+                                "args": {"query_type": "highest", "timeframe": "day"},
+                            }
+                        }]
+                    }
+                }]
+            },
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "AQI cao nhat hom nay la 120 tai tram Facility_01."}]
+                    }
+                }]
+            },
+        ]
+        service = self._make_service_with_mock_router(gemini_responses)
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={"message": "AQI cao nhat hom nay", "role": "admin"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["topic"], "data_quality_issues")
+        self.assertIn("120", body["answer"])
+
+    def test_direct_text_answer_without_tool_call(self) -> None:
+        gemini_responses = [
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "Xin chao! Toi la tro ly Solar AI Chat."}]
+                    }
+                }]
+            },
+        ]
+        service = self._make_service_with_mock_router(gemini_responses)
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={"message": "Xin chao!", "role": "viewer"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("Xin chao", body["answer"])
+        self.assertEqual(body["intent_confidence"], 0.85)
+
+    def test_rbac_enforced_via_tool_call(self) -> None:
+        gemini_responses = [
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "name": "get_extreme_aqi",
+                                "args": {"query_type": "highest", "timeframe": "day"},
+                            }
+                        }]
+                    }
+                }]
+            },
+        ]
+        service = self._make_service_with_mock_router(gemini_responses)
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={"message": "AQI cao nhat", "role": "viewer"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_falls_back_to_regex_when_gemini_unavailable(self) -> None:
+        def mock_executor(url: str, payload: dict, timeout: float) -> dict:
+            raise RuntimeError("Service unavailable")
+
+        settings = SolarChatSettings()
+        settings.gemini_api_key = "test-key"
+        from app.services.solar_ai_chat.gemini_client import GeminiModelRouter
+        router = GeminiModelRouter(settings=settings, request_executor=mock_executor)
+
+        service = SolarAIChatService(
+            repository=SolarChatRepository(settings=SolarChatSettings()),
+            intent_service=VietnameseIntentService(),
+            model_router=router,
+            history_repository=_get_test_history_repository(),
+        )
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={"message": "Cho toi tong quan he thong", "role": "admin"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["topic"], "system_overview")
+        self.assertIn("warning_message", body)
+
+
+class RagApiIntegrationTests(unittest.TestCase):
+    """Integration tests for RAG document ingestion and stats endpoints."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        app = create_app()
+        app.dependency_overrides[_get_history_repository] = _get_test_history_repository
+        cls.client = TestClient(app)
+
+    def test_document_stats_returns_empty_when_no_pg(self) -> None:
+        from app.api.solar_ai_chat.routes import _get_vector_repository
+        self.client.app.dependency_overrides[_get_vector_repository] = lambda: None
+        response = self.client.get("/solar-ai-chat/documents/stats")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_chunks"], 0)
+        self.assertEqual(body["by_doc_type"], {})
+
+    def test_ingest_rejects_missing_api_key(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/documents/ingest",
+            json={"file_path": "/nonexistent.txt", "doc_type": "incident_report"},
+        )
+        self.assertIn(response.status_code, [400, 503])
+
+    def test_ingest_rejects_invalid_doc_type(self) -> None:
+        response = self.client.post(
+            "/solar-ai-chat/documents/ingest",
+            json={"file_path": "/tmp/test.txt", "doc_type": "invalid_type"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_delete_document_returns_503_when_no_pg(self) -> None:
+        from app.api.solar_ai_chat.routes import _get_vector_repository
+        self.client.app.dependency_overrides[_get_vector_repository] = lambda: None
+        response = self.client.delete("/solar-ai-chat/documents/nonexistent.txt")
+        self.assertEqual(response.status_code, 503)
+
+    def test_search_documents_tool_via_query_when_rag_unavailable(self) -> None:
+        """When RAG infra is not configured, search_documents tool returns 'not configured' message."""
+        gemini_responses = [
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{
+                            "functionCall": {
+                                "name": "search_documents",
+                                "args": {"query": "su co thang 3"},
+                            }
+                        }]
+                    }
+                }]
+            },
+            {
+                "candidates": [{
+                    "content": {
+                        "parts": [{"text": "Xin loi, chuc nang tim kiem tai lieu chua duoc cau hinh."}]
+                    }
+                }]
+            },
+        ]
+        from app.services.solar_ai_chat.gemini_client import GeminiModelRouter
+        call_index = {"n": 0}
+
+        def mock_executor(url: str, payload: dict, timeout: float) -> dict:
+            idx = call_index["n"]
+            call_index["n"] += 1
+            return gemini_responses[idx]
+
+        settings = SolarChatSettings()
+        settings.gemini_api_key = "test-key-rag"
+        router = GeminiModelRouter(settings=settings, request_executor=mock_executor)
+
+        service = SolarAIChatService(
+            repository=SolarChatRepository(settings=SolarChatSettings()),
+            intent_service=VietnameseIntentService(),
+            model_router=router,
+            history_repository=_get_test_history_repository(),
+            vector_repo=None,
+            embedding_client=None,
+        )
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={"message": "Tim tai lieu su co thang 3", "role": "admin"},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("tai lieu", body["answer"].lower())
 
 
 if __name__ == "__main__":

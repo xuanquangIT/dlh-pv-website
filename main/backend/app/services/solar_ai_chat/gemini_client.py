@@ -22,6 +22,20 @@ class GeminiGenerationResult:
     fallback_used: bool
 
 
+@dataclass(frozen=True)
+class FunctionCallRequest:
+    name: str
+    arguments: dict[str, object]
+
+
+@dataclass(frozen=True)
+class GeminiToolResult:
+    function_call: FunctionCallRequest | None
+    text: str | None
+    model_used: str
+    fallback_used: bool
+
+
 class GeminiModelRouter:
     """Gemini client with primary/fallback model routing."""
 
@@ -101,6 +115,102 @@ class GeminiModelRouter:
             raise ModelUnavailableError(
                 "Primary and fallback Gemini models are both unavailable."
             ) from fallback_error
+
+    def generate_with_tools(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+    ) -> GeminiToolResult:
+        if not self._api_key:
+            raise ModelUnavailableError("Gemini API key is not configured.")
+
+        payload = {
+            "contents": messages,
+            "tools": [{"function_declarations": tools}],
+            "tool_config": {"function_calling_config": {"mode": "AUTO"}},
+        }
+
+        started = time.perf_counter()
+        try:
+            raw = self._call_model_raw(self._primary_model, payload)
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            logger.info(
+                "solar_chat_tool_call",
+                extra={"model": self._primary_model, "latency_ms": duration_ms, "fallback": False},
+            )
+            return self._parse_tool_response(raw, self._primary_model, fallback_used=False)
+        except Exception as primary_err:
+            logger.warning("solar_chat_tool_primary_failed", extra={"error": str(primary_err)})
+
+        fallback_started = time.perf_counter()
+        try:
+            raw = self._call_model_raw(self._fallback_model, payload)
+            duration_ms = int((time.perf_counter() - fallback_started) * 1000)
+            logger.info(
+                "solar_chat_tool_call",
+                extra={"model": self._fallback_model, "latency_ms": duration_ms, "fallback": True},
+            )
+            return self._parse_tool_response(raw, self._fallback_model, fallback_used=True)
+        except Exception as fallback_err:
+            logger.error("solar_chat_tool_fallback_failed", extra={"error": str(fallback_err)})
+            raise ModelUnavailableError(
+                "Primary and fallback Gemini models are both unavailable."
+            ) from fallback_err
+
+    def send_tool_result(
+        self,
+        messages: list[dict[str, object]],
+        model_name: str,
+    ) -> GeminiToolResult:
+        if not self._api_key:
+            raise ModelUnavailableError("Gemini API key is not configured.")
+
+        payload = {"contents": messages}
+        raw = self._call_model_raw(model_name, payload)
+        return self._parse_tool_response(raw, model_name, fallback_used=(model_name == self._fallback_model))
+
+    def _call_model_raw(self, model_name: str, payload: dict[str, object]) -> dict[str, object]:
+        endpoint = f"{self._base_url}/models/{model_name}:generateContent?key={self._api_key}"
+        return self._request_executor(endpoint, payload, self._timeout)
+
+    @staticmethod
+    def _parse_tool_response(
+        raw: dict[str, object],
+        model_used: str,
+        fallback_used: bool,
+    ) -> GeminiToolResult:
+        candidates = raw.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise RuntimeError("Gemini response does not contain candidates.")
+
+        content = candidates[0].get("content", {})
+        parts = content.get("parts", []) if isinstance(content, dict) else []
+        if not isinstance(parts, list) or not parts:
+            raise RuntimeError("Gemini response does not contain parts.")
+
+        first_part = parts[0]
+        function_call = first_part.get("functionCall")
+        if isinstance(function_call, dict):
+            return GeminiToolResult(
+                function_call=FunctionCallRequest(
+                    name=function_call.get("name", ""),
+                    arguments=function_call.get("args", {}),
+                ),
+                text=None,
+                model_used=model_used,
+                fallback_used=fallback_used,
+            )
+
+        text_value = first_part.get("text")
+        if isinstance(text_value, str) and text_value.strip():
+            return GeminiToolResult(
+                function_call=None,
+                text=text_value.strip(),
+                model_used=model_used,
+                fallback_used=fallback_used,
+            )
+
+        raise RuntimeError("Gemini response contains neither functionCall nor text.")
 
     def _call_model(self, model_name: str, prompt: str) -> str:
         endpoint = f"{self._base_url}/models/{model_name}:generateContent?key={self._api_key}"

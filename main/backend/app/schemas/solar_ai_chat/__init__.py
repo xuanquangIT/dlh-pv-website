@@ -7,6 +7,15 @@ from app.schemas.solar_ai_chat.session import (
     CreateSessionRequest,
     ForkSessionRequest,
 )
+from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
+from app.schemas.solar_ai_chat.rag import (
+    RagChunk,
+    RetrievedChunk,
+    RagSearchResult,
+    IngestDocumentRequest,
+    IngestDocumentResponse,
+    RagStatsResponse,
+)
 
 __all__ = [
     "ChatRole",
@@ -19,4 +28,12 @@ __all__ = [
     "ChatSessionDetail",
     "CreateSessionRequest",
     "ForkSessionRequest",
+    "TOOL_DECLARATIONS",
+    "TOOL_NAME_TO_TOPIC",
+    "RagChunk",
+    "RetrievedChunk",
+    "RagSearchResult",
+    "IngestDocumentRequest",
+    "IngestDocumentResponse",
+    "RagStatsResponse",
 ]
