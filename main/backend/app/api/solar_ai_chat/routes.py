@@ -199,8 +199,9 @@ def ingest_document(
             detail="RAG infrastructure is not available.",
         )
 
-    # M3: Restrict ingestion path to within the configured data root
-    data_root = settings.resolved_data_root.parent
+    # M3 + security: Restrict ingestion to the curated serving directory only.
+    # This prevents arbitrary files in the repo from being embedded and stored.
+    serving_root = (settings.resolved_data_root.parent / "sql" / "serving").resolve()
     file_path = Path(request.file_path).resolve()
     if not file_path.is_file():
         raise HTTPException(
@@ -208,11 +209,17 @@ def ingest_document(
             detail=f"File not found: {request.file_path}",
         )
     try:
-        file_path.relative_to(data_root)
+        file_path.relative_to(serving_root)
     except ValueError:
         raise HTTPException(
             status_code=400,
-            detail="File path must be within the configured data directory.",
+            detail="File path must be within main/sql/serving/.",
+        )
+
+    if file_path.suffix.lower() not in {".txt", ".md"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Only .txt and .md files are accepted for ingestion.",
         )
 
     ingestion_service = RagIngestionService(

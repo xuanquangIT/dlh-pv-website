@@ -130,9 +130,11 @@ CREATE TABLE IF NOT EXISTS lh_gold_dim_facility (
     total_capacity_maximum_mw   DOUBLE PRECISION
 );
 
--- RAG: pgvector extension and document chunks
+-- RAG: required extensions
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;  -- provides gen_random_uuid()
 
+-- Embedding dimension must match SOLAR_CHAT_EMBEDDING_DIMENSIONS (default: 3072)
 CREATE TABLE IF NOT EXISTS rag_documents (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     doc_type     VARCHAR(50)  NOT NULL,
@@ -140,7 +142,8 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     chunk_index  INTEGER      NOT NULL,
     content      TEXT         NOT NULL,
     embedding    vector(3072),
-    created_at   TIMESTAMPTZ  DEFAULT now(),
+    created_at   TIMESTAMPTZ  DEFAULT now() NOT NULL,
+    updated_at   TIMESTAMPTZ  DEFAULT now() NOT NULL,
     UNIQUE(source_file, chunk_index)
 );
 

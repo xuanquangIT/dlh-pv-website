@@ -42,12 +42,15 @@ class GeminiModelRouter:
     def __init__(
         self,
         settings: SolarChatSettings,
+        request_executor: Callable[[str, dict[str, object], float, dict[str, str] | None], dict[str, object]] | None = None,
     ) -> None:
         self._api_key = settings.gemini_api_key
         self._base_url = settings.gemini_base_url.rstrip("/")
         self._primary_model = settings.primary_model
         self._fallback_model = settings.fallback_model
         self._timeout = settings.request_timeout_seconds
+        # Optional injection for testing; defaults to the real HTTP transport
+        self._request_executor = request_executor or self._execute_request
 
     # ------------------------------------------------------------------
     # Public methods
@@ -226,7 +229,7 @@ class GeminiModelRouter:
             "Content-Type": "application/json",
             "x-goog-api-key": self._api_key,
         }
-        return self._execute_request(endpoint, payload, self._timeout, headers)
+        return self._request_executor(endpoint, payload, self._timeout, headers)
 
     @staticmethod
     def _execute_request(
