@@ -46,11 +46,11 @@ class SolarChatSettings(BaseSettings):
     pg_password: str = Field(default="pvlakehouse", alias="POSTGRES_PASSWORD")
 
     embedding_model: str = Field(
-        default="text-embedding-004",
+        default="gemini-embedding-001",
         alias="SOLAR_CHAT_EMBEDDING_MODEL",
     )
     embedding_dimensions: int = Field(
-        default=768,
+        default=3072,
         alias="SOLAR_CHAT_EMBEDDING_DIMENSIONS",
     )
     rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")

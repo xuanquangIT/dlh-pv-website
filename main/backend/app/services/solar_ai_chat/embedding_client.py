@@ -6,7 +6,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EMBEDDING_DIMENSIONS = 768
+DEFAULT_EMBEDDING_DIMENSIONS = 3072
 
 
 class EmbeddingUnavailableError(RuntimeError):
