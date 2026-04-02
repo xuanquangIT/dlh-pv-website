@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}PV Lakehouse Modules{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <p class="kicker">Platform Modules</p>
+    <h1>One Home For 8 Working Modules</h1>
+    <p class="subtitle">
+        This page gives stakeholders a fast entry point to every backend module. Use module cards to open
+        API endpoints directly, and jump to the dedicated chatbot test page for Vietnamese prompts.
+    </p>
+</section>
+
+<section class="module-grid" aria-label="Available modules">
+    {% for module in modules %}
+    <article class="module-card">
+        <h2>{{ module.name }}</h2>
+        <p>{{ module.description }}</p>
+        <div class="card-actions">
+            <a class="btn btn-primary" href="{{ module.endpoint }}" target="_blank" rel="noopener noreferrer">Open Endpoint</a>
+            {% if module.ui_path %}
+            <a class="btn btn-ghost" href="{{ module.ui_path }}">Open UI</a>
+            {% endif %}
+        </div>
+    </article>
+    {% endfor %}
+</section>
+{% endblock %}
