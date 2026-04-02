@@ -1,0 +1,43 @@
+{
+  "session_id": "43e6c6da788e",
+  "title": "Chat 18:00:58 2/4/2026",
+  "role": "viewer",
+  "created_at": "2026-04-02T11:00:58.902146+00:00",
+  "updated_at": "2026-04-02T11:01:15.467547+00:00",
+  "messages": [
+    {
+      "id": "d379761790d3",
+      "session_id": "43e6c6da788e",
+      "sender": "user",
+      "content": "cung cấp thông tin tổng hợp của các trạm vào ngày 6/6/2025",
+      "timestamp": "2026-04-02T11:01:15.457688+00:00",
+      "topic": null,
+      "sources": null
+    },
+    {
+      "id": "81a976f370e8",
+      "session_id": "43e6c6da788e",
+      "sender": "assistant",
+      "content": "Vào ngày 06/06/2025, 8 trạm đã được ghi nhận.\n\nBốn trạm (Emerald, White Rock Solar Farm, Yatpool) đã tạo ra tổng cộng 582.45 MWh năng lượng.\nNhiệt độ trung bình là 10.1 độ C.\nTốc độ gió trung bình là 12.46 m/s.\nĐộ che phủ mây trung bình là 78.2%.\nBức xạ mặt trời trung bình là 106.18 W/m².\nChỉ số chất lượng không khí (AQI) trung bình là 11.66.",
+      "timestamp": "2026-04-02T11:01:15.467547+00:00",
+      "topic": "energy_performance",
+      "sources": [
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_energy",
+          "data_source": "trino"
+        },
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_weather",
+          "data_source": "trino"
+        },
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_air_quality",
+          "data_source": "trino"
+        }
+      ]
+    }
+  ]
+}

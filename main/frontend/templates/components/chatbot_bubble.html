@@ -1,40 +1,57 @@
 <!-- Floating chatbot bubble widget -->
-<div id="chatbot-bubble-toggle" class="cb-toggle" title="Open Solar AI Chat">
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<button
+    type="button"
+    id="chatbot-bubble-toggle"
+    class="cb-toggle"
+    aria-label="Open Solar AI Chat"
+    aria-expanded="false"
+    aria-controls="chatbot-bubble-panel"
+>
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
     </svg>
-</div>
+</button>
 
-<div id="chatbot-bubble-panel" class="cb-panel cb-hidden">
+<div id="chatbot-bubble-panel" class="cb-panel cb-hidden" role="dialog" aria-label="Solar AI Chat" aria-modal="false">
     <div class="cb-header">
-        <span class="cb-header-title">Solar AI Chat</span>
+        <span class="cb-header-title" id="cb-panel-title">Solar AI Chat</span>
         <div class="cb-header-actions">
-            <button type="button" id="cb-new-session" class="cb-btn-icon" title="New session">+</button>
-            <button type="button" id="cb-toggle-sessions" class="cb-btn-icon" title="Sessions">S</button>
-            <a href="/solar-ai-chat" class="cb-btn-icon" title="Open full page">F</a>
-            <button type="button" id="cb-close" class="cb-btn-icon" title="Close">X</button>
+            <button type="button" id="cb-new-session" class="cb-btn-icon" aria-label="New session">
+                <span aria-hidden="true">+</span>
+            </button>
+            <button type="button" id="cb-toggle-sessions" class="cb-btn-icon" aria-label="Show session list" aria-expanded="false" aria-controls="cb-session-drawer">
+                <span aria-hidden="true">S</span>
+            </button>
+            <a href="/solar-ai-chat" class="cb-btn-icon" aria-label="Open full chat page">
+                <span aria-hidden="true">F</span>
+            </a>
+            <button type="button" id="cb-close" class="cb-btn-icon" aria-label="Close chat">
+                <span aria-hidden="true">X</span>
+            </button>
         </div>
     </div>
 
-    <div id="cb-session-drawer" class="cb-session-drawer cb-hidden">
-        <ul id="cb-session-list" class="cb-session-list"></ul>
+    <div id="cb-session-drawer" class="cb-session-drawer cb-hidden" aria-hidden="true">
+        <ul id="cb-session-list" class="cb-session-list" role="listbox" aria-label="Chat sessions"></ul>
     </div>
 
-    <div id="cb-messages" class="cb-messages">
+    <div id="cb-messages" class="cb-messages" role="log" aria-live="polite" aria-label="Chat messages">
         <p class="cb-empty">Ask a question to start chatting.</p>
     </div>
 
     <form id="cb-form" class="cb-input-area" action="#" novalidate>
-        <select id="cb-role" class="cb-role-select" title="Role">
+        <label for="cb-role" class="sr-only">Select role</label>
+        <select id="cb-role" class="cb-role-select" aria-label="Role">
             <option value="viewer">Viewer</option>
             <option value="data_analyst">Analyst</option>
             <option value="data_engineer">Engineer</option>
             <option value="ml_engineer">ML Eng</option>
             <option value="admin">Admin</option>
         </select>
-        <input type="text" id="cb-input" class="cb-text-input" placeholder="Type a question..." autocomplete="off" required />
-        <button type="submit" id="cb-send" class="cb-send-btn" title="Send">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+        <label for="cb-input" class="sr-only">Type your question</label>
+        <input type="text" id="cb-input" class="cb-text-input" placeholder="Type a question..." autocomplete="off" required aria-required="true" />
+        <button type="submit" id="cb-send" class="cb-send-btn" aria-label="Send message">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
         </button>
     </form>
 </div>

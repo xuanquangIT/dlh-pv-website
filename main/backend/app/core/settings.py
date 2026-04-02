@@ -12,6 +12,7 @@ class SolarChatSettings(BaseSettings):
         env_file=(".env", "dev/config/.env", "main/docker/.env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,  # allow field names in addition to aliases in tests/code
     )
 
     gemini_api_key: str | None = Field(default=None, alias="SOLAR_CHAT_GEMINI_API_KEY")
@@ -46,7 +47,7 @@ class SolarChatSettings(BaseSettings):
     pg_password: str = Field(default="pvlakehouse", alias="POSTGRES_PASSWORD")
 
     embedding_model: str = Field(
-        default="gemini-embedding-001",
+        default="text-embedding-004",  # 3072-dim model aligned with embedding_dimensions default
         alias="SOLAR_CHAT_EMBEDDING_MODEL",
     )
     embedding_dimensions: int = Field(

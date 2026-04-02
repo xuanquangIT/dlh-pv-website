@@ -174,12 +174,18 @@ async function forkSession() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ role: role, title: title }),
         });
-        const session = await response.json();
-        await selectSession(session.session_id);
+        const body = await response.json().catch(function () { return {}; });
+        if (!response.ok) {
+            const detail = typeof body.detail === "string" ? body.detail : "Failed to fork session.";
+            throw new Error(detail);
+        }
+        await selectSession(body.session_id);
         await loadSessions();
-        statusText.textContent = "Session forked successfully.";
+        setStatus("Session forked successfully.", false);
     } catch (err) {
-        statusText.textContent = "Failed to fork session.";
+        const msg = err instanceof Error ? err.message : String(err);
+        setStatus(msg, true);
+        appendErrorBubble(msg);
     }
 }
 

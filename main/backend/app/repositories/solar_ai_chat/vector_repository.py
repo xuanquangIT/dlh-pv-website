@@ -19,6 +19,7 @@ class VectorRepository:
             f"dbname={settings.pg_database} "
             f"user={settings.pg_user} password={settings.pg_password}"
         )
+        self._expected_dimensions = settings.embedding_dimensions
 
     def _connect(self) -> "psycopg2.extensions.connection":
         return psycopg2.connect(self._dsn)
@@ -27,24 +28,33 @@ class VectorRepository:
         if not chunks:
             return 0
 
+        # Validate dimensions before any DB writes for a clear early failure
+        for chunk in chunks:
+            if len(chunk.embedding) != self._expected_dimensions:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {self._expected_dimensions}, "
+                    f"got {len(chunk.embedding)} in chunk '{chunk.source_file}[{chunk.chunk_index}]'."
+                )
+
         sql = """
             INSERT INTO rag_documents (doc_type, source_file, chunk_index, content, embedding)
             VALUES (%(doc_type)s, %(source_file)s, %(chunk_index)s, %(content)s, %(embedding)s)
             ON CONFLICT (source_file, chunk_index)
-            DO UPDATE SET content = EXCLUDED.content,
-                          embedding = EXCLUDED.embedding,
-                          doc_type = EXCLUDED.doc_type,
-                          created_at = now()
+            DO UPDATE SET content    = EXCLUDED.content,
+                          embedding  = EXCLUDED.embedding,
+                          doc_type   = EXCLUDED.doc_type,
+                          updated_at = now()
         """
-        rows: list[dict[str, Any]] = []
-        for chunk in chunks:
-            rows.append({
+        rows: list[dict[str, Any]] = [
+            {
                 "doc_type": chunk.doc_type,
                 "source_file": chunk.source_file,
                 "chunk_index": chunk.chunk_index,
                 "content": chunk.content,
                 "embedding": str(chunk.embedding),
-            })
+            }
+            for chunk in chunks
+        ]
 
         conn = self._connect()
         try:
