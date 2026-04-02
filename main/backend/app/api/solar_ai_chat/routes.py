@@ -1,4 +1,5 @@
 from pathlib import Path
+from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -27,15 +28,17 @@ router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
 
 
 # ------------------------------------------------------------------
-# Dependency factories
+# Singleton dependency factories  (H1: cached, not recreated per request)
 # ------------------------------------------------------------------
 
+@lru_cache(maxsize=1)
 def _get_history_repository() -> ChatHistoryRepository:
     settings = get_solar_chat_settings()
     storage_dir = settings.resolved_data_root.parent / "chat_history"
     return ChatHistoryRepository(storage_dir=storage_dir)
 
 
+@lru_cache(maxsize=1)
 def _get_vector_repository() -> VectorRepository | None:
     settings = get_solar_chat_settings()
     if not settings.pg_host:
@@ -43,6 +46,7 @@ def _get_vector_repository() -> VectorRepository | None:
     return VectorRepository(settings=settings)
 
 
+@lru_cache(maxsize=1)
 def _get_embedding_client() -> GeminiEmbeddingClient | None:
     settings = get_solar_chat_settings()
     if not settings.gemini_api_key:
@@ -55,6 +59,7 @@ def _get_embedding_client() -> GeminiEmbeddingClient | None:
     )
 
 
+@lru_cache(maxsize=1)
 def get_solar_ai_chat_service() -> SolarAIChatService:
     settings = get_solar_chat_settings()
 
@@ -194,11 +199,20 @@ def ingest_document(
             detail="RAG infrastructure is not available.",
         )
 
+    # M3: Restrict ingestion path to within the configured data root
+    data_root = settings.resolved_data_root.parent
     file_path = Path(request.file_path).resolve()
     if not file_path.is_file():
         raise HTTPException(
             status_code=400,
             detail=f"File not found: {request.file_path}",
+        )
+    try:
+        file_path.relative_to(data_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="File path must be within the configured data directory.",
         )
 
     ingestion_service = RagIngestionService(

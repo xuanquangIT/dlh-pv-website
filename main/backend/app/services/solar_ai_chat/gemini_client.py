@@ -2,7 +2,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -42,79 +42,41 @@ class GeminiModelRouter:
     def __init__(
         self,
         settings: SolarChatSettings,
-        request_executor: Callable[[str, dict[str, object], float], dict[str, object]] | None = None,
     ) -> None:
         self._api_key = settings.gemini_api_key
         self._base_url = settings.gemini_base_url.rstrip("/")
         self._primary_model = settings.primary_model
         self._fallback_model = settings.fallback_model
         self._timeout = settings.request_timeout_seconds
-        self._request_executor = request_executor or self._execute_request
+
+    # ------------------------------------------------------------------
+    # Public methods
+    # ------------------------------------------------------------------
 
     def generate(self, prompt: str) -> GeminiGenerationResult:
         if not self._api_key:
             raise ModelUnavailableError("Gemini API key is not configured.")
 
-        started = time.perf_counter()
-        try:
-            primary_answer = self._call_model(model_name=self._primary_model, prompt=prompt)
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            logger.info(
-                "solar_chat_model_selection",
-                extra={
-                    "provider": "google_gemini",
-                    "selected_model": self._primary_model,
-                    "latency_ms": duration_ms,
-                    "fallback_used": False,
-                },
-            )
-            return GeminiGenerationResult(
-                text=primary_answer,
-                model_used=self._primary_model,
-                fallback_used=False,
-            )
-        except Exception as primary_error:
-            logger.warning(
-                "solar_chat_primary_model_failed",
-                extra={
-                    "provider": "google_gemini",
-                    "primary_model": self._primary_model,
-                    "fallback_model": self._fallback_model,
-                    "error": str(primary_error),
-                },
-            )
+        payload: dict[str, object] = {
+            "contents": [{"parts": [{"text": prompt}]}],
+        }
 
-        fallback_started = time.perf_counter()
-        try:
-            fallback_answer = self._call_model(model_name=self._fallback_model, prompt=prompt)
-            duration_ms = int((time.perf_counter() - fallback_started) * 1000)
-            logger.info(
-                "solar_chat_model_selection",
-                extra={
-                    "provider": "google_gemini",
-                    "selected_model": self._fallback_model,
-                    "latency_ms": duration_ms,
-                    "fallback_used": True,
-                },
-            )
-            return GeminiGenerationResult(
-                text=fallback_answer,
-                model_used=self._fallback_model,
-                fallback_used=True,
-            )
-        except Exception as fallback_error:
-            logger.error(
-                "solar_chat_fallback_model_failed",
-                extra={
-                    "provider": "google_gemini",
-                    "primary_model": self._primary_model,
-                    "fallback_model": self._fallback_model,
-                    "error": str(fallback_error),
-                },
-            )
-            raise ModelUnavailableError(
-                "Primary and fallback Gemini models are both unavailable."
-            ) from fallback_error
+        def _call_and_extract(model: str) -> str:
+            raw = self._call_model_raw(model, payload)
+            parts = self._extract_parts(raw)
+            text_value = parts[0].get("text")
+            if not isinstance(text_value, str) or not text_value.strip():
+                raise RuntimeError("Gemini response text is empty.")
+            return text_value.strip()
+
+        text, model_used, fallback_used = self._with_model_fallback(
+            _call_and_extract, "solar_chat_model_selection",
+        )
+        return GeminiGenerationResult(
+            text=text,
+            model_used=model_used,
+            fallback_used=fallback_used,
+        )
 
     def generate_with_tools(
         self,
@@ -124,38 +86,17 @@ class GeminiModelRouter:
         if not self._api_key:
             raise ModelUnavailableError("Gemini API key is not configured.")
 
-        payload = {
+        payload: dict[str, object] = {
             "contents": messages,
             "tools": [{"function_declarations": tools}],
             "tool_config": {"function_calling_config": {"mode": "AUTO"}},
         }
 
-        started = time.perf_counter()
-        try:
-            raw = self._call_model_raw(self._primary_model, payload)
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            logger.info(
-                "solar_chat_tool_call",
-                extra={"model": self._primary_model, "latency_ms": duration_ms, "fallback": False},
-            )
-            return self._parse_tool_response(raw, self._primary_model, fallback_used=False)
-        except Exception as primary_err:
-            logger.warning("solar_chat_tool_primary_failed", extra={"error": str(primary_err)})
-
-        fallback_started = time.perf_counter()
-        try:
-            raw = self._call_model_raw(self._fallback_model, payload)
-            duration_ms = int((time.perf_counter() - fallback_started) * 1000)
-            logger.info(
-                "solar_chat_tool_call",
-                extra={"model": self._fallback_model, "latency_ms": duration_ms, "fallback": True},
-            )
-            return self._parse_tool_response(raw, self._fallback_model, fallback_used=True)
-        except Exception as fallback_err:
-            logger.error("solar_chat_tool_fallback_failed", extra={"error": str(fallback_err)})
-            raise ModelUnavailableError(
-                "Primary and fallback Gemini models are both unavailable."
-            ) from fallback_err
+        raw, model_used, fallback_used = self._with_model_fallback(
+            lambda model: self._call_model_raw(model, payload),
+            "solar_chat_tool_call",
+        )
+        return self._parse_tool_response(raw, model_used, fallback_used)
 
     def send_tool_result(
         self,
@@ -165,20 +106,70 @@ class GeminiModelRouter:
         if not self._api_key:
             raise ModelUnavailableError("Gemini API key is not configured.")
 
-        payload = {"contents": messages}
+        payload: dict[str, object] = {"contents": messages}
         raw = self._call_model_raw(model_name, payload)
-        return self._parse_tool_response(raw, model_name, fallback_used=(model_name == self._fallback_model))
+        return self._parse_tool_response(
+            raw, model_name,
+            fallback_used=(model_name == self._fallback_model),
+        )
 
-    def _call_model_raw(self, model_name: str, payload: dict[str, object]) -> dict[str, object]:
-        endpoint = f"{self._base_url}/models/{model_name}:generateContent?key={self._api_key}"
-        return self._request_executor(endpoint, payload, self._timeout)
+    # ------------------------------------------------------------------
+    # Model fallback routing (eliminates D3 duplication)
+    # ------------------------------------------------------------------
+
+    def _with_model_fallback(
+        self,
+        action: Callable[[str], Any],
+        log_event: str,
+    ) -> tuple[Any, str, bool]:
+        """Try primary model, then fallback.
+
+        Returns (result, model_used, fallback_used).
+        """
+        models = [
+            (self._primary_model, False),
+            (self._fallback_model, True),
+        ]
+        last_error: Exception = RuntimeError("No models configured.")
+
+        for model, is_fallback in models:
+            started = time.perf_counter()
+            try:
+                result = action(model)
+                duration_ms = int((time.perf_counter() - started) * 1000)
+                logger.info(
+                    log_event,
+                    extra={
+                        "provider": "google_gemini",
+                        "selected_model": model,
+                        "latency_ms": duration_ms,
+                        "fallback_used": is_fallback,
+                    },
+                )
+                return result, model, is_fallback
+            except Exception as err:
+                last_error = err
+                log_fn = logger.warning if not is_fallback else logger.error
+                log_fn(
+                    "%s_failed", log_event,
+                    extra={
+                        "provider": "google_gemini",
+                        "model": model,
+                        "error": str(err),
+                    },
+                )
+
+        raise ModelUnavailableError(
+            "Primary and fallback Gemini models are both unavailable."
+        ) from last_error
+
+    # ------------------------------------------------------------------
+    # Response parsing (eliminates D4 duplication)
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_tool_response(
-        raw: dict[str, object],
-        model_used: str,
-        fallback_used: bool,
-    ) -> GeminiToolResult:
+    def _extract_parts(raw: dict[str, object]) -> list[dict[str, object]]:
+        """Extract validated parts list from a Gemini API response."""
         candidates = raw.get("candidates")
         if not isinstance(candidates, list) or not candidates:
             raise RuntimeError("Gemini response does not contain candidates.")
@@ -187,8 +178,18 @@ class GeminiModelRouter:
         parts = content.get("parts", []) if isinstance(content, dict) else []
         if not isinstance(parts, list) or not parts:
             raise RuntimeError("Gemini response does not contain parts.")
+        return parts
 
+    @classmethod
+    def _parse_tool_response(
+        cls,
+        raw: dict[str, object],
+        model_used: str,
+        fallback_used: bool,
+    ) -> GeminiToolResult:
+        parts = cls._extract_parts(raw)
         first_part = parts[0]
+
         function_call = first_part.get("functionCall")
         if isinstance(function_call, dict):
             return GeminiToolResult(
@@ -212,42 +213,35 @@ class GeminiModelRouter:
 
         raise RuntimeError("Gemini response contains neither functionCall nor text.")
 
-    def _call_model(self, model_name: str, prompt: str) -> str:
-        endpoint = f"{self._base_url}/models/{model_name}:generateContent?key={self._api_key}"
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": prompt,
-                        }
-                    ]
-                }
-            ]
+    # ------------------------------------------------------------------
+    # HTTP transport
+    # ------------------------------------------------------------------
+
+    def _call_model_raw(
+        self, model_name: str, payload: dict[str, object],
+    ) -> dict[str, object]:
+        # C3: API key sent as header, never in URL
+        endpoint = f"{self._base_url}/models/{model_name}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self._api_key,
         }
-
-        raw_response = self._request_executor(endpoint, payload, self._timeout)
-        candidates = raw_response.get("candidates")
-        if not isinstance(candidates, list) or not candidates:
-            raise RuntimeError("Gemini response does not contain candidates.")
-
-        content = candidates[0].get("content", {})
-        parts = content.get("parts", []) if isinstance(content, dict) else []
-        if not isinstance(parts, list) or not parts:
-            raise RuntimeError("Gemini response does not contain text content.")
-
-        text_value = parts[0].get("text")
-        if not isinstance(text_value, str) or not text_value.strip():
-            raise RuntimeError("Gemini response text is empty.")
-
-        return text_value.strip()
+        return self._execute_request(endpoint, payload, self._timeout, headers)
 
     @staticmethod
-    def _execute_request(url: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+    def _execute_request(
+        url: str,
+        payload: dict[str, object],
+        timeout: float,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        request_headers = {"Content-Type": "application/json"}
+        if headers:
+            request_headers.update(headers)
         request = Request(
             url=url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=request_headers,
             method="POST",
         )
 
@@ -255,12 +249,16 @@ class GeminiModelRouter:
             with urlopen(request, timeout=timeout) as response:
                 body = response.read().decode("utf-8")
         except (HTTPError, URLError, TimeoutError) as request_error:
-            raise RuntimeError(f"Gemini request failed: {request_error}") from request_error
+            raise RuntimeError(
+                f"Gemini request failed: {request_error}"
+            ) from request_error
 
         try:
             parsed = json.loads(body)
         except json.JSONDecodeError as decode_error:
-            raise RuntimeError("Gemini response body is not valid JSON.") from decode_error
+            raise RuntimeError(
+                "Gemini response body is not valid JSON."
+            ) from decode_error
 
         if not isinstance(parsed, dict):
             raise RuntimeError("Gemini response JSON root must be an object.")

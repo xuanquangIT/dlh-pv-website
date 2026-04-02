@@ -7,9 +7,11 @@ from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 from app.schemas.solar_ai_chat.tools import TOOL_NAME_TO_TOPIC
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
+from app.services.solar_ai_chat.permissions import ROLE_TOOL_PERMISSIONS
 
 logger = logging.getLogger(__name__)
 
+# Weather metric label/unit lookup — shared with chat_service._WEATHER_METRIC_CATALOG
 WEATHER_METRIC_LABELS: dict[str, tuple[str, str]] = {
     "temperature_2m": ("temperature", "C"),
     "wind_speed_10m": ("wind speed", "m/s"),
@@ -18,39 +20,7 @@ WEATHER_METRIC_LABELS: dict[str, tuple[str, str]] = {
     "cloud_cover": ("cloud cover", "%"),
 }
 
-_TOOL_PERMISSIONS: dict[ChatRole, set[str]] = {
-    ChatRole.DATA_ENGINEER: {
-        "get_system_overview", "get_energy_performance",
-        "get_pipeline_status", "get_forecast_72h", "get_data_quality_issues",
-        "get_extreme_aqi", "get_extreme_energy", "get_extreme_weather",
-        "get_station_daily_report", "search_documents",
-    },
-    ChatRole.ML_ENGINEER: {
-        "get_system_overview", "get_energy_performance",
-        "get_ml_model_info", "get_forecast_72h",
-        "get_extreme_energy", "get_extreme_weather",
-        "get_station_daily_report", "search_documents",
-    },
-    ChatRole.DATA_ANALYST: {
-        "get_system_overview", "get_energy_performance",
-        "get_ml_model_info", "get_forecast_72h", "get_data_quality_issues",
-        "get_extreme_aqi", "get_extreme_energy", "get_extreme_weather",
-        "get_station_daily_report", "search_documents",
-    },
-    ChatRole.VIEWER: {
-        "get_system_overview", "get_energy_performance",
-        "get_forecast_72h",
-        "get_extreme_energy", "get_extreme_weather",
-        "get_station_daily_report", "search_documents",
-    },
-    ChatRole.ADMIN: {
-        "get_system_overview", "get_energy_performance",
-        "get_ml_model_info", "get_pipeline_status",
-        "get_forecast_72h", "get_data_quality_issues",
-        "get_extreme_aqi", "get_extreme_energy", "get_extreme_weather",
-        "get_station_daily_report", "search_documents",
-    },
-}
+
 
 
 class ToolExecutor:
@@ -100,7 +70,7 @@ class ToolExecutor:
 
     @staticmethod
     def _validate_permission(function_name: str, role: ChatRole) -> None:
-        allowed = _TOOL_PERMISSIONS.get(role, set())
+        allowed = ROLE_TOOL_PERMISSIONS.get(role, set())
         if function_name not in allowed:
             topic_value = TOOL_NAME_TO_TOPIC.get(function_name, function_name)
             raise PermissionError(

@@ -51,16 +51,7 @@ class ChatHistoryRepository:
             data = self._read_file(file_path)
             if data is None:
                 continue
-            sessions.append(
-                ChatSessionSummary(
-                    session_id=data["session_id"],
-                    title=data["title"],
-                    role=ChatRole(data["role"]),
-                    created_at=datetime.fromisoformat(data["created_at"]),
-                    updated_at=datetime.fromisoformat(data["updated_at"]),
-                    message_count=len(data.get("messages", [])),
-                )
-            )
+            sessions.append(self._deserialize_session_summary(data))
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions
 
@@ -131,26 +122,20 @@ class ChatHistoryRepository:
         if source_data is None:
             return None
 
-        role = ChatRole(new_role.value if new_role else source_data["role"])
+        # C6: new_role is already a ChatRole, no need to unwrap and re-wrap
+        role = new_role if new_role else ChatRole(source_data["role"])
         title = new_title or f"Fork of {source_data['title']}"
-
         new_session = self.create_session(role=role, title=title)
 
-        source_data_reloaded = self._load_session(source_session_id)
-        if source_data_reloaded is None:
-            return new_session
-
+        # C7: source_data is still valid; create_session writes to a different file
         new_data = self._load_session(new_session.session_id)
         if new_data is None:
             return new_session
 
-        copied_messages: list[dict[str, Any]] = []
-        for msg in source_data_reloaded.get("messages", []):
-            copied = dict(msg)
-            copied["id"] = uuid.uuid4().hex[:12]
-            copied["session_id"] = new_session.session_id
-            copied_messages.append(copied)
-
+        copied_messages: list[dict[str, Any]] = [
+            {**msg, "id": uuid.uuid4().hex[:12], "session_id": new_session.session_id}
+            for msg in source_data.get("messages", [])
+        ]
         new_data["messages"] = copied_messages
         new_data["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
         self._write_session(new_session.session_id, new_data)
@@ -174,6 +159,18 @@ class ChatHistoryRepository:
     def _write_session(self, session_id: str, data: dict[str, Any]) -> None:
         file_path = self._session_path(session_id)
         file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _deserialize_session_summary(data: dict[str, Any]) -> ChatSessionSummary:
+        """D11: Shared deserializer used by list_sessions and get_session."""
+        return ChatSessionSummary(
+            session_id=data["session_id"],
+            title=data["title"],
+            role=ChatRole(data["role"]),
+            created_at=datetime.fromisoformat(data["created_at"]),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+            message_count=len(data.get("messages", [])),
+        )
 
     @staticmethod
     def _read_file(file_path: Path) -> dict[str, Any] | None:

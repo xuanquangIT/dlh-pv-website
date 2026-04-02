@@ -31,31 +31,22 @@ class GeminiEmbeddingClient:
         self._dimensions = dimensions
 
     def embed_text(self, text: str) -> list[float]:
-        endpoint = (
-            f"{self._base_url}/models/{self._model}:embedContent"
-            f"?key={self._api_key}"
-        )
+        # C4: API key sent as header, never in URL
+        endpoint = f"{self._base_url}/models/{self._model}:embedContent"
         payload = {
             "model": f"models/{self._model}",
             "content": {"parts": [{"text": text}]},
         }
         result = self._post(endpoint, payload)
-        embedding = result.get("embedding", {})
-        values = embedding.get("values", [])
-        if not isinstance(values, list) or len(values) != self._dimensions:
-            raise EmbeddingUnavailableError(
-                f"Expected {self._dimensions}-dim vector, got {len(values)}."
-            )
-        return values
+        values = result.get("embedding", {}).get("values", [])
+        return self._validate_vector(values)
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
 
-        endpoint = (
-            f"{self._base_url}/models/{self._model}:batchEmbedContents"
-            f"?key={self._api_key}"
-        )
+        # C4: API key sent as header, never in URL
+        endpoint = f"{self._base_url}/models/{self._model}:batchEmbedContents"
         requests_body = [
             {
                 "model": f"models/{self._model}",
@@ -71,22 +62,24 @@ class GeminiEmbeddingClient:
             raise EmbeddingUnavailableError(
                 f"Expected {len(texts)} embeddings, got {len(embeddings_list)}."
             )
+        return [self._validate_vector(emb.get("values", [])) for emb in embeddings_list]
 
-        vectors: list[list[float]] = []
-        for emb in embeddings_list:
-            values = emb.get("values", [])
-            if not isinstance(values, list) or len(values) != self._dimensions:
-                raise EmbeddingUnavailableError(
-                    f"Expected {self._dimensions}-dim vector in batch, got {len(values)}."
-                )
-            vectors.append(values)
-        return vectors
+    def _validate_vector(self, values: list) -> list[float]:
+        """Validate vector dimensions and return it. Raises EmbeddingUnavailableError on mismatch."""
+        if not isinstance(values, list) or len(values) != self._dimensions:
+            raise EmbeddingUnavailableError(
+                f"Expected {self._dimensions}-dim vector, got {len(values)}."
+            )
+        return values
 
     def _post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         request = Request(
             url=url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            },
             method="POST",
         )
         try:

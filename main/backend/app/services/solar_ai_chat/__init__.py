@@ -4,6 +4,7 @@ from app.services.solar_ai_chat.chat_service import SolarAIChatService, ExtremeM
 from app.services.solar_ai_chat.tool_executor import ToolExecutor
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient, EmbeddingUnavailableError
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
+from app.services.solar_ai_chat.permissions import ROLE_TOPIC_PERMISSIONS, ROLE_TOOL_PERMISSIONS
 
 __all__ = [
     "GeminiModelRouter",
@@ -20,4 +21,6 @@ __all__ = [
     "GeminiEmbeddingClient",
     "EmbeddingUnavailableError",
     "RagIngestionService",
+    "ROLE_TOPIC_PERMISSIONS",
+    "ROLE_TOOL_PERMISSIONS",
 ]

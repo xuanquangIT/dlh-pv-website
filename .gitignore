@@ -51,3 +51,8 @@ htmlcov/
 
 # Repository metadata
 .github/
+.agents/
+
+
+.main/chat_history/
+.main/chat_history/*
