@@ -141,7 +141,8 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     source_file  VARCHAR(500) NOT NULL,
     chunk_index  INTEGER      NOT NULL,
     content      TEXT         NOT NULL,
-    embedding    vector(3072),
+    -- embedding    vector(3072),
+    embedding vector(1536),
     created_at   TIMESTAMPTZ  DEFAULT now() NOT NULL,
     updated_at   TIMESTAMPTZ  DEFAULT now() NOT NULL,
     UNIQUE(source_file, chunk_index)
