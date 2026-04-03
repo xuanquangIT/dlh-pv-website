@@ -1,0 +1,77 @@
+{
+  "session_id": "23ceee078180",
+  "title": "Chat 10:12:21 2/4/2026",
+  "role": "viewer",
+  "created_at": "2026-04-02T03:12:21.033220+00:00",
+  "updated_at": "2026-04-02T03:12:58.885944+00:00",
+  "messages": [
+    {
+      "id": "49c3c29b1fc9",
+      "session_id": "23ceee078180",
+      "sender": "user",
+      "content": "báo cáo aqi, bức xạ mặt trời, năng lượng các trạm vào ngày 5/5/2025, có thể giải thích vì sao lại như vậy được không? chất lượng dữ liệu như vậy có ảnh hưởng model ML không",
+      "timestamp": "2026-04-02T03:12:29.439621+00:00",
+      "topic": null,
+      "sources": null
+    },
+    {
+      "id": "50eea2093dde",
+      "session_id": "23ceee078180",
+      "sender": "assistant",
+      "content": "Ngày 05/05/2025, chỉ số AQI thấp (khoảng 3.3 đến 17.1), bức xạ mặt trời cao (146.5 đến 199.38 W/m²), năng lượng sản xuất nhiều (từ 85.78 đến 1241.60 MWh). Điều này xảy ra do thời tiết nắng đẹp, ít ô nhiễm. Chất lượng dữ liệu tốt không ảnh hưởng xấu đến mô hình ML.",
+      "timestamp": "2026-04-02T03:12:29.460773+00:00",
+      "topic": "energy_performance",
+      "sources": [
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_energy",
+          "data_source": "trino"
+        },
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_weather",
+          "data_source": "trino"
+        },
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_air_quality",
+          "data_source": "trino"
+        }
+      ]
+    },
+    {
+      "id": "78d7ec8acedf",
+      "session_id": "23ceee078180",
+      "sender": "user",
+      "content": "nêu rõ trạm nào",
+      "timestamp": "2026-04-02T03:12:58.864913+00:00",
+      "topic": null,
+      "sources": null
+    },
+    {
+      "id": "6f0ca20cb00c",
+      "session_id": "23ceee078180",
+      "sender": "assistant",
+      "content": "Ngày 05/05/2025, các trạm ghi nhận như sau:\n*   **Avonlie**: AQI 7, bức xạ 146.5 W/m², năng lượng 984.37 MWh.\n*   **Bomen**: AQI 17.12, bức xạ 148.67 W/m², năng lượng 371.95 MWh.\n*   **Darlington Point**: AQI 7.83, bức xạ 149.46 W/m², năng lượng 1241.61 MWh.\n*   **Emerald**: AQI 11.96, bức xạ 199.38 W/m², năng lượng 362.88 MWh.\n*   **Finley**: AQI 6.83, bức xạ 153.58 W/m², năng lượng 606.20 MWh.\n*   **Limondale 2**: AQI 5.25, bức xạ 162.83 W/m², năng lượng 177.63 MWh.\n*   **White Rock Solar Farm**: AQI 3.58, bức xạ 155.67 W/m², năng lượng 85.78 MWh.\n*   **Yatpool**: AQI 3.33, bức xạ 154.71 W/m², năng lượng 337.54 MWh.",
+      "timestamp": "2026-04-02T03:12:58.885944+00:00",
+      "topic": "energy_performance",
+      "sources": [
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_energy",
+          "data_source": "trino"
+        },
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_weather",
+          "data_source": "trino"
+        },
+        {
+          "layer": "Silver",
+          "dataset": "lh_silver_clean_hourly_air_quality",
+          "data_source": "trino"
+        }
+      ]
+    }
+  ]
+}

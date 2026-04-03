@@ -51,3 +51,8 @@ htmlcov/
 
 # Repository metadata
 .github/
+.agents/
+
+
+# Chat session history (runtime data, never committed)
+**/chat_history/
