@@ -14,7 +14,7 @@ MODULE_CARDS = [
         "name": "Dashboard",
         "description": "Overall production overview and key metrics.",
         "endpoint": "/dashboard/summary",
-        "ui_path": None,
+        "ui_path": "/dashboard",
     },
     {
         "name": "Data Pipeline",
@@ -77,3 +77,12 @@ def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
         name="solar_ai_chat_test.html",
         context={},
     )
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={},
+    )
+

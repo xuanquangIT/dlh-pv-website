@@ -69,3 +69,22 @@ class SolarChatSettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_solar_chat_settings() -> SolarChatSettings:
     return SolarChatSettings()
+
+class PowerBISettings(BaseSettings):
+    """Runtime settings for Power BI Embedded module."""
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "dev/config/.env", "main/docker/.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    tenant_id: str | None = Field(default=None, alias="POWERBI_TENANT_ID")
+    client_id: str | None = Field(default=None, alias="POWERBI_CLIENT_ID")
+    client_secret: str | None = Field(default=None, alias="POWERBI_CLIENT_SECRET")
+    workspace_id: str | None = Field(default=None, alias="POWERBI_WORKSPACE_ID")
+    report_id: str | None = Field(default=None, alias="POWERBI_REPORT_ID")
+
+@lru_cache(maxsize=1)
+def get_powerbi_settings() -> PowerBISettings:
+    return PowerBISettings()
