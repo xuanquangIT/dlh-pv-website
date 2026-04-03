@@ -1,0 +1,67 @@
+{% extends "refactored_v3/base.html" %}
+
+{% block title %}PV Lakehouse - Solar AI Chat{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <h1 class="page-title">Solar AI Chat</h1>
+        <div class="page-subtitle">Smart Assistant · Powered by PV Intelligence · LLM-ready</div>
+    </div>
+    <div>
+        <button class="btn btn-sec" type="button" id="solar-chat-clear-btn">Clear History</button>
+        <button class="btn btn-danger" type="button" id="solar-chat-export-btn">Export PDF</button>
+    </div>
+</section>
+
+<section class="solar-chat-shell card">
+    <div class="solar-chat-shell-header">
+        <div class="solar-chat-assistant-meta">
+            <div class="solar-chat-avatar">AI</div>
+            <div>
+                <h2 class="solar-chat-assistant-name">Solar AI Assistant</h2>
+                <div class="solar-chat-assistant-status">
+                    <span class="solar-chat-online-dot"></span>
+                    <span id="solar-chat-status-text">Online · Ready to assist</span>
+                </div>
+            </div>
+        </div>
+        <div class="solar-chat-counter"><span id="solar-chat-message-count">0</span> messages</div>
+    </div>
+
+    <div id="page-chat-error" class="solar-chat-error" hidden></div>
+
+    <div id="page-chat-loading" class="solar-chat-loading" hidden>
+        Assistant is analyzing your request.
+    </div>
+
+    <div id="page-chat-messages" class="solar-chat-messages">
+        <div class="msg-row msg-row-assistant">
+            <div class="msg msg-bot">👋 Xin chào! Tôi là <strong>Solar AI</strong>, trợ lý thông minh của PV Lakehouse.<br><br>Tôi có thể giúp bạn phân tích dữ liệu năng lượng, kiểm tra pipeline, xem metrics mô hình, hoặc giải thích các dự báo. Bạn cần hỗ trợ gì?</div>
+            <div class="msg-time">--:--</div>
+        </div>
+    </div>
+
+    <div class="solar-chat-chip-row" id="solar-chat-suggestions">
+        <button class="solar-chat-chip" type="button" data-chat-prompt="System overview">System overview</button>
+        <button class="solar-chat-chip" type="button" data-chat-prompt="Energy performance">Energy performance</button>
+        <button class="solar-chat-chip" type="button" data-chat-prompt="Top model by RMSE">Best model</button>
+        <button class="solar-chat-chip" type="button" id="pipeline-status-btn">Show latest pipeline status</button>
+        <button class="solar-chat-chip" type="button" data-chat-prompt="Forecast for next 72 hours">72-hour forecast</button>
+        <button class="solar-chat-chip" type="button" data-chat-prompt="Recent quality incidents">Quality issues</button>
+    </div>
+
+    <div class="solar-chat-input-wrap" style="display:flex;gap:8px;">
+        <textarea id="page-chat-input" style="flex:1;border:1px solid #dde3ed;border-radius:12px;padding:12px;resize:vertical;min-height:56px;" placeholder="Ask about energy, pipeline, ML models, forecasts"></textarea>
+        <button class="btn btn-pri solar-chat-send" type="button" id="page-chat-send">Send</button>
+    </div>
+
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.PV_ROUTE = "solar_chat";
+</script>
+{% endblock %}
