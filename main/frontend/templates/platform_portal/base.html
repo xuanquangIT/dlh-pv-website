@@ -19,11 +19,16 @@
         {% block content %}{% endblock %}
     </main>
 
+    {% if current_page | default('') != 'solar_chat' %}
     {% include "platform_portal/components/chatbot_panel.html" %}
+    {% endif %}
 
     <script>
         window.PV_ROUTE = "{{ current_page | default('dashboard') }}";
     </script>
+    <script src="{{ url_for('static', path='js/platform_portal/charts.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/platform_portal/solar_chat_page.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/platform_portal/chatbot_widget.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/platform_portal/common.js') }}" defer></script>
     {% block scripts %}{% endblock %}
 </body>

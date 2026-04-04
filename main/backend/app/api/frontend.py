@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 router = APIRouter(tags=["Frontend"], include_in_schema=False)
@@ -54,9 +54,9 @@ MODULE_CARDS = [
     },
     {
         "name": "Solar AI Chat",
-        "description": "Vietnamese natural language assistant for business users.",
+        "description": "Natural language assistant for platform users.",
         "endpoint": "/solar-ai-chat/topics",
-        "ui_path": "/solar-ai-chat",
+        "ui_path": "/solar-chat",
     },
 ]
 
@@ -102,13 +102,9 @@ def home_page(request: Request) -> HTMLResponse:
     )
 
 
-@router.get("/solar-ai-chat", response_class=HTMLResponse)
-def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request=request,
-        name="platform_portal/solar_chat.html",
-        context={},
-    )
+@router.get("/solar-ai-chat", include_in_schema=False)
+def solar_ai_chat_legacy_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/solar-chat", status_code=307)
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
