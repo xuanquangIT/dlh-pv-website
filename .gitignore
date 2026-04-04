@@ -54,5 +54,5 @@ htmlcov/
 .agents/
 
 
-.main/chat_history/
-.main/chat_history/*
+# Chat session history (runtime data, never committed)
+**/chat_history/
