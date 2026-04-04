@@ -1,0 +1,30 @@
+<button id="chatbot-btn" type="button" aria-label="Open chatbot">AI</button>
+
+<div id="chatbot-panel" aria-hidden="true">
+    <div class="cbot-header">
+        <div class="cbot-head-meta">
+            <div class="cbot-avatar">AI</div>
+            <div>
+                <div class="cbot-name">Solar AI Assistant</div>
+                <div class="cbot-status">Online · Powered by PV Intelligence</div>
+            </div>
+        </div>
+        <button type="button" class="cbot-close" id="chatbot-close">X</button>
+    </div>
+
+    <div class="cbot-msgs" id="cbot-msgs" aria-live="polite"></div>
+
+    <div class="cbot-chips" id="cbot-chips">
+        <button type="button" class="cbot-chip" data-chat-prompt="System overview">System overview</button>
+        <button type="button" class="cbot-chip" data-chat-prompt="Energy performance">Energy performance</button>
+        <button type="button" class="cbot-chip" data-chat-prompt="Pipeline status">Pipeline status</button>
+        <button type="button" class="cbot-chip" data-chat-prompt="Forecast horizon">Forecast horizon</button>
+        <button type="button" class="cbot-chip" data-chat-prompt="Quality issues">Quality issues</button>
+    </div>
+
+    <div class="cbot-input-wrap">
+        <textarea class="cbot-input" id="cbot-input" placeholder="Ask about energy, pipeline, models" rows="1"></textarea>
+        <button type="button" class="cbot-send" id="cbot-send">Send</button>
+    </div>
+</div>
+

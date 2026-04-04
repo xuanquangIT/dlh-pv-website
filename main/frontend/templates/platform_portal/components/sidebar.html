@@ -1,0 +1,47 @@
+<nav id="sidebar">
+    <div class="nav-logo">
+        <div class="logo-mark">PV</div>
+        <div>
+            <div class="logo-txt">PV Lakehouse</div>
+            <div class="logo-sub">Solar Intelligence</div>
+        </div>
+    </div>
+
+    <div class="nav-scroll">
+        <div class="nav-sec">Overview</div>
+        <a class="nav-item {% if current_page == 'dashboard' %}active{% endif %}" href="/dashboard">Dashboard</a>
+
+        <div class="nav-sec">Pipeline</div>
+        <a class="nav-item {% if current_page == 'pipeline' %}active{% endif %}" href="/pipeline">Data Pipeline</a>
+        <a class="nav-item {% if current_page == 'quality' %}active{% endif %}" href="/quality">Data Quality</a>
+
+        <div class="nav-sec">Machine Learning</div>
+        <a class="nav-item {% if current_page == 'training' %}active{% endif %}" href="/training">ML Training</a>
+        <a class="nav-item {% if current_page == 'registry' %}active{% endif %}" href="/registry">Model Registry</a>
+
+        <div class="nav-sec">Intelligence</div>
+        <a class="nav-item {% if current_page == 'forecast' %}active{% endif %}" href="/forecast">Forecast</a>
+        <a class="nav-item {% if current_page == 'analytics' %}active{% endif %}" href="/analytics">Analytics</a>
+
+        <div class="nav-sec">AI Assistant</div>
+        <a class="nav-item {% if current_page == 'solar_chat' %}active{% endif %}" href="/solar-chat">Solar AI Chat</a>
+
+        <div class="nav-sec">Settings</div>
+        <span class="nav-item disabled">Settings</span>
+    </div>
+
+    <div class="sidebar-footer">
+        <div class="health-row">
+            <span class="status-dot"></span>
+            <span>{{ system_health | default('Pipeline healthy') }}</span>
+        </div>
+        <div class="user-card">
+            <div class="user-av">{{ user_initials | default('AK') }}</div>
+            <div>
+                <div class="user-name">{{ user_name | default('Admin User') }}</div>
+                <div class="user-role">{{ user_role | default('Platform Owner') }}</div>
+            </div>
+        </div>
+    </div>
+</nav>
+
