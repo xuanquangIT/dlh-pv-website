@@ -106,7 +106,7 @@ def home_page(request: Request) -> HTMLResponse:
 def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
-        name="solar_ai_chat_test.html",
+        name="platform_portal/solar_chat.html",
         context={},
     )
 
