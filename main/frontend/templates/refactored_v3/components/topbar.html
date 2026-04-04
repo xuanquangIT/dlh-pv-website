@@ -1,0 +1,16 @@
+<header id="topbar">
+    <div class="crumb">
+        <span>PV Lakehouse</span>
+        <span>/</span>
+        <span class="crumb-active">{{ page_title | default('Dashboard') }}</span>
+    </div>
+
+    <form class="search-bar" action="#" method="get">
+        <input type="text" name="q" placeholder="Search metrics, models" aria-label="Search">
+    </form>
+
+    <div class="top-actions">
+        <a class="btn btn-sec" href="/docs" target="_blank" rel="noopener noreferrer">API Docs</a>
+        <button type="button" class="btn btn-pri" id="run-pipeline-btn">Run Pipeline</button>
+    </div>
+</header>

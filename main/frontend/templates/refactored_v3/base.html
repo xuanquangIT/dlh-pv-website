@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}PV Lakehouse{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', path='css/refactored_v3.css') }}">
+    {% block head_extra %}{% endblock %}
+</head>
+<body>
+    {% include "refactored_v3/components/sidebar.html" %}
+    {% include "refactored_v3/components/topbar.html" %}
+
+    <main id="main">
+        {% block content %}{% endblock %}
+    </main>
+
+    {% include "refactored_v3/components/chatbot_panel.html" %}
+
+    <script>
+        window.PV_ROUTE = "{{ current_page | default('dashboard') }}";
+    </script>
+    <script src="{{ url_for('static', path='js/refactored_v3/common.js') }}" defer></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

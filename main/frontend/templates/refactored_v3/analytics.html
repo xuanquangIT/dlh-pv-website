@@ -1,0 +1,64 @@
+{% extends "refactored_v3/base.html" %}
+
+{% block title %}PV Lakehouse - Analytics{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <h1 class="page-title">Analytics</h1>
+        <div class="page-subtitle">Interactive query engine over curated datasets</div>
+    </div>
+    <div>
+        <button class="btn btn-sec" type="button">Save Query</button>
+        <button class="btn btn-danger" type="button">PDF</button>
+    </div>
+</section>
+
+<section class="card" style="margin-bottom:16px;">
+    <h2 class="card-title">SQL Query Builder</h2>
+    <textarea style="width:100%;min-height:130px;border:1px solid #dde3ed;border-radius:8px;padding:10px;font-family:'DM Mono',monospace;">{{ analytics_query | default("SELECT facility_id, DATE_TRUNC('day', timestamp) AS date, SUM(energy_kwh) AS total_energy_kwh FROM gold_energy_agg GROUP BY facility_id, date ORDER BY date DESC LIMIT 100;") }}</textarea>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+        <button class="btn btn-pri" type="button">Run Query</button>
+        <button class="btn btn-sec" type="button">Format SQL</button>
+        <button class="btn btn-sec" type="button">Explain</button>
+    </div>
+</section>
+
+<section class="grid-2">
+    <article class="card">
+        <h2 class="card-title">Query Result</h2>
+        <div class="table-wrap" style="max-height:320px;">
+            <table>
+                <thead>
+                    <tr><th>Facility</th><th>Date</th><th>Energy</th><th>Irradiance</th><th>Temp</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in analytics_rows | default([
+                        {'facility':'RSA','date':'2024-01-08','energy':'1,240,812','irradiance':'682.4','temp':'24.1'},
+                        {'facility':'MVB','date':'2024-01-08','energy':'1,018,440','irradiance':'641.2','temp':'22.8'}
+                    ]) %}
+                    <tr>
+                        <td>{{ row.facility }}</td>
+                        <td>{{ row.date }}</td>
+                        <td>{{ row.energy }}</td>
+                        <td>{{ row.irradiance }}</td>
+                        <td>{{ row.temp }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+
+    <article class="card">
+        <h2 class="card-title">Visualization</h2>
+        <div class="chart-box"><canvas id="analyticsChart"></canvas></div>
+    </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.PV_ROUTE = "analytics";
+</script>
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "refactored_v3/base.html" %}
+
+{% block title %}PV Lakehouse - ML Training{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <h1 class="page-title">ML Training</h1>
+        <div class="page-subtitle">Gradient Boosted Trees with experiment tracking</div>
+    </div>
+    <div>
+        <span class="badge badge-info">Run: {{ active_run | default('exp_20240108_003') }}</span>
+        <button class="btn btn-sec" type="button">Import Config</button>
+        <button class="btn btn-danger" type="button">PDF</button>
+    </div>
+</section>
+
+<section class="grid-2">
+    <div>
+        <article class="card" style="margin-bottom:14px;">
+            <h2 class="card-title">Hyperparameters</h2>
+            <div class="table-wrap">
+                <table>
+                    <tbody>
+                        {% for hp in training_params | default([
+                            {'name':'Learning rate','value':'0.03'},
+                            {'name':'Max depth','value':'8'},
+                            {'name':'Estimators','value':'500'},
+                            {'name':'Subsample','value':'0.80'}
+                        ]) %}
+                        <tr><th>{{ hp.name }}</th><td>{{ hp.value }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </article>
+
+        <article class="card">
+            <h2 class="card-title">Training Progress</h2>
+            <div style="height:9px;border-radius:5px;background:#dde3ed;overflow:hidden;">
+                <div style="height:100%;width:{{ training_progress | default('46%') }};background:linear-gradient(90deg,#f4b942,#e07b39);"></div>
+            </div>
+            <div class="page-subtitle" style="margin-top:8px;">{{ training_progress | default('46%') }} complete</div>
+            <button class="btn btn-pri" type="button" style="margin-top:10px;">Start Training</button>
+        </article>
+    </div>
+
+    <article class="card">
+        <h2 class="card-title">Loss and RMSE over Iterations</h2>
+        <div class="chart-box" style="height:320px;"><canvas id="trainingChart"></canvas></div>
+    </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.PV_ROUTE = "training";
+</script>
+{% endblock %}

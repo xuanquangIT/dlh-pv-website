@@ -1,0 +1,120 @@
+{% extends "refactored_v3/base.html" %}
+
+{% block title %}PV Lakehouse - Dashboard{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <h1 class="page-title">System Overview</h1>
+        <div class="page-subtitle">Last refresh: {{ last_refresh | default('2 min ago') }} · UTC+00:00 · {{ facility_filter | default('All facilities') }}</div>
+    </div>
+    <div>
+        <button class="btn btn-sec" type="button">Export</button>
+        <button class="btn btn-danger" type="button">PDF</button>
+    </div>
+</section>
+
+<section class="grid-4" style="margin-bottom:16px;">
+    {% for kpi in kpi_data | default([
+        {'label':'Total Energy (MWh)','value':'2,464,124','delta':'8.3% vs last period'},
+        {'label':'Capacity Factor (%)','value':'17.36','delta':'+0.012 improvement'},
+        {'label':'Performance Ratio (%)','value':'79.51','delta':'On target'},
+        {'label':'Final Yield (kWh/kWp)','value':'2,278.52','delta':'24 / 26 active'}
+    ]) %}
+    <article class="kpi-card">
+        <div class="kpi-label">{{ kpi.label }}</div>
+        <div class="kpi-value">{{ kpi.value }}</div>
+        <div class="kpi-delta">{{ kpi.delta }}</div>
+    </article>
+    {% endfor %}
+</section>
+
+<section class="grid-2" style="margin-bottom:16px;">
+    <article class="card">
+        <h2 class="card-title">Total Energy and Irradiance by Hour</h2>
+        <div class="chart-box"><canvas id="energyChart"></canvas></div>
+    </article>
+    <article class="card">
+        <h2 class="card-title">Performance Ratio Distribution</h2>
+        <div class="chart-box"><canvas id="ratioChart"></canvas></div>
+    </article>
+</section>
+
+<section class="grid-3">
+    <article class="card">
+        <h2 class="card-title">Top Performing Facilities</h2>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Facility</th><th>Energy</th><th>Score</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in top_facilities | default([
+                        {'facility':'Riverside Solar A','energy':'1,240 MWh','score':'98%'},
+                        {'facility':'Mesa Verde B','energy':'1,018 MWh','score':'95%'}
+                    ]) %}
+                    <tr>
+                        <td>{{ row.facility }}</td>
+                        <td>{{ row.energy }}</td>
+                        <td><span class="badge badge-success">{{ row.score }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+
+    <article class="card">
+        <h2 class="card-title">Active Models</h2>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Model</th><th>Status</th><th>RMSE</th></tr>
+                </thead>
+                <tbody>
+                    {% for model in active_models | default([
+                        {'name':'GBT-v4.2','status':'Production','rmse':'0.042'},
+                        {'name':'GBT-v4.1','status':'Staging','rmse':'0.051'}
+                    ]) %}
+                    <tr>
+                        <td>{{ model.name }}</td>
+                        <td><span class="badge badge-info">{{ model.status }}</span></td>
+                        <td>{{ model.rmse }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+
+    <article class="card">
+        <h2 class="card-title">Pipeline Status</h2>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr><th>Stage</th><th>Progress</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                    {% for stage in pipeline_status | default([
+                        {'name':'Bronze','progress':'100%','status':'Completed'},
+                        {'name':'Silver','progress':'100%','status':'Completed'},
+                        {'name':'Gold','progress':'78%','status':'Running'}
+                    ]) %}
+                    <tr>
+                        <td>{{ stage.name }}</td>
+                        <td>{{ stage.progress }}</td>
+                        <td><span class="badge {% if stage.status == 'Running' %}badge-warn{% else %}badge-success{% endif %}">{{ stage.status }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </article>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.PV_ROUTE = "dashboard";
+</script>
+{% endblock %}

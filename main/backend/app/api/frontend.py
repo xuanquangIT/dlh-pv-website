@@ -60,6 +60,38 @@ MODULE_CARDS = [
     },
 ]
 
+UI_TEST_PAGES: dict[str, str] = {
+    "dashboard": "Dashboard",
+    "pipeline": "Data Pipeline",
+    "quality": "Data Quality",
+    "training": "ML Training",
+    "registry": "Model Registry",
+    "forecast": "Forecast",
+    "analytics": "Analytics",
+    "solar_chat": "Solar AI Chat",
+}
+
+
+def _render_refactored_page(
+    request: Request,
+    template_name: str,
+    current_page: str,
+    page_title: str,
+) -> HTMLResponse:
+    base_context = {
+        "current_page": current_page,
+        "page_title": page_title,
+        "system_health": "Pipeline healthy",
+        "user_name": "Admin User",
+        "user_role": "Platform Owner",
+        "user_initials": "AK",
+    }
+    return templates.TemplateResponse(
+        request=request,
+        name=template_name,
+        context=base_context,
+    )
+
 
 @router.get("/", response_class=HTMLResponse)
 def home_page(request: Request) -> HTMLResponse:
@@ -76,4 +108,84 @@ def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
         request=request,
         name="solar_ai_chat_test.html",
         context={},
+    )
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/dashboard.html",
+        current_page="dashboard",
+        page_title=UI_TEST_PAGES["dashboard"],
+    )
+
+
+@router.get("/pipeline", response_class=HTMLResponse)
+def pipeline_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/pipeline.html",
+        current_page="pipeline",
+        page_title=UI_TEST_PAGES["pipeline"],
+    )
+
+
+@router.get("/quality", response_class=HTMLResponse)
+def quality_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/quality.html",
+        current_page="quality",
+        page_title=UI_TEST_PAGES["quality"],
+    )
+
+
+@router.get("/training", response_class=HTMLResponse)
+def training_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/training.html",
+        current_page="training",
+        page_title=UI_TEST_PAGES["training"],
+    )
+
+
+@router.get("/registry", response_class=HTMLResponse)
+def registry_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/registry.html",
+        current_page="registry",
+        page_title=UI_TEST_PAGES["registry"],
+    )
+
+
+@router.get("/forecast", response_class=HTMLResponse)
+def forecast_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/forecast.html",
+        current_page="forecast",
+        page_title=UI_TEST_PAGES["forecast"],
+    )
+
+
+@router.get("/analytics", response_class=HTMLResponse)
+def analytics_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/analytics.html",
+        current_page="analytics",
+        page_title=UI_TEST_PAGES["analytics"],
+    )
+
+
+@router.get("/solar-chat", response_class=HTMLResponse)
+def solar_chat_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="refactored_v3/solar_chat.html",
+        current_page="solar_chat",
+        page_title=UI_TEST_PAGES["solar_chat"],
     )
