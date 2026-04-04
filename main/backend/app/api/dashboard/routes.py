@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.services.powerbi_service import get_powerbi_service, PowerBIService, EmbedTokenResponse
+from app.services.dashboard.powerbi_service import EmbedTokenResponse, PowerBIService, get_powerbi_service
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 

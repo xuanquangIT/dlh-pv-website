@@ -2,115 +2,141 @@
 
 {% block title %}PV Lakehouse - Dashboard{% endblock %}
 
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
+{% endblock %}
+
 {% block content %}
 <section class="section-header">
     <div>
-        <h1 class="page-title">System Overview</h1>
-        <div class="page-subtitle">Last refresh: {{ last_refresh | default('2 min ago') }} · UTC+00:00 · {{ facility_filter | default('All facilities') }}</div>
+        <h1 class="page-title">Power BI Dashboard</h1>
+        <div class="page-subtitle">Embedded report from your configured Power BI workspace.</div>
     </div>
     <div>
-        <button class="btn btn-sec" type="button">Export</button>
-        <button class="btn btn-danger" type="button">PDF</button>
+        <button class="btn btn-sec" id="refresh-powerbi-btn" type="button">Refresh</button>
     </div>
 </section>
 
-<section class="grid-4" style="margin-bottom:16px;">
-    {% for kpi in kpi_data | default([
-        {'label':'Total Energy (MWh)','value':'2,464,124','delta':'8.3% vs last period'},
-        {'label':'Capacity Factor (%)','value':'17.36','delta':'+0.012 improvement'},
-        {'label':'Performance Ratio (%)','value':'79.51','delta':'On target'},
-        {'label':'Final Yield (kWh/kWp)','value':'2,278.52','delta':'24 / 26 active'}
-    ]) %}
-    <article class="kpi-card">
-        <div class="kpi-label">{{ kpi.label }}</div>
-        <div class="kpi-value">{{ kpi.value }}</div>
-        <div class="kpi-delta">{{ kpi.delta }}</div>
-    </article>
-    {% endfor %}
+<section class="card" style="padding: 14px;">
+    <div id="dashboardMessage" style="display: flex; min-height: 120px; align-items: center; justify-content: center; color: #5d6570; text-align: center;">
+        Loading embedded dashboard configuration...
+    </div>
+    <div id="powerbiContainer" style="display: none; width: 100%; height: min(76vh, 980px); border: 1px solid #d7dce3; border-radius: 12px; overflow: hidden;"></div>
 </section>
+{% endblock %}
 
-<section class="grid-2" style="margin-bottom:16px;">
-    <article class="card">
-        <h2 class="card-title">Total Energy and Irradiance by Hour</h2>
-        <div class="chart-box"><canvas id="energyChart"></canvas></div>
-    </article>
-    <article class="card">
-        <h2 class="card-title">Performance Ratio Distribution</h2>
-        <div class="chart-box"><canvas id="ratioChart"></canvas></div>
-    </article>
-</section>
+{% block scripts %}
+<script>
+    (function () {
+        let embeddedReport = null;
 
-<section class="grid-3">
-    <article class="card">
-        <h2 class="card-title">Top Performing Facilities</h2>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr><th>Facility</th><th>Energy</th><th>Score</th></tr>
-                </thead>
-                <tbody>
-                    {% for row in top_facilities | default([
-                        {'facility':'Riverside Solar A','energy':'1,240 MWh','score':'98%'},
-                        {'facility':'Mesa Verde B','energy':'1,018 MWh','score':'95%'}
-                    ]) %}
-                    <tr>
-                        <td>{{ row.facility }}</td>
-                        <td>{{ row.energy }}</td>
-                        <td><span class="badge badge-success">{{ row.score }}</span></td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
+        function showMessage(message, isError) {
+            const messageEl = document.getElementById("dashboardMessage");
+            const containerEl = document.getElementById("powerbiContainer");
+            if (!messageEl || !containerEl) return;
 
-    <article class="card">
-        <h2 class="card-title">Active Models</h2>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr><th>Model</th><th>Status</th><th>RMSE</th></tr>
-                </thead>
-                <tbody>
-                    {% for model in active_models | default([
-                        {'name':'GBT-v4.2','status':'Production','rmse':'0.042'},
-                        {'name':'GBT-v4.1','status':'Staging','rmse':'0.051'}
-                    ]) %}
-                    <tr>
-                        <td>{{ model.name }}</td>
-                        <td><span class="badge badge-info">{{ model.status }}</span></td>
-                        <td>{{ model.rmse }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
+            containerEl.style.display = "none";
+            messageEl.style.display = "flex";
+            messageEl.style.color = isError ? "#b42318" : "#5d6570";
+            messageEl.textContent = message;
+        }
 
-    <article class="card">
-        <h2 class="card-title">Pipeline Status</h2>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr><th>Stage</th><th>Progress</th><th>Status</th></tr>
-                </thead>
-                <tbody>
-                    {% for stage in pipeline_status | default([
-                        {'name':'Bronze','progress':'100%','status':'Completed'},
-                        {'name':'Silver','progress':'100%','status':'Completed'},
-                        {'name':'Gold','progress':'78%','status':'Running'}
-                    ]) %}
-                    <tr>
-                        <td>{{ stage.name }}</td>
-                        <td>{{ stage.progress }}</td>
-                        <td><span class="badge {% if stage.status == 'Running' %}badge-warn{% else %}badge-success{% endif %}">{{ stage.status }}</span></td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
-</section>
+        function showContainer() {
+            const messageEl = document.getElementById("dashboardMessage");
+            const containerEl = document.getElementById("powerbiContainer");
+            if (!messageEl || !containerEl) return;
+
+            messageEl.style.display = "none";
+            containerEl.style.display = "block";
+        }
+
+        async function loadEmbedConfig() {
+            const response = await fetch("/dashboard/embed-info", {
+                method: "GET",
+                headers: { "Accept": "application/json" }
+            });
+
+            if (!response.ok) {
+                throw new Error("Cannot fetch Power BI embed information from backend.");
+            }
+
+            return response.json();
+        }
+
+        async function renderPowerBI() {
+            showMessage("Loading embedded dashboard configuration...", false);
+
+            try {
+                if (!window.powerbi || !window["powerbi-client"]) {
+                    throw new Error("Power BI client library is not available.");
+                }
+
+                const data = await loadEmbedConfig();
+                if (data.embed_token === "mock_embed_token_for_local_testing") {
+                    showMessage(
+                        "Power BI credentials are not configured. Set POWERBI_TENANT_ID, POWERBI_CLIENT_ID, POWERBI_CLIENT_SECRET, POWERBI_WORKSPACE_ID, and POWERBI_REPORT_ID.",
+                        true
+                    );
+                    return;
+                }
+
+                if (!data.embed_token || !data.embed_url || !data.report_id || data.embed_token === "error_fetching_token") {
+                    showMessage("Invalid Power BI embed response from backend service.", true);
+                    return;
+                }
+
+                const models = window["powerbi-client"].models;
+                const container = document.getElementById("powerbiContainer");
+                if (!container) {
+                    throw new Error("Power BI container not found.");
+                }
+
+                if (embeddedReport) {
+                    window.powerbi.reset(container);
+                }
+
+                const config = {
+                    type: "report",
+                    tokenType: models.TokenType.Embed,
+                    accessToken: data.embed_token,
+                    embedUrl: data.embed_url,
+                    id: data.report_id,
+                    permissions: models.Permissions.Read,
+                    settings: {
+                        panes: {
+                            filters: { visible: false },
+                            pageNavigation: { visible: true }
+                        },
+                        background: models.BackgroundType.Transparent
+                    }
+                };
+
+                showContainer();
+                embeddedReport = window.powerbi.embed(container, config);
+
+                embeddedReport.off("error");
+                embeddedReport.on("error", function (event) {
+                    console.error("Power BI embedding error", event.detail);
+                    showMessage("Power BI failed to render. Check browser console and backend logs.", true);
+                });
+            } catch (error) {
+                console.error("Error initializing Power BI dashboard", error);
+                showMessage("Unable to load Power BI dashboard. Verify configuration and permissions.", true);
+            }
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+            const refreshButton = document.getElementById("refresh-powerbi-btn");
+            if (refreshButton) {
+                refreshButton.addEventListener("click", function () {
+                    renderPowerBI();
+                });
+            }
+
+            renderPowerBI();
+        });
+    })();
+</script>
 {% endblock %}
 
 
