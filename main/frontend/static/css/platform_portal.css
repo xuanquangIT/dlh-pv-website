@@ -241,9 +241,423 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
 .solar-chat-shell {
   display: flex;
   flex-direction: column;
-  min-height: 560px;
+  height: min(760px, calc(100vh - 150px));
+  min-height: 620px;
   padding: 0;
   overflow: hidden;
+}
+
+.solar-chat-layout {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+.solar-chat-conversations {
+  border-right: 1px solid var(--border);
+  background: #f8fbfa;
+  padding: 10px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.solar-chat-conv-new {
+  border: none;
+  border-radius: 12px;
+  background: #2eaf6f;
+  color: #fff;
+  font-size: 17px;
+  line-height: 1;
+  padding: 10px 12px;
+  font-family: "Inter", sans-serif;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  align-self: flex-start;
+}
+
+.solar-chat-conv-new:hover {
+  background: #23935b;
+}
+
+.solar-chat-conv-new::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  background:
+    linear-gradient(#ffffff, #ffffff) center/2px 12px no-repeat,
+    linear-gradient(#ffffff, #ffffff) center/12px 2px no-repeat;
+}
+
+.solar-chat-conv-search-wrap {
+  border: 1px solid #cbd4df;
+  border-radius: 11px;
+  background: #eef2f6;
+  padding: 0 12px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  align-self: flex-start;
+}
+
+.solar-chat-conv-search {
+  width: 100%;
+  border: none;
+  outline: none;
+  font-size: 16px;
+  color: #62728a;
+  background: transparent;
+  height: 100%;
+}
+
+.solar-chat-conv-search::placeholder {
+  color: #8b99ad;
+}
+
+.solar-chat-conv-groups {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.solar-chat-conv-group-title {
+  font-size: 10px;
+  font-family: "DM Mono", monospace;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 16px 0 8px;
+}
+
+.solar-chat-conv-item {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.solar-chat-conv-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.solar-chat-conv-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.solar-chat-conv-action {
+  border: 1px solid #d5dfeb;
+  background: #f7f9fc;
+  color: #395069;
+  border-radius: 8px;
+  padding: 0 8px;
+  min-width: 26px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.solar-chat-conv-action:hover {
+  background: #ebf1f8;
+}
+
+.solar-chat-conv-action.delete {
+  border-color: #e6c2c0;
+  background: #fff5f4;
+  color: #aa3f36;
+}
+
+.solar-chat-conv-action.delete:hover {
+  background: #ffe9e6;
+}
+
+.solar-chat-session-menu {
+  position: fixed;
+  z-index: 1300;
+  min-width: 130px;
+  border: 1px solid #d3dde8;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.18);
+  padding: 5px;
+}
+
+.solar-chat-session-menu[hidden] {
+  display: none;
+}
+
+.solar-chat-session-menu-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 12px;
+  color: #33485f;
+  cursor: pointer;
+}
+
+.solar-chat-session-menu-item:hover {
+  background: #eef3f8;
+}
+
+.solar-chat-session-menu-item.danger {
+  color: #a2352d;
+}
+
+.solar-chat-session-menu-item.danger:hover {
+  background: #fff0ee;
+}
+
+.solar-chat-conv-item:hover {
+  background: #eef5f1;
+}
+
+.solar-chat-conv-item.active {
+  background: #e4f0ea;
+  border-color: #c7ddd2;
+}
+
+.solar-chat-conv-item-title {
+  display: block;
+  width: 100%;
+  font-size: 15px;
+  font-family: "Syne", sans-serif;
+  color: #0e5f3f;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.solar-chat-conv-item-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--txt3);
+  font-family: "DM Mono", monospace;
+}
+
+.solar-chat-conv-empty {
+  font-size: 12px;
+  color: var(--txt3);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.solar-chat-projects-wrap {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.solar-chat-projects-title {
+  font-size: 10px;
+  font-family: "DM Mono", monospace;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+.solar-chat-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.solar-chat-project-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 6px;
+}
+
+.solar-chat-project-row:first-child {
+  grid-template-columns: auto;
+}
+
+.solar-chat-project-row:first-child .solar-chat-project-item {
+  padding: 7px 9px;
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.solar-chat-project-item {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--txt2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.solar-chat-project-item:hover {
+  border-color: #8bb2cb;
+}
+
+.solar-chat-project-item.active {
+  background: #eaf3ff;
+  border-color: #7aa9d4;
+  color: #164d79;
+}
+
+.solar-chat-project-delete {
+  border: 1px solid #e6c2c0;
+  background: #fff5f4;
+  color: #aa3f36;
+  border-radius: 8px;
+  padding: 0 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.solar-chat-project-edit {
+  border: 1px solid #d5dfeb;
+  background: #f7f9fc;
+  color: #395069;
+  border-radius: 8px;
+  padding: 0 9px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.solar-chat-project-edit:hover {
+  background: #ebf1f8;
+}
+
+.solar-chat-project-delete:hover {
+  background: #ffe9e6;
+}
+
+.solar-chat-project-new {
+  width: 100%;
+  border: 1px dashed #a9bccf;
+  background: transparent;
+  border-radius: 9px;
+  padding: 9px;
+  color: #3a5066;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.solar-chat-project-new:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.solar-chat-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+}
+
+.solar-chat-modal[hidden] {
+  display: none;
+}
+
+.solar-chat-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 17, 25, 0.38);
+}
+
+.solar-chat-modal-panel {
+  position: relative;
+  width: min(460px, calc(100vw - 30px));
+  border-radius: 16px;
+  background: #ffffff;
+  border: 1px solid #d7e0ea;
+  padding: 20px;
+  box-shadow: 0 18px 42px rgba(10, 17, 25, 0.22);
+}
+
+.solar-chat-modal-title {
+  margin: 0;
+  font-family: "Syne", sans-serif;
+  font-size: 22px;
+  color: #1f2b3a;
+}
+
+.solar-chat-modal-subtitle {
+  margin: 6px 0 14px;
+  font-size: 13px;
+  color: #61748c;
+}
+
+.solar-chat-modal-label {
+  display: block;
+  font-size: 12px;
+  color: #4b5f77;
+  margin-bottom: 7px;
+}
+
+.solar-chat-modal-input {
+  width: 100%;
+  border: 1px solid #c8d4e2;
+  border-radius: 10px;
+  padding: 11px 12px;
+  font-size: 14px;
+  color: #2a3c50;
+  outline: none;
+}
+
+.solar-chat-modal-input:focus {
+  border-color: #5a9fcb;
+  box-shadow: 0 0 0 3px rgba(90, 159, 203, 0.16);
+}
+
+.solar-chat-modal-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #b93a32;
+}
+
+.solar-chat-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.solar-chat-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
 }
 
 .solar-chat-header-actions {
@@ -365,8 +779,8 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
 
 .solar-chat-messages {
   flex: 1;
+  min-height: 0;
   min-height: 220px;
-  max-height: 380px;
   overflow: auto;
   padding: 18px 22px 12px;
   display: flex;
@@ -513,4 +927,15 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
   }
   .solar-chat-messages { max-height: 360px; }
   .msg-row { max-width: 92%; }
+
+  .solar-chat-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .solar-chat-conversations {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 300px;
+  }
 }

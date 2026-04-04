@@ -42,3 +42,7 @@ class CreateSessionRequest(BaseModel):
 class ForkSessionRequest(BaseModel):
     title: str = Field(default="", max_length=200)
     role: ChatRole | None = None
+
+
+class UpdateSessionTitleRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)

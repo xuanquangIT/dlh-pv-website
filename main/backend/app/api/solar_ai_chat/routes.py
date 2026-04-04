@@ -17,6 +17,7 @@ from app.schemas.solar_ai_chat import (
     RagStatsResponse,
     SolarChatRequest,
     SolarChatResponse,
+    UpdateSessionTitleRequest,
 )
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.gemini_client import GeminiModelRouter
@@ -150,6 +151,30 @@ def delete_session(
 ) -> None:
     if not history.delete_session(session_id):
         raise HTTPException(status_code=404, detail="Session not found.")
+
+
+@router.patch("/sessions/{session_id}/title", response_model=ChatSessionSummary)
+def update_session_title(
+    session_id: str,
+    request: UpdateSessionTitleRequest,
+    history: ChatHistoryRepository = Depends(_get_history_repository),
+) -> ChatSessionSummary:
+    updated = history.update_session_title(session_id=session_id, title=request.title)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return updated
+
+
+@router.post("/sessions/{session_id}/rename", response_model=ChatSessionSummary)
+def rename_session(
+    session_id: str,
+    request: UpdateSessionTitleRequest,
+    history: ChatHistoryRepository = Depends(_get_history_repository),
+) -> ChatSessionSummary:
+    updated = history.update_session_title(session_id=session_id, title=request.title)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return updated
 
 
 @router.post(

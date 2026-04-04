@@ -8,9 +8,14 @@
   };
 
   const SOLAR_WELCOME_MESSAGE =
-    "👋 Xin chào! Tôi là **Solar AI**, trợ lý thông minh của PV Lakehouse.\n\n" +
+    "Xin chào! Tôi là **Solar AI**, trợ lý thông minh của PV Lakehouse.\n\n" +
     "Tôi có thể giúp bạn phân tích dữ liệu năng lượng, kiểm tra pipeline, xem metrics mô hình, hoặc giải thích các dự báo. Bạn cần hỗ trợ gì?";
   const ROLE_STORAGE_KEY = "pv_solar_chat_test_role";
+  const PROJECT_STORAGE_KEY = "pv_solar_chat_projects";
+  const PROJECT_SESSION_MAP_STORAGE_KEY = "pv_solar_chat_project_session_map";
+  const ACTIVE_PROJECT_STORAGE_KEY = "pv_solar_chat_active_project";
+  const NO_PROJECT_KEY = "__no_project__";
+  const NO_PROJECT_LABEL = "No Project";
 
   function getActiveRole() {
     const roleSelect = document.getElementById("solar-chat-role-select");
@@ -56,8 +61,123 @@
       return requestJson("/solar-ai-chat/sessions/" + encodeURIComponent(sessionId), {
         method: "GET"
       });
+    },
+
+    async listSessions() {
+      return requestJson("/solar-ai-chat/sessions", {
+        method: "GET"
+      });
+    },
+
+    async updateSessionTitle(sessionId, title) {
+      return requestJson("/solar-ai-chat/sessions/" + encodeURIComponent(sessionId) + "/rename", {
+        method: "POST",
+        body: JSON.stringify({ title: title })
+      });
+    },
+
+    async deleteSession(sessionId) {
+      return requestJson("/solar-ai-chat/sessions/" + encodeURIComponent(sessionId), {
+        method: "DELETE"
+      });
     }
   };
+
+  function formatConversationGroup(isoText) {
+    const date = new Date(isoText);
+    if (Number.isNaN(date.getTime())) {
+      return "Previous 7 days";
+    }
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dateStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const diffDays = Math.floor((todayStart.getTime() - dateStart.getTime()) / 86400000);
+
+    if (diffDays <= 0) {
+      return "Today";
+    }
+    if (diffDays === 1) {
+      return "Yesterday";
+    }
+    return "Previous 7 days";
+  }
+
+  function sanitizeSessionTitle(message) {
+    const compact = (message || "").replace(/\s+/g, " ").trim();
+    if (!compact) {
+      return "New conversation";
+    }
+    const maxLength = 56;
+    return compact.length > maxLength ? compact.slice(0, maxLength).trim() + "..." : compact;
+  }
+
+  function getStoredProjects() {
+    try {
+      const raw = localStorage.getItem(PROJECT_STORAGE_KEY);
+      if (!raw) {
+        return [];
+      }
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter(function (name) {
+        return Boolean(name) && name !== NO_PROJECT_KEY;
+      }) : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function saveStoredProjects(projects) {
+    try {
+      localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(projects));
+    } catch (error) {
+      // Ignore storage write failures in private mode.
+    }
+  }
+
+  function getStoredProjectSessionMap() {
+    try {
+      const raw = localStorage.getItem(PROJECT_SESSION_MAP_STORAGE_KEY);
+      if (!raw) {
+        return {};
+      }
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function saveStoredProjectSessionMap(projectSessionMap) {
+    try {
+      localStorage.setItem(PROJECT_SESSION_MAP_STORAGE_KEY, JSON.stringify(projectSessionMap));
+    } catch (error) {
+      // Ignore storage write failures in private mode.
+    }
+  }
+
+  function getStoredActiveProject(projects) {
+    try {
+      const storedValue = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) || "";
+      if (storedValue === NO_PROJECT_KEY) {
+        return NO_PROJECT_KEY;
+      }
+      if (storedValue && projects.some(function (projectName) { return projectName === storedValue; })) {
+        return storedValue;
+      }
+    } catch (error) {
+      // Ignore storage read failures in private mode.
+    }
+    return NO_PROJECT_KEY;
+  }
+
+  function saveStoredActiveProject(projectName) {
+    try {
+      localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectName);
+    } catch (error) {
+      // Ignore storage write failures in private mode.
+    }
+  }
 
   async function requestJson(url, options) {
     const response = await fetch(url, {
@@ -77,6 +197,16 @@
       }
       throw new Error(detailMessage);
     }
+
+    if (response.status === 204) {
+      return null;
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().includes("application/json")) {
+      return null;
+    }
+
     return response.json();
   }
 
@@ -214,10 +344,36 @@
     const statusElement = document.getElementById("solar-chat-status-text");
     const errorElement = document.getElementById("page-chat-error");
     const loadingElement = document.getElementById("page-chat-loading");
-    const clearButton = document.getElementById("solar-chat-clear-btn");
     const exportButton = document.getElementById("solar-chat-export-btn");
     const pipelineButton = document.getElementById("pipeline-status-btn");
     const roleSelect = document.getElementById("solar-chat-role-select");
+    const newChatButton = document.getElementById("solar-chat-new-chat-btn");
+    const sessionListElement = document.getElementById("solar-chat-session-list");
+    const searchInputElement = document.getElementById("solar-chat-search-input");
+    const projectListElement = document.getElementById("solar-chat-project-list");
+    const newProjectButton = document.getElementById("solar-chat-new-project-btn");
+    const projectModalElement = document.getElementById("solar-chat-project-modal");
+    const projectNameInputElement = document.getElementById("solar-chat-project-name-input");
+    const projectCreateButton = document.getElementById("solar-chat-project-create-btn");
+    const projectCancelButton = document.getElementById("solar-chat-project-cancel-btn");
+    const projectModalErrorElement = document.getElementById("solar-chat-project-modal-error");
+    const deleteProjectModalElement = document.getElementById("solar-chat-delete-project-modal");
+    const deleteProjectTargetElement = document.getElementById("solar-chat-delete-project-target");
+    const deleteProjectCancelButton = document.getElementById("solar-chat-delete-project-cancel-btn");
+    const deleteProjectConfirmButton = document.getElementById("solar-chat-delete-project-confirm-btn");
+    const renameModalElement = document.getElementById("solar-chat-rename-modal");
+    const renameModalTitleElement = document.getElementById("solar-chat-rename-modal-title");
+    const renameInputElement = document.getElementById("solar-chat-rename-input");
+    const renameErrorElement = document.getElementById("solar-chat-rename-error");
+    const renameCancelButton = document.getElementById("solar-chat-rename-cancel-btn");
+    const renameConfirmButton = document.getElementById("solar-chat-rename-confirm-btn");
+    const deleteSessionModalElement = document.getElementById("solar-chat-delete-session-modal");
+    const deleteSessionTargetElement = document.getElementById("solar-chat-delete-session-target");
+    const deleteSessionCancelButton = document.getElementById("solar-chat-delete-session-cancel-btn");
+    const deleteSessionConfirmButton = document.getElementById("solar-chat-delete-session-confirm-btn");
+    const sessionMenuElement = document.getElementById("solar-chat-session-menu");
+    const sessionMenuEditButton = document.getElementById("solar-chat-session-menu-edit");
+    const sessionMenuDeleteButton = document.getElementById("solar-chat-session-menu-delete");
 
     if (
       !messagesElement ||
@@ -226,19 +382,65 @@
       !statusElement ||
       !errorElement ||
       !loadingElement ||
-      !clearButton ||
       !exportButton ||
-      !pipelineButton
+      !pipelineButton ||
+      !newChatButton ||
+      !sessionListElement ||
+      !searchInputElement ||
+      !projectListElement ||
+      !newProjectButton ||
+      !projectModalElement ||
+      !projectNameInputElement ||
+      !projectCreateButton ||
+      !projectCancelButton ||
+      !projectModalErrorElement ||
+      !deleteProjectModalElement ||
+      !deleteProjectTargetElement ||
+      !deleteProjectCancelButton ||
+      !deleteProjectConfirmButton ||
+      !renameModalElement ||
+      !renameModalTitleElement ||
+      !renameInputElement ||
+      !renameErrorElement ||
+      !renameCancelButton ||
+      !renameConfirmButton ||
+      !deleteSessionModalElement ||
+      !deleteSessionTargetElement ||
+      !deleteSessionCancelButton ||
+      !deleteSessionConfirmButton ||
+      !sessionMenuElement ||
+      !sessionMenuEditButton ||
+      !sessionMenuDeleteButton
     ) {
       return;
     }
 
+    const createProjectBackdrop = projectModalElement.querySelector(".solar-chat-modal-backdrop");
+    const deleteProjectBackdrop = deleteProjectModalElement.querySelector(".solar-chat-modal-backdrop");
+    const renameBackdrop = renameModalElement.querySelector(".solar-chat-modal-backdrop");
+    const deleteSessionBackdrop = deleteSessionModalElement.querySelector(".solar-chat-modal-backdrop");
+    if (!createProjectBackdrop || !deleteProjectBackdrop || !renameBackdrop || !deleteSessionBackdrop) {
+      return;
+    }
+
+    const initialProjects = getStoredProjects();
+    const initialActiveProject = getStoredActiveProject(initialProjects);
     const state = {
       role: getActiveRole(),
       sessionId: "",
       messages: [createWelcomeMessage()],
       loading: false,
-      modelUsed: ""
+      modelUsed: "",
+      sessions: [],
+      filteredSessions: [],
+      projects: initialProjects,
+      sessionQuery: "",
+      projectSessionMap: getStoredProjectSessionMap(),
+      activeProject: initialActiveProject,
+      pendingDeleteProject: "",
+      pendingDeleteSessionId: "",
+      renameTarget: null,
+      contextSessionId: ""
     };
 
     const messageList = new MessageList(messagesElement);
@@ -253,6 +455,14 @@
 
     messageInput.init();
     messageList.render(state.messages);
+
+    function getProjectLabel(projectKey) {
+      return projectKey === NO_PROJECT_KEY ? NO_PROJECT_LABEL : projectKey;
+    }
+
+    function getSessionProject(sessionId) {
+      return state.projectSessionMap[sessionId] || NO_PROJECT_KEY;
+    }
 
     function setLoading(loading, messageText) {
       state.loading = loading;
@@ -298,23 +508,358 @@
       errorElement.textContent = message;
     }
 
-    async function ensureSession() {
+    function openProjectModal() {
+      projectModalErrorElement.hidden = true;
+      projectModalErrorElement.textContent = "";
+      projectNameInputElement.value = "";
+      projectModalElement.hidden = false;
+      projectNameInputElement.focus();
+    }
+
+    function closeProjectModal() {
+      projectModalElement.hidden = true;
+      projectModalErrorElement.hidden = true;
+      projectModalErrorElement.textContent = "";
+    }
+
+    function openDeleteProjectModal(projectName) {
+      state.pendingDeleteProject = projectName;
+      deleteProjectTargetElement.textContent = "Project: " + projectName;
+      deleteProjectModalElement.hidden = false;
+    }
+
+    function closeDeleteProjectModal() {
+      deleteProjectModalElement.hidden = true;
+      state.pendingDeleteProject = "";
+    }
+
+    function openDeleteSessionModal(sessionSummary) {
+      state.pendingDeleteSessionId = sessionSummary.session_id;
+      deleteSessionTargetElement.textContent = "Conversation: " + (sessionSummary.title || "New conversation");
+      deleteSessionModalElement.hidden = false;
+      closeSessionMenu();
+    }
+
+    function closeDeleteSessionModal() {
+      deleteSessionModalElement.hidden = true;
+      state.pendingDeleteSessionId = "";
+    }
+
+    function closeSessionMenu() {
+      sessionMenuElement.hidden = true;
+      state.contextSessionId = "";
+    }
+
+    function openSessionMenu(sessionId, event) {
+      state.contextSessionId = sessionId;
+      sessionMenuElement.style.left = event.clientX + "px";
+      sessionMenuElement.style.top = event.clientY + "px";
+      sessionMenuElement.hidden = false;
+    }
+
+    function getSessionById(sessionId) {
+      return state.sessions.find(function (summary) {
+        return summary.session_id === sessionId;
+      }) || null;
+    }
+
+    function openRenameModal(target) {
+      state.renameTarget = target;
+      renameErrorElement.hidden = true;
+      renameErrorElement.textContent = "";
+      renameModalTitleElement.textContent = target.type === "project" ? "Rename Project" : "Rename Conversation";
+      renameInputElement.value = target.currentName || "";
+      renameModalElement.hidden = false;
+      renameInputElement.focus();
+      renameInputElement.select();
+      closeSessionMenu();
+    }
+
+    function closeRenameModal() {
+      renameModalElement.hidden = true;
+      renameErrorElement.hidden = true;
+      renameErrorElement.textContent = "";
+      state.renameTarget = null;
+    }
+
+    function ensureProjectSessionMap(sessions) {
+      let changed = false;
+
+      sessions.forEach(function (summary) {
+        if (!state.projectSessionMap[summary.session_id]) {
+          state.projectSessionMap[summary.session_id] = NO_PROJECT_KEY;
+          changed = true;
+        }
+      });
+
+      Object.keys(state.projectSessionMap).forEach(function (sessionId) {
+        const stillExists = sessions.some(function (summary) {
+          return summary.session_id === sessionId;
+        });
+        if (!stillExists) {
+          delete state.projectSessionMap[sessionId];
+          changed = true;
+          return;
+        }
+
+        const key = state.projectSessionMap[sessionId];
+        if (key !== NO_PROJECT_KEY && !state.projects.includes(key)) {
+          state.projectSessionMap[sessionId] = NO_PROJECT_KEY;
+          changed = true;
+        }
+      });
+
+      if (changed) {
+        saveStoredProjectSessionMap(state.projectSessionMap);
+      }
+    }
+
+    function setActiveProject(projectKey) {
+      state.activeProject = projectKey;
+      saveStoredActiveProject(projectKey);
+      renderProjects();
+      applySessionFilter(state.sessionQuery);
+
+      if (state.sessionId && getSessionProject(state.sessionId) !== projectKey) {
+        resetConversation();
+      }
+    }
+
+    function renderProjects() {
+      projectListElement.innerHTML = "";
+
+      const unassignedRow = document.createElement("div");
+      unassignedRow.className = "solar-chat-project-row";
+      const unassignedButton = document.createElement("button");
+      unassignedButton.type = "button";
+      unassignedButton.className = "solar-chat-project-item" + (state.activeProject === NO_PROJECT_KEY ? " active" : "");
+      unassignedButton.textContent = NO_PROJECT_LABEL;
+      unassignedButton.addEventListener("click", function () {
+        setActiveProject(NO_PROJECT_KEY);
+      });
+      unassignedRow.appendChild(unassignedButton);
+      projectListElement.appendChild(unassignedRow);
+
+      state.projects.forEach(function (projectName) {
+        const row = document.createElement("div");
+        row.className = "solar-chat-project-row";
+
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "solar-chat-project-item" + (state.activeProject === projectName ? " active" : "");
+        item.textContent = projectName;
+        item.addEventListener("click", function () {
+          setActiveProject(projectName);
+        });
+
+        const editButton = document.createElement("button");
+        editButton.type = "button";
+        editButton.className = "solar-chat-project-edit";
+        editButton.textContent = "Edit";
+        editButton.title = "Rename project";
+        editButton.addEventListener("click", function (event) {
+          event.stopPropagation();
+          openRenameModal({ type: "project", projectName: projectName, currentName: projectName });
+        });
+
+        const deleteButton = document.createElement("button");
+        deleteButton.type = "button";
+        deleteButton.className = "solar-chat-project-delete";
+        deleteButton.textContent = "Delete";
+        deleteButton.title = "Delete project";
+        deleteButton.addEventListener("click", function (event) {
+          event.stopPropagation();
+          openDeleteProjectModal(projectName);
+        });
+
+        row.appendChild(item);
+        row.appendChild(editButton);
+        row.appendChild(deleteButton);
+        projectListElement.appendChild(row);
+      });
+    }
+
+    function deleteProject(projectName) {
+      state.projects = state.projects.filter(function (name) {
+        return name !== projectName;
+      });
+
+      Object.keys(state.projectSessionMap).forEach(function (sessionId) {
+        if (state.projectSessionMap[sessionId] === projectName) {
+          state.projectSessionMap[sessionId] = NO_PROJECT_KEY;
+        }
+      });
+
+      if (state.activeProject === projectName) {
+        state.activeProject = NO_PROJECT_KEY;
+      }
+
+      saveStoredProjects(state.projects);
+      saveStoredProjectSessionMap(state.projectSessionMap);
+      saveStoredActiveProject(state.activeProject);
+      renderProjects();
+      applySessionFilter(state.sessionQuery);
+      setStatus("Project deleted");
+      closeDeleteProjectModal();
+    }
+
+    function renameProject(oldName, newName) {
+      if (oldName === newName) {
+        closeRenameModal();
+        return;
+      }
+
+      if (state.projects.some(function (projectName) { return projectName.toLowerCase() === newName.toLowerCase(); })) {
+        renameErrorElement.hidden = false;
+        renameErrorElement.textContent = "Project name already exists.";
+        return;
+      }
+
+      state.projects = state.projects.map(function (projectName) {
+        return projectName === oldName ? newName : projectName;
+      });
+
+      Object.keys(state.projectSessionMap).forEach(function (sessionId) {
+        if (state.projectSessionMap[sessionId] === oldName) {
+          state.projectSessionMap[sessionId] = newName;
+        }
+      });
+
+      if (state.activeProject === oldName) {
+        state.activeProject = newName;
+      }
+
+      saveStoredProjects(state.projects);
+      saveStoredProjectSessionMap(state.projectSessionMap);
+      saveStoredActiveProject(state.activeProject);
+      renderProjects();
+      applySessionFilter(state.sessionQuery);
+      closeRenameModal();
+      setStatus("Project renamed");
+    }
+
+    function getConversationTimeLabel(summary) {
+      const updatedAt = new Date(summary.updated_at || "");
+      if (Number.isNaN(updatedAt.getTime())) {
+        return "Unknown";
+      }
+      return updatedAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    }
+
+    function groupSessionsByDate(summaries) {
+      return summaries.reduce(function (grouped, summary) {
+        const groupKey = formatConversationGroup(summary.updated_at);
+        if (!grouped[groupKey]) {
+          grouped[groupKey] = [];
+        }
+        grouped[groupKey].push(summary);
+        return grouped;
+      }, {});
+    }
+
+    function renderSessionGroups() {
+      sessionListElement.innerHTML = "";
+      const groups = groupSessionsByDate(state.filteredSessions);
+      const orderedKeys = ["Today", "Yesterday", "Previous 7 days"];
+
+      const hasData = orderedKeys.some(function (key) {
+        return groups[key] && groups[key].length;
+      });
+
+      if (!hasData) {
+        const empty = document.createElement("div");
+        empty.className = "solar-chat-conv-empty";
+        empty.textContent = "No conversations found.";
+        sessionListElement.appendChild(empty);
+        return;
+      }
+
+      orderedKeys.forEach(function (groupKey) {
+        const groupItems = groups[groupKey] || [];
+        if (!groupItems.length) {
+          return;
+        }
+
+        const heading = document.createElement("div");
+        heading.className = "solar-chat-conv-group-title";
+        heading.textContent = groupKey;
+        sessionListElement.appendChild(heading);
+
+        groupItems.forEach(function (summary) {
+          const row = document.createElement("div");
+          row.className = "solar-chat-conv-row";
+
+          const item = document.createElement("button");
+          item.type = "button";
+          item.className = "solar-chat-conv-item" + (summary.session_id === state.sessionId ? " active" : "");
+
+          const title = document.createElement("div");
+          title.className = "solar-chat-conv-item-title";
+          title.textContent = summary.title || "New conversation";
+
+          const meta = document.createElement("div");
+          meta.className = "solar-chat-conv-item-meta";
+          meta.textContent = getConversationTimeLabel(summary) + " | " + String(summary.message_count || 0) + " messages";
+
+          item.appendChild(title);
+          item.appendChild(meta);
+          item.addEventListener("click", async function () {
+            await openSession(summary.session_id);
+          });
+
+          item.addEventListener("contextmenu", function (event) {
+            event.preventDefault();
+            openSessionMenu(summary.session_id, event);
+          });
+
+          row.appendChild(item);
+          sessionListElement.appendChild(row);
+        });
+      });
+    }
+
+    function applySessionFilter(query) {
+      const normalized = (query || "").trim().toLowerCase();
+      state.sessionQuery = normalized;
+
+      const projectScoped = state.sessions.filter(function (summary) {
+        return getSessionProject(summary.session_id) === state.activeProject;
+      });
+
+      state.filteredSessions = normalized
+        ? projectScoped.filter(function (summary) {
+            return (summary.title || "").toLowerCase().includes(normalized);
+          })
+        : projectScoped;
+
+      renderSessionGroups();
+    }
+
+    async function ensureSession(titleHint) {
       if (state.sessionId) {
         return state.sessionId;
       }
-      const now = new Date().toISOString().slice(0, 19).replace("T", " ");
-      const created = await SolarChatApi.createSession(state.role, "Solar chat " + now);
+      const created = await SolarChatApi.createSession(state.role, sanitizeSessionTitle(titleHint));
       state.sessionId = created.session_id;
+      state.projectSessionMap[state.sessionId] = state.activeProject;
+      saveStoredProjectSessionMap(state.projectSessionMap);
       updateContext();
+      await refreshSessionList();
       return state.sessionId;
+    }
+
+    async function refreshSessionList() {
+      const sessions = await SolarChatApi.listSessions();
+      state.sessions = sessions;
+      ensureProjectSessionMap(state.sessions);
+      applySessionFilter(state.sessionQuery);
     }
 
     async function loadSessionMessages(sessionId) {
       const detail = await SolarChatApi.getSession(sessionId);
       const loadedMessages = (detail.messages || []).map(function (message) {
-        const mappedRole = message.sender === "assistant" ? "assistant" : "user";
         return {
-          role: mappedRole,
+          role: message.sender === "assistant" ? "assistant" : "user",
           content: message.content || "",
           timestamp: message.timestamp
         };
@@ -322,6 +867,55 @@
       state.messages = withWelcomeMessage(loadedMessages);
       messageList.render(state.messages);
       updateContext();
+    }
+
+    async function openSession(sessionId) {
+      if (!sessionId || state.loading) {
+        return;
+      }
+      try {
+        setError("");
+        setLoading(true, "Loading selected conversation...");
+        state.sessionId = sessionId;
+
+        const mappedProject = getSessionProject(sessionId);
+        if (mappedProject !== state.activeProject) {
+          state.activeProject = mappedProject;
+          saveStoredActiveProject(mappedProject);
+          renderProjects();
+          applySessionFilter(state.sessionQuery);
+        }
+
+        await loadSessionMessages(sessionId);
+        renderSessionGroups();
+        setStatus("Online · Ready to assist");
+      } catch (error) {
+        setStatus("Error");
+        setError(error instanceof Error ? error.message : "Unable to open conversation.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function renameSession(sessionId, newName) {
+      await SolarChatApi.updateSessionTitle(sessionId, newName);
+      await refreshSessionList();
+
+      if (state.sessionId === sessionId) {
+        await loadSessionMessages(sessionId);
+      }
+    }
+
+    async function deleteSession(sessionId) {
+      await SolarChatApi.deleteSession(sessionId);
+      delete state.projectSessionMap[sessionId];
+      saveStoredProjectSessionMap(state.projectSessionMap);
+
+      if (state.sessionId === sessionId) {
+        await resetConversation();
+      }
+
+      await refreshSessionList();
     }
 
     async function sendMessageFlow(text) {
@@ -334,9 +928,7 @@
         setLoading(true, "Sending message to assistant...");
         setStatus("Processing");
 
-        const sessionId = await ensureSession();
-
-        // Optimistic message append while waiting API.
+        const sessionId = await ensureSession(text);
         state.messages.push({ role: "user", content: text });
         messageList.render(state.messages);
         messageInput.clear();
@@ -353,6 +945,7 @@
 
         setLoading(true, "Loading full session history...");
         await loadSessionMessages(sessionId);
+        await refreshSessionList();
         setStatus("Ready");
       } catch (error) {
         setStatus("Error");
@@ -370,6 +963,7 @@
       setError("");
       setStatus("Online · Ready to assist");
       updateContext();
+      renderSessionGroups();
     }
 
     async function changeRole(nextRole) {
@@ -380,23 +974,8 @@
       state.role = nextRole;
       setActiveRole(nextRole);
       await resetConversation();
-      setStatus("Switching role");
-
-      try {
-        setLoading(true, "Creating session for selected role...");
-        await ensureSession();
-        setStatus("Online · Ready to assist");
-      } catch (error) {
-        setStatus("Error");
-        setError(error instanceof Error ? error.message : "Failed to change role.");
-      } finally {
-        setLoading(false);
-      }
+      setStatus("Role switched");
     }
-
-    clearButton.addEventListener("click", async function () {
-      await resetConversation();
-    });
 
     exportButton.addEventListener("click", function () {
       setStatus("Export is not implemented yet.");
@@ -404,6 +983,208 @@
 
     pipelineButton.addEventListener("click", async function () {
       await sendMessageFlow("Show latest pipeline status");
+    });
+
+    newChatButton.addEventListener("click", async function () {
+      await resetConversation();
+      setStatus("New chat started");
+    });
+
+    searchInputElement.addEventListener("input", function () {
+      applySessionFilter(searchInputElement.value);
+    });
+
+    newProjectButton.addEventListener("click", function () {
+      openProjectModal();
+    });
+
+    projectCancelButton.addEventListener("click", function () {
+      closeProjectModal();
+    });
+
+    createProjectBackdrop.addEventListener("click", function () {
+      closeProjectModal();
+    });
+
+    projectCreateButton.addEventListener("click", function () {
+      const cleaned = (projectNameInputElement.value || "").trim();
+      if (!cleaned) {
+        projectModalErrorElement.hidden = false;
+        projectModalErrorElement.textContent = "Project name is required.";
+        return;
+      }
+
+      if (state.projects.some(function (projectName) { return projectName.toLowerCase() === cleaned.toLowerCase(); })) {
+        projectModalErrorElement.hidden = false;
+        projectModalErrorElement.textContent = "Project name already exists.";
+        return;
+      }
+
+      state.projects = [cleaned, ...state.projects];
+      saveStoredProjects(state.projects);
+      setActiveProject(cleaned);
+      closeProjectModal();
+      setStatus("Project created");
+    });
+
+    projectNameInputElement.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        closeProjectModal();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        projectCreateButton.click();
+      }
+    });
+
+    deleteProjectBackdrop.addEventListener("click", function () {
+      closeDeleteProjectModal();
+    });
+
+    deleteProjectCancelButton.addEventListener("click", function () {
+      closeDeleteProjectModal();
+    });
+
+    deleteProjectConfirmButton.addEventListener("click", function () {
+      if (!state.pendingDeleteProject) {
+        closeDeleteProjectModal();
+        return;
+      }
+      deleteProject(state.pendingDeleteProject);
+    });
+
+    renameBackdrop.addEventListener("click", function () {
+      closeRenameModal();
+    });
+
+    renameCancelButton.addEventListener("click", function () {
+      closeRenameModal();
+    });
+
+    renameConfirmButton.addEventListener("click", async function () {
+      if (!state.renameTarget) {
+        closeRenameModal();
+        return;
+      }
+
+      const cleaned = (renameInputElement.value || "").trim();
+      if (!cleaned) {
+        renameErrorElement.hidden = false;
+        renameErrorElement.textContent = "Name is required.";
+        return;
+      }
+
+      if (state.renameTarget.type === "project") {
+        renameProject(state.renameTarget.projectName, cleaned);
+        return;
+      }
+
+      try {
+        await renameSession(state.renameTarget.sessionId, cleaned);
+        closeRenameModal();
+        setStatus("Conversation renamed");
+      } catch (error) {
+        renameErrorElement.hidden = false;
+        renameErrorElement.textContent = error instanceof Error ? error.message : "Unable to rename conversation.";
+      }
+    });
+
+    renameInputElement.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        closeRenameModal();
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        renameConfirmButton.click();
+      }
+    });
+
+    deleteSessionBackdrop.addEventListener("click", function () {
+      closeDeleteSessionModal();
+    });
+
+    deleteSessionCancelButton.addEventListener("click", function () {
+      closeDeleteSessionModal();
+    });
+
+    deleteSessionConfirmButton.addEventListener("click", async function () {
+      if (!state.pendingDeleteSessionId) {
+        closeDeleteSessionModal();
+        return;
+      }
+
+      try {
+        await deleteSession(state.pendingDeleteSessionId);
+        closeDeleteSessionModal();
+        setStatus("Conversation deleted");
+      } catch (error) {
+        setStatus("Error");
+        setError(error instanceof Error ? error.message : "Unable to delete conversation.");
+      }
+    });
+
+    sessionMenuEditButton.addEventListener("click", function () {
+      if (!state.contextSessionId) {
+        closeSessionMenu();
+        return;
+      }
+      const summary = getSessionById(state.contextSessionId);
+      if (!summary) {
+        closeSessionMenu();
+        return;
+      }
+      openRenameModal({
+        type: "session",
+        sessionId: summary.session_id,
+        currentName: summary.title || "New conversation"
+      });
+      closeSessionMenu();
+    });
+
+    sessionMenuDeleteButton.addEventListener("click", function () {
+      if (!state.contextSessionId) {
+        closeSessionMenu();
+        return;
+      }
+      const summary = getSessionById(state.contextSessionId);
+      if (!summary) {
+        closeSessionMenu();
+        return;
+      }
+      openDeleteSessionModal(summary);
+      closeSessionMenu();
+    });
+
+    document.addEventListener("click", function (event) {
+      if (sessionMenuElement.hidden) {
+        return;
+      }
+      if (!sessionMenuElement.contains(event.target)) {
+        closeSessionMenu();
+      }
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      if (!projectModalElement.hidden) {
+        closeProjectModal();
+      }
+      if (!deleteProjectModalElement.hidden) {
+        closeDeleteProjectModal();
+      }
+      if (!renameModalElement.hidden) {
+        closeRenameModal();
+      }
+      if (!deleteSessionModalElement.hidden) {
+        closeDeleteSessionModal();
+      }
+      if (!sessionMenuElement.hidden) {
+        closeSessionMenu();
+      }
     });
 
     if (roleSelect) {
@@ -423,15 +1204,16 @@
       });
     });
 
+    renderProjects();
     updateContext();
-    setStatus("Initializing session");
-    ensureSession()
-      .then(() => {
+    setStatus("Loading conversations");
+    refreshSessionList()
+      .then(function () {
         setStatus("Online · Ready to assist");
       })
-      .catch((error) => {
+      .catch(function (error) {
         setStatus("Error");
-        setError(error instanceof Error ? error.message : "Failed to create chat session.");
+        setError(error instanceof Error ? error.message : "Failed to load conversations.");
       });
   }
 
