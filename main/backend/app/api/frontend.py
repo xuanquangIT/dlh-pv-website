@@ -60,6 +60,38 @@ MODULE_CARDS = [
     },
 ]
 
+UI_TEST_PAGES: dict[str, str] = {
+    "dashboard": "Dashboard",
+    "pipeline": "Data Pipeline",
+    "quality": "Data Quality",
+    "training": "ML Training",
+    "registry": "Model Registry",
+    "forecast": "Forecast",
+    "analytics": "Analytics",
+    "solar_chat": "Solar AI Chat",
+}
+
+
+def _render_refactored_page(
+    request: Request,
+    template_name: str,
+    current_page: str,
+    page_title: str,
+) -> HTMLResponse:
+    base_context = {
+        "current_page": current_page,
+        "page_title": page_title,
+        "system_health": "Pipeline healthy",
+        "user_name": "Admin User",
+        "user_role": "Platform Owner",
+        "user_initials": "AK",
+    }
+    return templates.TemplateResponse(
+        request=request,
+        name=template_name,
+        context=base_context,
+    )
+
 
 @router.get("/", response_class=HTMLResponse)
 def home_page(request: Request) -> HTMLResponse:
@@ -74,7 +106,7 @@ def home_page(request: Request) -> HTMLResponse:
 def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
-        name="solar_ai_chat_test.html",
+        name="platform_portal/solar_chat.html",
         context={},
     )
 
