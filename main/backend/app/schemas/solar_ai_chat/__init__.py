@@ -6,6 +6,7 @@ from app.schemas.solar_ai_chat.session import (
     ChatSessionDetail,
     CreateSessionRequest,
     ForkSessionRequest,
+    UpdateSessionTitleRequest,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
 from app.schemas.solar_ai_chat.rag import (
@@ -28,6 +29,7 @@ __all__ = [
     "ChatSessionDetail",
     "CreateSessionRequest",
     "ForkSessionRequest",
+    "UpdateSessionTitleRequest",
     "TOOL_DECLARATIONS",
     "TOOL_NAME_TO_TOPIC",
     "RagChunk",

@@ -1,0 +1,164 @@
+{% extends "platform_portal/base.html" %}
+
+{% block title %}PV Lakehouse - Solar AI Chat{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <h1 class="page-title">Solar AI Chat</h1>
+        <div class="page-subtitle">Smart Assistant · Powered by PV Intelligence · LLM-ready</div>
+    </div>
+    <div class="solar-chat-header-actions">
+        <!-- Temporary test control: remove this block before production release. -->
+        <div class="solar-chat-test-tools" data-test-only="true">
+            <label for="solar-chat-role-select" class="solar-chat-role-label">Test role</label>
+            <select id="solar-chat-role-select" class="solar-chat-role-select" aria-label="Select role for Solar Chat testing">
+                <option value="viewer">viewer</option>
+                <option value="data_analyst">data_analyst</option>
+                <option value="data_engineer">data_engineer</option>
+                <option value="ml_engineer">ml_engineer</option>
+                <option value="admin">admin</option>
+            </select>
+        </div>
+        <button class="btn btn-danger" type="button" id="solar-chat-export-btn">Export PDF</button>
+    </div>
+</section>
+
+<section class="solar-chat-shell card">
+    <div class="solar-chat-layout">
+        <aside class="solar-chat-conversations" aria-label="Conversation sidebar">
+            <button class="solar-chat-conv-new" type="button" id="solar-chat-new-chat-btn">New Chat</button>
+
+            <div class="solar-chat-conv-search-wrap">
+                <input
+                    id="solar-chat-search-input"
+                    class="solar-chat-conv-search"
+                    type="search"
+                    placeholder="Search conversations..."
+                    aria-label="Search conversations"
+                >
+            </div>
+
+            <div id="solar-chat-session-list" class="solar-chat-conv-groups" aria-live="polite"></div>
+
+            <div class="solar-chat-projects-wrap">
+                <div class="solar-chat-projects-title">Projects</div>
+                <div id="solar-chat-project-list" class="solar-chat-project-list"></div>
+                <button class="solar-chat-project-new" type="button" id="solar-chat-new-project-btn">New Project</button>
+            </div>
+        </aside>
+
+        <div class="solar-chat-main">
+            <div class="solar-chat-shell-header">
+                <div class="solar-chat-assistant-meta">
+                    <div class="solar-chat-avatar">AI</div>
+                    <div>
+                        <h2 class="solar-chat-assistant-name">Solar AI Assistant</h2>
+                        <div class="solar-chat-assistant-status">
+                            <span class="solar-chat-online-dot"></span>
+                            <span id="solar-chat-status-text">Online · Ready to assist</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="solar-chat-counter"><span id="solar-chat-message-count">0</span> messages</div>
+            </div>
+
+            <div id="page-chat-messages" class="solar-chat-messages">
+                <div class="msg-row msg-row-assistant">
+                    <div class="msg msg-bot">Xin chào! Tôi là <strong>Solar AI</strong>, trợ lý thông minh của PV Lakehouse.<br><br>Tôi có thể giúp bạn phân tích dữ liệu năng lượng, kiểm tra pipeline, xem metrics mô hình, hoặc giải thích các dự báo. Bạn cần hỗ trợ gì?</div>
+                    <div class="msg-time">--:--</div>
+                </div>
+            </div>
+
+            <div class="solar-chat-chip-row" id="solar-chat-suggestions">
+                <button class="solar-chat-chip" type="button" data-chat-prompt="System overview">System overview</button>
+                <button class="solar-chat-chip" type="button" data-chat-prompt="Energy performance">Energy performance</button>
+                <button class="solar-chat-chip" type="button" data-chat-prompt="Top model by RMSE">Best model</button>
+                <button class="solar-chat-chip" type="button" id="pipeline-status-btn">Show latest pipeline status</button>
+                <button class="solar-chat-chip" type="button" data-chat-prompt="Forecast for next 72 hours">72-hour forecast</button>
+                <button class="solar-chat-chip" type="button" data-chat-prompt="Recent quality incidents">Quality issues</button>
+            </div>
+
+            <div class="solar-chat-feedback" aria-live="polite" aria-atomic="true">
+                <div id="page-chat-loading" class="solar-chat-loading" hidden>
+                    Sending message to assistant...
+                </div>
+                <div id="page-chat-error" class="solar-chat-error" hidden></div>
+            </div>
+
+            <div class="solar-chat-input-wrap">
+                <textarea id="page-chat-input" class="solar-chat-input" placeholder="Ask about energy, pipeline, ML models, forecasts"></textarea>
+                <button class="btn btn-pri solar-chat-send" type="button" id="page-chat-send">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="solar-chat-project-modal" class="solar-chat-modal" role="dialog" aria-modal="true" aria-labelledby="solar-chat-project-modal-title" hidden>
+        <div class="solar-chat-modal-backdrop" data-modal-close="true"></div>
+        <div class="solar-chat-modal-panel">
+            <h3 id="solar-chat-project-modal-title" class="solar-chat-modal-title">Create New Project</h3>
+            <p class="solar-chat-modal-subtitle">Organize sessions into a dedicated project workspace.</p>
+            <label class="solar-chat-modal-label" for="solar-chat-project-name-input">Project name</label>
+            <input id="solar-chat-project-name-input" class="solar-chat-modal-input" type="text" maxlength="80" placeholder="Example: Energy Forecast April">
+            <div id="solar-chat-project-modal-error" class="solar-chat-modal-error" hidden></div>
+            <div class="solar-chat-modal-actions">
+                <button type="button" class="btn btn-sec" id="solar-chat-project-cancel-btn">Cancel</button>
+                <button type="button" class="btn btn-pri" id="solar-chat-project-create-btn">Create Project</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="solar-chat-delete-project-modal" class="solar-chat-modal" role="dialog" aria-modal="true" aria-labelledby="solar-chat-delete-project-modal-title" hidden>
+        <div class="solar-chat-modal-backdrop" data-modal-close="true"></div>
+        <div class="solar-chat-modal-panel">
+            <h3 id="solar-chat-delete-project-modal-title" class="solar-chat-modal-title">Delete Project</h3>
+            <p class="solar-chat-modal-subtitle">This action cannot be undone. Sessions in this project will be moved to another project.</p>
+            <div id="solar-chat-delete-project-target" class="solar-chat-modal-label"></div>
+            <div class="solar-chat-modal-actions">
+                <button type="button" class="btn btn-sec" id="solar-chat-delete-project-cancel-btn">Cancel</button>
+                <button type="button" class="btn btn-danger" id="solar-chat-delete-project-confirm-btn">Delete Project</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="solar-chat-rename-modal" class="solar-chat-modal" role="dialog" aria-modal="true" aria-labelledby="solar-chat-rename-modal-title" hidden>
+        <div class="solar-chat-modal-backdrop" data-modal-close="true"></div>
+        <div class="solar-chat-modal-panel">
+            <h3 id="solar-chat-rename-modal-title" class="solar-chat-modal-title">Rename</h3>
+            <label class="solar-chat-modal-label" for="solar-chat-rename-input">New name</label>
+            <input id="solar-chat-rename-input" class="solar-chat-modal-input" type="text" maxlength="200" placeholder="Enter new name">
+            <div id="solar-chat-rename-error" class="solar-chat-modal-error" hidden></div>
+            <div class="solar-chat-modal-actions">
+                <button type="button" class="btn btn-sec" id="solar-chat-rename-cancel-btn">Cancel</button>
+                <button type="button" class="btn btn-pri" id="solar-chat-rename-confirm-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="solar-chat-delete-session-modal" class="solar-chat-modal" role="dialog" aria-modal="true" aria-labelledby="solar-chat-delete-session-modal-title" hidden>
+        <div class="solar-chat-modal-backdrop" data-modal-close="true"></div>
+        <div class="solar-chat-modal-panel">
+            <h3 id="solar-chat-delete-session-modal-title" class="solar-chat-modal-title">Delete Conversation</h3>
+            <p class="solar-chat-modal-subtitle">This conversation will be permanently removed from history.</p>
+            <div id="solar-chat-delete-session-target" class="solar-chat-modal-label"></div>
+            <div class="solar-chat-modal-actions">
+                <button type="button" class="btn btn-sec" id="solar-chat-delete-session-cancel-btn">Cancel</button>
+                <button type="button" class="btn btn-danger" id="solar-chat-delete-session-confirm-btn">Delete Conversation</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="solar-chat-session-menu" class="solar-chat-session-menu" hidden>
+        <button type="button" id="solar-chat-session-menu-edit" class="solar-chat-session-menu-item">Edit</button>
+        <button type="button" id="solar-chat-session-menu-delete" class="solar-chat-session-menu-item danger">Delete</button>
+    </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.PV_ROUTE = "solar_chat";
+</script>
+{% endblock %}
+

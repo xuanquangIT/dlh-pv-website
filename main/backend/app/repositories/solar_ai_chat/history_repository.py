@@ -76,6 +76,21 @@ class ChatHistoryRepository:
         file_path.unlink()
         return True
 
+    def update_session_title(
+        self,
+        session_id: str,
+        title: str,
+    ) -> ChatSessionSummary | None:
+        data = self._load_session(session_id)
+        if data is None:
+            return None
+
+        now = datetime.now(tz=timezone.utc)
+        data["title"] = title
+        data["updated_at"] = now.isoformat()
+        self._write_session(session_id, data)
+        return self._deserialize_session_summary(data)
+
     def add_message(
         self,
         session_id: str,
