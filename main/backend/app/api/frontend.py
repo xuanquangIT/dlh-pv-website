@@ -115,7 +115,7 @@ def solar_ai_chat_test_page(request: Request) -> HTMLResponse:
 def dashboard_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/dashboard.html",
+        template_name="platform_portal/dashboard.html",
         current_page="dashboard",
         page_title=UI_TEST_PAGES["dashboard"],
     )
@@ -125,7 +125,7 @@ def dashboard_page(request: Request) -> HTMLResponse:
 def pipeline_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/pipeline.html",
+        template_name="platform_portal/pipeline.html",
         current_page="pipeline",
         page_title=UI_TEST_PAGES["pipeline"],
     )
@@ -135,7 +135,7 @@ def pipeline_page(request: Request) -> HTMLResponse:
 def quality_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/quality.html",
+        template_name="platform_portal/quality.html",
         current_page="quality",
         page_title=UI_TEST_PAGES["quality"],
     )
@@ -145,7 +145,7 @@ def quality_page(request: Request) -> HTMLResponse:
 def training_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/training.html",
+        template_name="platform_portal/training.html",
         current_page="training",
         page_title=UI_TEST_PAGES["training"],
     )
@@ -155,7 +155,7 @@ def training_page(request: Request) -> HTMLResponse:
 def registry_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/registry.html",
+        template_name="platform_portal/registry.html",
         current_page="registry",
         page_title=UI_TEST_PAGES["registry"],
     )
@@ -165,7 +165,7 @@ def registry_page(request: Request) -> HTMLResponse:
 def forecast_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/forecast.html",
+        template_name="platform_portal/forecast.html",
         current_page="forecast",
         page_title=UI_TEST_PAGES["forecast"],
     )
@@ -175,7 +175,7 @@ def forecast_page(request: Request) -> HTMLResponse:
 def analytics_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/analytics.html",
+        template_name="platform_portal/analytics.html",
         current_page="analytics",
         page_title=UI_TEST_PAGES["analytics"],
     )
@@ -185,7 +185,8 @@ def analytics_page(request: Request) -> HTMLResponse:
 def solar_chat_page(request: Request) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
-        template_name="refactored_v3/solar_chat.html",
+        template_name="platform_portal/solar_chat.html",
         current_page="solar_chat",
         page_title=UI_TEST_PAGES["solar_chat"],
     )
+

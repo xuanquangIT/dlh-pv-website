@@ -129,7 +129,7 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
   right: 24px;
   bottom: 88px;
   width: 470px;
-  height: 650px;
+  height: 520px;
   background: #fff;
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -241,9 +241,43 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
 .solar-chat-shell {
   display: flex;
   flex-direction: column;
-  min-height: 680px;
+  min-height: 560px;
   padding: 0;
   overflow: hidden;
+}
+
+.solar-chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.solar-chat-test-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.solar-chat-role-label {
+  font-size: 11px;
+  color: var(--txt3);
+  font-family: "DM Mono", monospace;
+}
+
+.solar-chat-role-select {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--txt2);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: "DM Mono", monospace;
 }
 
 .solar-chat-shell-header {
@@ -310,27 +344,29 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
 }
 
 .solar-chat-error {
-  border: 1px solid rgba(192, 57, 43, 0.3);
-  background: rgba(192, 57, 43, 0.08);
-  color: var(--red);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border: 1px solid rgba(192, 57, 43, 0.35);
+  background: linear-gradient(180deg, rgba(192, 57, 43, 0.11), rgba(192, 57, 43, 0.05));
+  color: #9e2f24;
+  border-radius: 10px;
+  padding: 10px 12px;
   font-size: 12px;
+  font-weight: 500;
 }
 
 .solar-chat-loading {
-  border: 1px solid rgba(27, 108, 168, 0.3);
-  background: rgba(27, 108, 168, 0.07);
-  color: var(--blue);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border: 1px solid rgba(27, 108, 168, 0.35);
+  background: linear-gradient(180deg, rgba(27, 108, 168, 0.12), rgba(27, 108, 168, 0.05));
+  color: #14517f;
+  border-radius: 10px;
+  padding: 10px 12px;
   font-size: 12px;
+  font-weight: 500;
 }
 
 .solar-chat-messages {
   flex: 1;
-  min-height: 360px;
-  max-height: 560px;
+  min-height: 220px;
+  max-height: 380px;
   overflow: auto;
   padding: 18px 22px 12px;
   display: flex;
@@ -343,7 +379,7 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-width: 92%;
+  max-width: 76%;
 }
 
 .msg-row-user {
@@ -358,10 +394,11 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
 
 .msg {
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.4;
   border-radius: 14px;
-  padding: 11px 14px;
+  padding: 8px 12px;
   max-width: 100%;
+  width: fit-content;
   word-break: break-word;
 }
 
@@ -399,8 +436,35 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
 }
 
 .solar-chat-input-wrap {
+  display: flex;
+  gap: 8px;
   padding: 14px 22px;
   align-items: center;
+}
+
+.solar-chat-input {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  resize: vertical;
+  min-height: 56px;
+  font-size: 14px;
+  font-family: "Inter", sans-serif;
+}
+
+.solar-chat-feedback {
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--border);
+  background: #fbfcfe;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.solar-chat-feedback .solar-chat-loading,
+.solar-chat-feedback .solar-chat-error {
+  margin-top: 0;
 }
 
 .solar-chat-send {
@@ -438,7 +502,7 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
   #topbar { position: static; }
   #main { margin-top: 0; }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
-  #chatbot-panel { width: calc(100vw - 24px); height: 76vh; right: 12px; }
+  #chatbot-panel { width: calc(100vw - 24px); height: 62vh; right: 12px; }
   .solar-chat-shell-header,
   .solar-chat-messages,
   .solar-chat-chip-row,
@@ -448,5 +512,5 @@ th { color: var(--txt3); font-family: "DM Mono", monospace; text-transform: uppe
     padding-right: 14px;
   }
   .solar-chat-messages { max-height: 360px; }
-  .msg-row { max-width: 97%; }
+  .msg-row { max-width: 92%; }
 }

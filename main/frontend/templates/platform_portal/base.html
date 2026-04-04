@@ -8,23 +8,24 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <link rel="stylesheet" href="{{ url_for('static', path='css/refactored_v3.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/platform_portal.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
 <body>
-    {% include "refactored_v3/components/sidebar.html" %}
-    {% include "refactored_v3/components/topbar.html" %}
+    {% include "platform_portal/components/sidebar.html" %}
+    {% include "platform_portal/components/topbar.html" %}
 
     <main id="main">
         {% block content %}{% endblock %}
     </main>
 
-    {% include "refactored_v3/components/chatbot_panel.html" %}
+    {% include "platform_portal/components/chatbot_panel.html" %}
 
     <script>
         window.PV_ROUTE = "{{ current_page | default('dashboard') }}";
     </script>
-    <script src="{{ url_for('static', path='js/refactored_v3/common.js') }}" defer></script>
+    <script src="{{ url_for('static', path='js/platform_portal/common.js') }}" defer></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>
+

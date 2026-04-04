@@ -10,6 +10,32 @@
   const SOLAR_WELCOME_MESSAGE =
     "👋 Xin chào! Tôi là **Solar AI**, trợ lý thông minh của PV Lakehouse.\n\n" +
     "Tôi có thể giúp bạn phân tích dữ liệu năng lượng, kiểm tra pipeline, xem metrics mô hình, hoặc giải thích các dự báo. Bạn cần hỗ trợ gì?";
+  const ROLE_STORAGE_KEY = "pv_solar_chat_test_role";
+
+  function getActiveRole() {
+    const roleSelect = document.getElementById("solar-chat-role-select");
+    if (roleSelect && roleSelect.value) {
+      return roleSelect.value;
+    }
+    try {
+      const storedRole = localStorage.getItem(ROLE_STORAGE_KEY);
+      return storedRole || "viewer";
+    } catch (error) {
+      return "viewer";
+    }
+  }
+
+  function setActiveRole(role) {
+    if (!role) {
+      return;
+    }
+    try {
+      localStorage.setItem(ROLE_STORAGE_KEY, role);
+    } catch (error) {
+      // Ignore storage write failures in private mode.
+    }
+    window.dispatchEvent(new CustomEvent("pv-role-changed", { detail: { role: role } }));
+  }
 
   const SolarChatApi = {
     async createSession(role, title) {
@@ -191,6 +217,7 @@
     const clearButton = document.getElementById("solar-chat-clear-btn");
     const exportButton = document.getElementById("solar-chat-export-btn");
     const pipelineButton = document.getElementById("pipeline-status-btn");
+    const roleSelect = document.getElementById("solar-chat-role-select");
 
     if (
       !messagesElement ||
@@ -207,7 +234,7 @@
     }
 
     const state = {
-      role: "viewer",
+      role: getActiveRole(),
       sessionId: "",
       messages: [createWelcomeMessage()],
       loading: false,
@@ -231,6 +258,9 @@
       state.loading = loading;
       messageInput.setDisabled(loading);
       loadingElement.hidden = !loading;
+      if (roleSelect) {
+        roleSelect.disabled = loading;
+      }
       if (loading) {
         loadingElement.textContent = messageText || "Assistant is analyzing your request.";
       }
@@ -342,6 +372,28 @@
       updateContext();
     }
 
+    async function changeRole(nextRole) {
+      if (!nextRole || nextRole === state.role || state.loading) {
+        return;
+      }
+
+      state.role = nextRole;
+      setActiveRole(nextRole);
+      await resetConversation();
+      setStatus("Switching role");
+
+      try {
+        setLoading(true, "Creating session for selected role...");
+        await ensureSession();
+        setStatus("Online · Ready to assist");
+      } catch (error) {
+        setStatus("Error");
+        setError(error instanceof Error ? error.message : "Failed to change role.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
     clearButton.addEventListener("click", async function () {
       await resetConversation();
     });
@@ -353,6 +405,13 @@
     pipelineButton.addEventListener("click", async function () {
       await sendMessageFlow("Show latest pipeline status");
     });
+
+    if (roleSelect) {
+      roleSelect.value = state.role;
+      roleSelect.addEventListener("change", async function () {
+        await changeRole(roleSelect.value);
+      });
+    }
 
     document.querySelectorAll("[data-chat-prompt]").forEach(function (button) {
       button.addEventListener("click", async function () {
@@ -389,11 +448,19 @@
     }
 
     const widgetState = {
-      role: "viewer",
+      role: getActiveRole(),
       sessionId: "",
       loading: false,
       messages: [createWelcomeMessage()]
     };
+
+    function syncWidgetRoleFromGlobal() {
+      const activeRole = getActiveRole();
+      if (activeRole !== widgetState.role) {
+        widgetState.role = activeRole;
+        widgetState.sessionId = "";
+      }
+    }
 
     function setWidgetLoading(loading) {
       widgetState.loading = loading;
@@ -436,6 +503,8 @@
       if (widgetState.loading) {
         return;
       }
+
+      syncWidgetRoleFromGlobal();
 
       const text = input.value.trim();
       if (!text) {
@@ -486,6 +555,14 @@
         input.value = prompt.replace(/\s+/g, " ").trim();
         sendWidgetMessage();
       });
+    });
+
+    window.addEventListener("pv-role-changed", function (event) {
+      const role = event && event.detail ? event.detail.role : "";
+      if (role && role !== widgetState.role) {
+        widgetState.role = role;
+        widgetState.sessionId = "";
+      }
     });
 
     normalizeInitialMessages();
