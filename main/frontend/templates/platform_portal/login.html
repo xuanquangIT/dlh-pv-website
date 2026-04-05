@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PV Lakehouse - Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/platform_auth.css') }}">
+</head>
+<body class="auth-page auth-login-page">
+    <div id="login-page" class="login-layout">
+        <section class="login-brand-panel" aria-label="Platform introduction">
+            <div class="brand-row">
+                <div class="brand-mark">PV</div>
+                <div>
+                    <div class="brand-name">PV Lakehouse</div>
+                    <div class="brand-sub">Solar Intelligence Platform</div>
+                </div>
+            </div>
+
+            <div class="hero-block">
+                <div class="hero-tag">
+                    <span class="hero-tag-dot" aria-hidden="true"></span>
+                    <span>System Live · {{ active_facilities | default(24) }} Facilities Online</span>
+                </div>
+                <h1>Intelligent solar data, <em>unified</em>.</h1>
+                <p>
+                    Real-time pipeline monitoring, ML forecasting, and AI-powered insights for your
+                    entire photovoltaic infrastructure.
+                </p>
+            </div>
+
+            <div class="hero-stats" aria-label="Platform highlights">
+                <article class="hero-stat">
+                    <h2>{{ total_energy_gwh | default('2.46') }}<span>GWh</span></h2>
+                    <p>Total Energy</p>
+                </article>
+                <article class="hero-stat">
+                    <h2>{{ data_quality_pct | default('96.2') }}<span>%</span></h2>
+                    <p>Data Quality</p>
+                </article>
+                <article class="hero-stat">
+                    <h2>{{ model_score | default('0.94') }}<span>R2</span></h2>
+                    <p>Model Score</p>
+                </article>
+            </div>
+        </section>
+
+        <section class="login-form-panel" aria-label="Sign in form">
+            <div class="form-top-note">
+                Need access?
+                <a href="mailto:platform-admin@pvlakehouse.io">Request invite</a>
+            </div>
+
+            <div class="form-wrap">
+                <h2>Welcome back</h2>
+                <p class="form-subtitle">
+                    Sign in to access your solar intelligence dashboard and real-time analytics.
+                </p>
+
+                <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
+                <p id="login-flash" class="form-flash" role="status" aria-live="polite"></p>
+
+                <form id="login-form" class="login-form" novalidate>
+                    <div class="field-group">
+                        <label for="email">Email Address</label>
+                        <input id="email" name="email" type="email" placeholder="you@pvlakehouse.io" autocomplete="email" required>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="password">Password</label>
+                        <div class="password-wrap">
+                            <input id="password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" minlength="4" required>
+                            <button id="toggle-password" type="button" class="toggle-password-btn" aria-label="Show password">Show</button>
+                        </div>
+                    </div>
+
+                    <div class="login-row">
+                        <label class="remember-label">
+                            <input id="remember" type="checkbox" name="remember">
+                            <span>Remember me for 30 days</span>
+                        </label>
+                        <a href="#" onclick="return false;">Forgot password?</a>
+                    </div>
+
+                    <button id="sign-in-btn" class="sign-in-btn" type="submit">Sign In</button>
+                </form>
+
+                <div class="demo-separator">Or continue as demo user</div>
+
+                <div class="demo-users" aria-label="Demo users">
+                    {% for user in demo_users | default([]) %}
+                    <button
+                        type="button"
+                        class="demo-user-card"
+                        data-name="{{ user.name }}"
+                        data-email="{{ user.email }}"
+                        data-role="{{ user.role }}"
+                        data-access="{{ user.access }}"
+                        data-initials="{{ user.initials }}"
+                        data-avatar-class="{{ user.avatar_class }}"
+                    >
+                        <span class="demo-avatar {{ user.avatar_class }}">{{ user.initials }}</span>
+                        <span class="demo-copy">
+                            <strong>{{ user.name }}</strong>
+                            <small>{{ user.role }} · {{ user.access }}</small>
+                        </span>
+                        <span class="demo-arrow" aria-hidden="true">Go</span>
+                    </button>
+                    {% endfor %}
+                </div>
+
+                <footer class="auth-footer">
+                    <span>PV Lakehouse v3.0</span>
+                    <span>Secured with TLS 1.3</span>
+                </footer>
+            </div>
+        </section>
+    </div>
+
+    <script src="{{ url_for('static', path='js/platform_portal/auth.js') }}" defer></script>
+</body>
+</html>

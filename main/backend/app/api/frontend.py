@@ -61,6 +61,9 @@ MODULE_CARDS = [
 ]
 
 UI_TEST_PAGES: dict[str, str] = {
+    "login": "Login",
+    "logout": "Logout",
+    "accounts": "Account Management",
     "dashboard": "Dashboard",
     "pipeline": "Data Pipeline",
     "quality": "Data Quality",
@@ -100,6 +103,61 @@ def home_page(request: Request) -> HTMLResponse:
         request=request,
         name="home.html",
         context={"modules": MODULE_CARDS},
+    )
+
+
+@router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="platform_portal/login.html",
+        context={
+            "page_title": UI_TEST_PAGES["login"],
+            "active_facilities": 24,
+            "total_energy_gwh": "2.46",
+            "data_quality_pct": "96.2",
+            "model_score": "0.94",
+            "demo_users": [
+                {
+                    "name": "Aarav Kumar",
+                    "email": "a.kumar@pvlakehouse.io",
+                    "role": "ML Engineer",
+                    "access": "Full Access",
+                    "initials": "AK",
+                    "avatar_class": "avatar-blue",
+                },
+                {
+                    "name": "Sophie Vance",
+                    "email": "s.vance@pvlakehouse.io",
+                    "role": "Data Analyst",
+                    "access": "Read Only",
+                    "initials": "SV",
+                    "avatar_class": "avatar-rose",
+                },
+                {
+                    "name": "Marcus Obi",
+                    "email": "m.obi@pvlakehouse.io",
+                    "role": "Platform Admin",
+                    "access": "Super User",
+                    "initials": "MO",
+                    "avatar_class": "avatar-green",
+                },
+            ],
+        },
+    )
+
+
+@router.get("/logout", response_class=HTMLResponse)
+def logout_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="platform_portal/logout.html",
+        context={
+            "page_title": UI_TEST_PAGES["logout"],
+            "user_name": "Admin User",
+            "user_role": "Platform Owner",
+            "user_initials": "AK",
+        },
     )
 
 
@@ -175,6 +233,16 @@ def analytics_page(request: Request) -> HTMLResponse:
         template_name="platform_portal/analytics.html",
         current_page="analytics",
         page_title=UI_TEST_PAGES["analytics"],
+    )
+
+
+@router.get("/settings/accounts", response_class=HTMLResponse)
+def accounts_page(request: Request) -> HTMLResponse:
+    return _render_refactored_page(
+        request=request,
+        template_name="platform_portal/accounts.html",
+        current_page="accounts",
+        page_title=UI_TEST_PAGES["accounts"],
     )
 
 

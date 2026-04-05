@@ -1,0 +1,20 @@
+<div id="logout-modal" class="logout-modal" aria-hidden="true">
+    <div class="logout-modal-card" role="dialog" aria-modal="true" aria-labelledby="logout-modal-title">
+        <p class="logout-modal-kicker">Session Control</p>
+        <h2 id="logout-modal-title" class="logout-modal-title">Sign out from PV Lakehouse?</h2>
+        <p class="logout-modal-text">You will return to the login screen. Unsaved changes may be lost.</p>
+
+        <div class="logout-user-pill">
+            <span id="logout-modal-initials" class="logout-user-pill-avatar">{{ user_initials | default('AK') }}</span>
+            <span class="logout-user-pill-copy">
+                <strong id="logout-modal-name">{{ user_name | default('Admin User') }}</strong>
+                <small id="logout-modal-role">{{ user_role | default('Platform Owner') }}</small>
+            </span>
+        </div>
+
+        <div class="logout-modal-actions">
+            <button type="button" class="btn btn-sec" id="logout-modal-cancel">Cancel</button>
+            <button type="button" class="btn btn-danger" id="logout-modal-confirm">Sign Out</button>
+        </div>
+    </div>
+</div>

@@ -1,4 +1,113 @@
 (function () {
+  function getSessionUser() {
+    try {
+      var raw = sessionStorage.getItem("pv_user");
+      if (!raw) {
+        return null;
+      }
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") {
+        return null;
+      }
+      return parsed;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function applySessionUser() {
+    var user = getSessionUser();
+    if (!user) {
+      return false;
+    }
+
+    var userNameElement = document.querySelector(".user-name");
+    if (userNameElement && user.name) {
+      userNameElement.textContent = user.name;
+    }
+
+    var userRoleElement = document.querySelector(".user-role");
+    if (userRoleElement && user.role) {
+      userRoleElement.textContent = user.role;
+    }
+
+    var userInitialsElement = document.querySelector(".user-av");
+    if (userInitialsElement && user.initials) {
+      userInitialsElement.textContent = user.initials;
+    }
+
+    var modalNameElement = document.getElementById("logout-modal-name");
+    if (modalNameElement && user.name) {
+      modalNameElement.textContent = user.name;
+    }
+
+    var modalRoleElement = document.getElementById("logout-modal-role");
+    if (modalRoleElement && user.role) {
+      modalRoleElement.textContent = user.role;
+    }
+
+    var modalInitialsElement = document.getElementById("logout-modal-initials");
+    if (modalInitialsElement && user.initials) {
+      modalInitialsElement.textContent = user.initials;
+    }
+
+    return true;
+  }
+
+  function bindLogoutModal() {
+    var modal = document.getElementById("logout-modal");
+    var openButton = document.getElementById("open-logout-modal-btn");
+    var cancelButton = document.getElementById("logout-modal-cancel");
+    var confirmButton = document.getElementById("logout-modal-confirm");
+
+    if (!modal || !openButton || !cancelButton || !confirmButton) {
+      return;
+    }
+
+    function openModal() {
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeModal() {
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }
+
+    openButton.addEventListener("click", openModal);
+    cancelButton.addEventListener("click", closeModal);
+
+    confirmButton.addEventListener("click", function () {
+      sessionStorage.removeItem("pv_user");
+      closeModal();
+      window.location.assign("/login?logged_out=1");
+    });
+
+    modal.addEventListener("click", function (event) {
+      if (event.target === modal) {
+        closeModal();
+      }
+    });
+
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && modal.classList.contains("open")) {
+        closeModal();
+      }
+    });
+  }
+
+  function enforcePortalAuth() {
+    if (!window.PV_ROUTE) {
+      return;
+    }
+    if (applySessionUser()) {
+      return;
+    }
+
+    var nextPath = window.location.pathname || "/dashboard";
+    window.location.assign("/login?next=" + encodeURIComponent(nextPath));
+  }
+
   function applyTheme(theme) {
     var finalTheme = theme === "dark" ? "dark" : "light";
     document.documentElement.setAttribute("data-theme", finalTheme);
@@ -13,6 +122,8 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
+    enforcePortalAuth();
+
     var initialTheme = localStorage.getItem("pv-theme");
     if (initialTheme !== "dark" && initialTheme !== "light") {
       initialTheme = "light";
@@ -41,5 +152,7 @@
     if (window.PV_ROUTE === "solar_chat" && window.PVSolarChatPage && typeof window.PVSolarChatPage.initSolarChatPage === "function") {
       window.PVSolarChatPage.initSolarChatPage();
     }
+
+    bindLogoutModal();
   });
 })();
