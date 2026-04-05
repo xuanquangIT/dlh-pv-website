@@ -84,6 +84,7 @@ def _render_refactored_page(
         "system_health": "Pipeline healthy",
         "user_name": "Admin User",
         "user_role": "Platform Owner",
+        "api_role": "admin",
         "user_initials": "AK",
     }
     return templates.TemplateResponse(

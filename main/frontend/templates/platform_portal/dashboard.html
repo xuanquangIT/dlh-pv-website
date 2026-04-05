@@ -70,10 +70,6 @@
     gap: 16px;
   }
 
-  .db-topbar {
-    display: none;
-  }
-
   .db-topbar-left {
     display: flex;
     align-items: center;
@@ -360,8 +356,8 @@
           <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
         </svg>
       </div>
-      <div class="msg-title" id="msgTitle">Đang tải dashboard...</div>
-      <div class="msg-sub" id="msgSub">Đang khởi tạo kết nối Power BI</div>
+      <div class="msg-title" id="msgTitle">Loading dashboard...</div>
+      <div class="msg-sub" id="msgSub">Initializing Power BI connection</div>
       <div class="loading-bar-track" id="loadingBar">
         <div class="loading-bar-fill"></div>
       </div>
@@ -385,7 +381,7 @@
     const el = document.getElementById('lastUpdatedLabel');
     if (!el) return;
     const now = new Date();
-    el.textContent = 'Updated ' + now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    el.textContent = 'Updated ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   }
 
   function showMessage(title, sub, isError) {
@@ -442,7 +438,10 @@
   async function loadEmbedConfig() {
     const response = await fetch('/dashboard/embed-info', {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      headers: {
+        'Accept': 'application/json',
+        'X-User-Role': '{{ api_role | default("viewer") }}'
+      }
     });
     if (!response.ok) throw new Error('Cannot fetch Power BI embed information from backend.');
     return response.json();
@@ -450,7 +449,7 @@
 
   /* ── Render ── */
   async function renderPowerBI() {
-    showMessage('Đang tải dashboard...', 'Đang khởi tạo kết nối Power BI', false);
+    showMessage('Loading dashboard...', 'Initializing Power BI connection', false);
     setRefreshSpinning(true);
 
     try {
@@ -462,15 +461,15 @@
 
       if (data.embed_token === 'mock_embed_token_for_local_testing') {
         showMessage(
-          'Power BI chưa được cấu hình',
-          'Vui lòng thiết lập POWERBI_TENANT_ID, CLIENT_ID, CLIENT_SECRET, WORKSPACE_ID và REPORT_ID.',
+          'Power BI is not configured',
+          'Please configure POWERBI_TENANT_ID, CLIENT_ID, CLIENT_SECRET, WORKSPACE_ID, and REPORT_ID.',
           true
         );
         return;
       }
 
       if (!data.embed_token || !data.embed_url || !data.report_id || data.embed_token === 'error_fetching_token') {
-        showMessage('Phản hồi không hợp lệ', 'Backend trả về dữ liệu embed không đầy đủ.', true);
+        showMessage('Invalid response', 'Backend returned incomplete embed data.', true);
         return;
       }
 
@@ -507,12 +506,12 @@
       embeddedReport.off('error');
       embeddedReport.on('error', function (event) {
         console.error('Power BI embedding error', event.detail);
-        showMessage('Lỗi render Power BI', 'Kiểm tra console và backend logs để biết thêm chi tiết.', true);
+        showMessage('Power BI render error', 'Check browser console and backend logs for details.', true);
       });
 
     } catch (error) {
       console.error('Error initializing Power BI dashboard', error);
-      showMessage('Không thể tải dashboard', error.message || 'Kiểm tra cấu hình và quyền truy cập.', true);
+      showMessage('Cannot load dashboard', error.message || 'Check configuration and access permissions.', true);
     } finally {
       setRefreshSpinning(false);
     }

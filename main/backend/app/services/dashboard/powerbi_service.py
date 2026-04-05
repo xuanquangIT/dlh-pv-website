@@ -2,20 +2,14 @@ import logging
 
 import httpx
 from msal import ConfidentialClientApplication
-from pydantic import BaseModel
 
 from app.core.settings import get_powerbi_settings
+from app.schemas.dashboard import EmbedTokenResponse
 
 logger = logging.getLogger(__name__)
 
 MOCK_ACCESS_TOKEN = "mock_access_token"
 MOCK_EMBED_TOKEN = "mock_embed_token_for_local_testing"
-
-
-class EmbedTokenResponse(BaseModel):
-    embed_token: str
-    embed_url: str
-    report_id: str
 
 
 class PowerBIService:
@@ -100,8 +94,10 @@ class PowerBIService:
         except httpx.HTTPStatusError as exc:
             logger.error("HTTP error while fetching Power BI embed info: %s", exc)
             logger.error("Power BI response body: %s", exc.response.text)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Unexpected error while fetching Power BI embed info: %s", exc)
+        except httpx.RequestError as exc:
+            logger.error("Network error while fetching Power BI embed info: %s", exc)
+        except ValueError as exc:
+            logger.error("Invalid response payload from Power BI API: %s", exc)
 
         return EmbedTokenResponse(
             embed_token="error_fetching_token",
