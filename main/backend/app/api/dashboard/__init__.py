@@ -1,11 +1,3 @@
-from fastapi import APIRouter
+from .routes import router
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
-
-
-@router.get("/summary")
-def get_dashboard_summary() -> dict[str, str]:
-    return {
-        "module": "dashboard",
-        "message": "Dashboard API placeholder is ready.",
-    }
+__all__ = ["router"]

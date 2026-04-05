@@ -2,115 +2,528 @@
 
 {% block title %}PV Lakehouse - Dashboard{% endblock %}
 
-{% block content %}
-<section class="section-header">
-    <div>
-        <h1 class="page-title">System Overview</h1>
-        <div class="page-subtitle">Last refresh: {{ last_refresh | default('2 min ago') }} · UTC+00:00 · {{ facility_filter | default('All facilities') }}</div>
-    </div>
-    <div>
-        <button class="btn btn-sec" type="button">Export</button>
-        <button class="btn btn-danger" type="button">PDF</button>
-    </div>
-</section>
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* ── Reset & Base ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-<section class="grid-4" style="margin-bottom:16px;">
-    {% for kpi in kpi_data | default([
-        {'label':'Total Energy (MWh)','value':'2,464,124','delta':'8.3% vs last period'},
-        {'label':'Capacity Factor (%)','value':'17.36','delta':'+0.012 improvement'},
-        {'label':'Performance Ratio (%)','value':'79.51','delta':'On target'},
-        {'label':'Final Yield (kWh/kWp)','value':'2,278.52','delta':'24 / 26 active'}
-    ]) %}
-    <article class="kpi-card">
-        <div class="kpi-label">{{ kpi.label }}</div>
-        <div class="kpi-value">{{ kpi.value }}</div>
-        <div class="kpi-delta">{{ kpi.delta }}</div>
-    </article>
-    {% endfor %}
-</section>
+  /* Keep global portal chrome above Power BI iframe */
+  #topbar { z-index: 3000; }
+  #sidebar { z-index: 2900; }
 
-<section class="grid-2" style="margin-bottom:16px;">
-    <article class="card">
-        <h2 class="card-title">Total Energy and Irradiance by Hour</h2>
-        <div class="chart-box"><canvas id="energyChart"></canvas></div>
-    </article>
-    <article class="card">
-        <h2 class="card-title">Performance Ratio Distribution</h2>
-        <div class="chart-box"><canvas id="ratioChart"></canvas></div>
-    </article>
-</section>
+  :root {
+    --bg:           #f4f6f9;
+    --surface:      #ffffff;
+    --surface-2:    #f7f9fc;
+    --border:       #dde3ed;
+    --accent:       #1a8a5a;
+    --accent-dim:   rgba(26,138,90,0.1);
+    --accent-glow:  rgba(26,138,90,0.28);
+    --green:        #1a8a5a;
+    --red:          #c0392b;
+    --text:         #1a2332;
+    --text-muted:   #4a5568;
+    --text-dim:     #8a96a8;
+    --radius:       10px;
+    --font-body:    'DM Sans', sans-serif;
+    --font-mono:    'Space Mono', monospace;
+  }
 
-<section class="grid-3">
-    <article class="card">
-        <h2 class="card-title">Top Performing Facilities</h2>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr><th>Facility</th><th>Energy</th><th>Score</th></tr>
-                </thead>
-                <tbody>
-                    {% for row in top_facilities | default([
-                        {'facility':'Riverside Solar A','energy':'1,240 MWh','score':'98%'},
-                        {'facility':'Mesa Verde B','energy':'1,018 MWh','score':'95%'}
-                    ]) %}
-                    <tr>
-                        <td>{{ row.facility }}</td>
-                        <td>{{ row.energy }}</td>
-                        <td><span class="badge badge-success">{{ row.score }}</span></td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
+  html[data-theme="dark"] {
+    --bg:           #0f141b;
+    --surface:      #141b24;
+    --surface-2:    #1a2431;
+    --border:       #2a3646;
+    --accent:       #28b16f;
+    --accent-dim:   rgba(40,177,111,0.1);
+    --accent-glow:  rgba(40,177,111,0.25);
+    --green:        #28b16f;
+    --red:          #d35d5d;
+    --text:         #e6edf3;
+    --text-muted:   #b4c0cf;
+    --text-dim:     #7f90a5;
+  }
 
-    <article class="card">
-        <h2 class="card-title">Active Models</h2>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr><th>Model</th><th>Status</th><th>RMSE</th></tr>
-                </thead>
-                <tbody>
-                    {% for model in active_models | default([
-                        {'name':'GBT-v4.2','status':'Production','rmse':'0.042'},
-                        {'name':'GBT-v4.1','status':'Staging','rmse':'0.051'}
-                    ]) %}
-                    <tr>
-                        <td>{{ model.name }}</td>
-                        <td><span class="badge badge-info">{{ model.status }}</span></td>
-                        <td>{{ model.rmse }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
+  /* ── Dashboard Page Shell ── */
+  .db-shell {
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 76px);
+    padding: 0;
+    background: var(--bg);
+    font-family: var(--font-body);
+    color: var(--text);
+  }
 
-    <article class="card">
-        <h2 class="card-title">Pipeline Status</h2>
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr><th>Stage</th><th>Progress</th><th>Status</th></tr>
-                </thead>
-                <tbody>
-                    {% for stage in pipeline_status | default([
-                        {'name':'Bronze','progress':'100%','status':'Completed'},
-                        {'name':'Silver','progress':'100%','status':'Completed'},
-                        {'name':'Gold','progress':'78%','status':'Running'}
-                    ]) %}
-                    <tr>
-                        <td>{{ stage.name }}</td>
-                        <td>{{ stage.progress }}</td>
-                        <td><span class="badge {% if stage.status == 'Running' %}badge-warn{% else %}badge-success{% endif %}">{{ stage.status }}</span></td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </article>
-</section>
+  /* ── Top Bar ── */
+  .db-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+    gap: 16px;
+  }
+
+  .db-topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .db-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+    color: var(--text);
+  }
+
+  .db-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--accent);
+    background: var(--accent-dim);
+    border: 1px solid var(--accent-glow);
+    padding: 2px 8px;
+    border-radius: 20px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+
+  .db-topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* Status pill */
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    padding: 5px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--green); }
+    50%       { opacity: 0.6; box-shadow: 0 0 3px var(--green); }
+  }
+
+  /* Refresh button */
+  .btn-refresh {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 16px;
+    font-family: var(--font-body);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .btn-refresh:hover {
+    background: var(--accent-dim);
+    border-color: var(--accent-glow);
+    color: var(--accent);
+  }
+
+  .btn-refresh:active { transform: scale(0.97); }
+
+  .btn-refresh svg {
+    transition: transform 0.4s ease;
+  }
+
+  .btn-refresh:hover svg {
+    transform: rotate(180deg);
+  }
+
+  .btn-refresh.spinning svg {
+    animation: spin 0.7s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Timestamp */
+  .last-updated {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  /* ── Embed Wrapper ── */
+  .db-embed-wrapper {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: calc(100vh - 76px);
+    height: calc(100vh - 76px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(17, 24, 39, 0.06);
+    z-index: 1;
+  }
+
+  .db-embed-wrapper:fullscreen {
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+    border: none;
+  }
+
+  .db-embed-wrapper:fullscreen #powerbiContainer {
+    height: 100vh;
+    min-height: 100vh;
+  }
+
+  /* Power BI container */
+  #powerbiContainer {
+    position: relative;
+    width: 100%;
+    min-height: clamp(900px, calc(100vh + 120px), 1400px);
+    height: clamp(900px, calc(100vh + 120px), 1400px);
+    border: none;
+    border-radius: inherit;
+    overflow: auto;
+    background: var(--surface);
+    z-index: 1;
+  }
+
+  /* ── State Messages ── */
+  #dashboardMessage {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 40px;
+    text-align: center;
+    z-index: 10;
+  }
+
+  .msg-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+  }
+
+  .msg-icon.loading {
+    animation: icon-pulse 1.8s ease-in-out infinite;
+  }
+
+  @keyframes icon-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.5; }
+  }
+
+  .msg-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .msg-sub {
+    font-size: 13px;
+    color: var(--text-muted);
+    max-width: 380px;
+    line-height: 1.6;
+  }
+
+  /* Loading bar */
+  .loading-bar-track {
+    width: 200px;
+    height: 3px;
+    background: var(--surface-2);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+
+  .loading-bar-fill {
+    height: 100%;
+    width: 40%;
+    background: var(--accent);
+    border-radius: 99px;
+    animation: loading-slide 1.4s ease-in-out infinite;
+  }
+
+  @keyframes loading-slide {
+    0%   { transform: translateX(-120%); }
+    100% { transform: translateX(550%); }
+  }
+
+  /* Error color override */
+  .msg-icon.error {
+    border-color: rgba(248,81,73,0.3);
+    background: rgba(248,81,73,0.08);
+  }
+
+  #dashboardMessage.is-error .msg-title { color: var(--red); }
+  #dashboardMessage.is-error .msg-sub   { color: rgba(248,81,73,0.7); }
+
+  /* ── Subtle grid background on empty state ── */
+  .db-embed-wrapper::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .db-embed-wrapper.is-empty::before { opacity: 1; }
+
+  /* ── Responsive ── */
+  @media (max-width: 600px) {
+    .db-topbar { padding: 10px 16px; }
+    .last-updated { display: none; }
+    .status-pill span { display: none; }
+  }
+</style>
 {% endblock %}
 
+{% block content %}
+<div class="db-shell">
 
+  <!-- Top Bar -->
+  <div class="db-topbar">
+    <div class="db-topbar-left">
+      <span class="db-title">Dashboard</span>
+      <span class="db-badge">Live</span>
+    </div>
+    <div class="db-topbar-right">
+      <span class="last-updated" id="lastUpdatedLabel">—</span>
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        <span>Pipeline healthy</span>
+      </div>
+      <button class="btn-refresh" id="refresh-powerbi-btn" type="button">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>
+        </svg>
+        Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Embed Area -->
+  <div class="db-embed-wrapper is-empty" id="embedWrapper">
+
+    <!-- State Message Overlay -->
+    <div id="dashboardMessage">
+      <div class="msg-icon loading">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f5a623" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
+        </svg>
+      </div>
+      <div class="msg-title" id="msgTitle">Loading dashboard...</div>
+      <div class="msg-sub" id="msgSub">Initializing Power BI connection</div>
+      <div class="loading-bar-track" id="loadingBar">
+        <div class="loading-bar-fill"></div>
+      </div>
+    </div>
+
+    <!-- Power BI Container -->
+    <div id="powerbiContainer" style="display:none;"></div>
+
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  let embeddedReport = null;
+
+  /* ── Helpers ── */
+  function setLastUpdated() {
+    const el = document.getElementById('lastUpdatedLabel');
+    if (!el) return;
+    const now = new Date();
+    el.textContent = 'Updated ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function showMessage(title, sub, isError) {
+    const msgEl   = document.getElementById('dashboardMessage');
+    const contEl  = document.getElementById('powerbiContainer');
+    const wrapper = document.getElementById('embedWrapper');
+    const titleEl = document.getElementById('msgTitle');
+    const subEl   = document.getElementById('msgSub');
+    const barEl   = document.getElementById('loadingBar');
+    const iconEl  = msgEl ? msgEl.querySelector('.msg-icon') : null;
+
+    if (!msgEl || !contEl) return;
+
+    contEl.style.display = 'none';
+    msgEl.style.display  = 'flex';
+    wrapper && wrapper.classList.add('is-empty');
+
+    if (titleEl) titleEl.textContent = title;
+    if (subEl)   subEl.textContent   = sub || '';
+
+    if (isError) {
+      msgEl.classList.add('is-error');
+      if (iconEl) {
+        iconEl.classList.remove('loading');
+        iconEl.classList.add('error');
+        iconEl.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f85149" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+      }
+      if (barEl) barEl.style.display = 'none';
+    } else {
+      msgEl.classList.remove('is-error');
+      if (iconEl) iconEl.classList.add('loading');
+      if (barEl) barEl.style.display = 'block';
+    }
+  }
+
+  function showContainer() {
+    const msgEl   = document.getElementById('dashboardMessage');
+    const contEl  = document.getElementById('powerbiContainer');
+    const wrapper = document.getElementById('embedWrapper');
+
+    if (!msgEl || !contEl) return;
+    msgEl.style.display  = 'none';
+    contEl.style.display = 'block';
+    wrapper && wrapper.classList.remove('is-empty');
+    setLastUpdated();
+  }
+
+  function setRefreshSpinning(on) {
+    const btn = document.getElementById('refresh-powerbi-btn');
+    if (btn) btn.classList.toggle('spinning', on);
+  }
+
+  /* ── Data Fetch ── */
+  async function loadEmbedConfig() {
+    const response = await fetch('/dashboard/embed-info', {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'X-User-Role': '{{ api_role | default("viewer") }}'
+      }
+    });
+    if (!response.ok) throw new Error('Cannot fetch Power BI embed information from backend.');
+    return response.json();
+  }
+
+  /* ── Render ── */
+  async function renderPowerBI() {
+    showMessage('Loading dashboard...', 'Initializing Power BI connection', false);
+    setRefreshSpinning(true);
+
+    try {
+      if (!window.powerbi || !window['powerbi-client']) {
+        throw new Error('Power BI client library is not available.');
+      }
+
+      const data = await loadEmbedConfig();
+
+      if (data.embed_token === 'mock_embed_token_for_local_testing') {
+        showMessage(
+          'Power BI is not configured',
+          'Please configure POWERBI_TENANT_ID, CLIENT_ID, CLIENT_SECRET, WORKSPACE_ID, and REPORT_ID.',
+          true
+        );
+        return;
+      }
+
+      if (!data.embed_token || !data.embed_url || !data.report_id || data.embed_token === 'error_fetching_token') {
+        showMessage('Invalid response', 'Backend returned incomplete embed data.', true);
+        return;
+      }
+
+      const models    = window['powerbi-client'].models;
+      const container = document.getElementById('powerbiContainer');
+      if (!container) throw new Error('Power BI container not found.');
+
+      if (embeddedReport) window.powerbi.reset(container);
+
+      const config = {
+        type:        'report',
+        tokenType:   models.TokenType.Embed,
+        accessToken: data.embed_token,
+        embedUrl:    data.embed_url,
+        id:          data.report_id,
+        permissions: models.Permissions.Read,
+        pageView:    'fitToWidth',
+        settings: {
+          layoutType: models.LayoutType.Custom,
+          customLayout: {
+            displayOption: models.DisplayOption.FitToWidth
+          },
+          panes: {
+            filters:       { visible: false },
+            pageNavigation: { visible: true }
+          },
+          background: models.BackgroundType.Transparent
+        }
+      };
+
+      showContainer();
+      embeddedReport = window.powerbi.embed(container, config);
+
+      embeddedReport.off('error');
+      embeddedReport.on('error', function (event) {
+        console.error('Power BI embedding error', event.detail);
+        showMessage('Power BI render error', 'Check browser console and backend logs for details.', true);
+      });
+
+    } catch (error) {
+      console.error('Error initializing Power BI dashboard', error);
+      showMessage('Cannot load dashboard', error.message || 'Check configuration and access permissions.', true);
+    } finally {
+      setRefreshSpinning(false);
+    }
+  }
+
+  /* ── Boot ── */
+  document.addEventListener('DOMContentLoaded', function () {
+    const btn = document.getElementById('refresh-powerbi-btn');
+
+    if (btn) btn.addEventListener('click', renderPowerBI);
+    renderPowerBI();
+  });
+})();
+</script>
+{% endblock %}
