@@ -4,7 +4,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -733,6 +733,77 @@ class FunctionCallingIntegrationTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["topic"], "system_overview")
         self.assertIn("warning_message", body)
+
+    def test_station_daily_report_no_data_is_deterministic_and_includes_date_range(self) -> None:
+        from app.api.solar_ai_chat.routes import get_solar_ai_chat_service
+        from app.services.solar_ai_chat.gemini_client import (
+            FunctionCallRequest,
+            GeminiToolResult,
+        )
+
+        class _FakeNoDataRouter:
+            def generate_with_tools(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> GeminiToolResult:
+                return GeminiToolResult(
+                    function_call=FunctionCallRequest(
+                        name="get_station_daily_report",
+                        arguments={
+                            "anchor_date": "2024-03-01",
+                            "metrics": ["aqi_value", "shortwave_radiation", "energy_mwh"],
+                        },
+                    ),
+                    text=None,
+                    model_used="gemini-2.5-flash-lite",
+                    fallback_used=False,
+                )
+
+            def send_tool_result(self, messages: list[dict[str, object]], model_name: str) -> GeminiToolResult:
+                raise AssertionError("send_tool_result should not be called for no-data station report")
+
+        repository = MagicMock(spec=SolarChatRepository)
+        repository.fetch_station_daily_report.return_value = (
+            {
+                "report_date": "2024-03-01",
+                "metrics_requested": ["aqi_value", "energy_mwh", "shortwave_radiation"],
+                "stations": [],
+                "station_count": 0,
+                "has_data": False,
+                "no_data_reason": "không có dữ liệu cho ngày 2024-03-01",
+                "available_date_min": "2026-01-01",
+                "available_date_max": "2026-04-06",
+            },
+            [
+                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy", "data_source": "trino"},
+                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather", "data_source": "trino"},
+                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality", "data_source": "trino"},
+            ],
+        )
+
+        service = SolarAIChatService(
+            repository=repository,
+            intent_service=VietnameseIntentService(),
+            model_router=_FakeNoDataRouter(),
+            history_repository=_get_test_history_repository(),
+        )
+        self.client.app.dependency_overrides[get_solar_ai_chat_service] = lambda: service
+
+        response = self.client.post(
+            "/solar-ai-chat/query",
+            json={
+                "message": "Cho toi bao cao tung tram vao ngay 01/03/2024",
+                "role": "data_analyst",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+
+        self.assertEqual(body["topic"], "energy_performance")
+        self.assertEqual(body["model_used"], "deterministic-summary")
+        self.assertTrue(body["fallback_used"])
+        self.assertIn("Không có dữ liệu cho ngày 2024-03-01", body["answer"])
+        self.assertEqual(body["key_metrics"]["available_date_min"], "2026-01-01")
+        self.assertEqual(body["key_metrics"]["available_date_max"], "2026-04-06")
+        self.assertEqual(body["key_metrics"]["station_count"], 0)
+        repository.fetch_station_daily_report.assert_called_once()
 
 
 class RagApiIntegrationTests(unittest.TestCase):

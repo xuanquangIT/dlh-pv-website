@@ -126,6 +126,26 @@ class SolarAIChatService:
         sources = [SourceMetadata(**row) for row in source_rows]
         topic = ChatTopic(TOOL_NAME_TO_TOPIC.get(fc.name, "general"))
 
+        if self._is_station_daily_report_no_data(fc.name, metrics):
+            answer = self._build_station_report_no_data_answer(metrics)
+            logger.info(
+                "station_daily_report_no_data_guard date=%s available_date_min=%s available_date_max=%s",
+                metrics.get("report_date"),
+                metrics.get("available_date_min"),
+                metrics.get("available_date_max"),
+            )
+            return self._finalize_response(
+                request=request,
+                answer=answer,
+                topic=topic,
+                metrics=metrics,
+                sources=sources,
+                model_used="deterministic-summary",
+                fallback_used=True,
+                started=started,
+                intent_confidence=TOOL_PATH_CONFIDENCE,
+            )
+
         messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
         messages.append({
             "role": "user",
@@ -212,6 +232,30 @@ class SolarAIChatService:
             intent_confidence=intent_confidence,
             warning_message=warning_message,
         )
+
+    @staticmethod
+    def _is_station_daily_report_no_data(function_name: str, metrics: dict[str, Any]) -> bool:
+        if function_name != "get_station_daily_report":
+            return False
+        station_count = metrics.get("station_count")
+        try:
+            return int(station_count or 0) == 0
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _build_station_report_no_data_answer(metrics: dict[str, Any]) -> str:
+        report_date = str(metrics.get("report_date", "N/A"))
+        available_min = metrics.get("available_date_min")
+        available_max = metrics.get("available_date_max")
+
+        if available_min and available_max:
+            return (
+                f"Không có dữ liệu cho ngày {report_date}. "
+                f"Khoảng ngày dữ liệu hiện có là từ {available_min} đến {available_max}."
+            )
+
+        return f"Không có dữ liệu cho ngày {report_date}."
 
     def _finalize_response(
         self,
