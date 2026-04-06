@@ -105,6 +105,47 @@
     flex-shrink: 0;
 }
 
+.cb-session-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    background: var(--surface-soft);
+    z-index: 1;
+}
+
+.cb-session-select-all {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.74rem;
+    color: var(--muted);
+    user-select: none;
+}
+
+.cb-delete-selected {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.72rem;
+    cursor: pointer;
+}
+
+.cb-delete-selected:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.cb-delete-selected:not(:disabled):hover {
+    border-color: #d14343;
+    color: #a71d2a;
+}
+
 .cb-session-list {
     list-style: none;
     margin: 0;
@@ -112,15 +153,29 @@
 }
 
 .cb-session-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 6px 10px;
     border-radius: 6px;
     cursor: pointer;
     font-size: 0.82rem;
     color: var(--text);
+    margin-bottom: 2px;
+}
+
+.cb-session-item-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    margin-bottom: 2px;
+    flex: 1;
+}
+
+.cb-session-item-checkbox {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    flex-shrink: 0;
 }
 
 .cb-session-item:hover {

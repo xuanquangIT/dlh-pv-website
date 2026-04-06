@@ -150,12 +150,21 @@ class GeminiModelRouter:
             except Exception as err:
                 last_error = err
                 log_fn = logger.warning if not is_fallback else logger.error
+                error_text = str(err)
+                error_kind = "rate_limited" if _is_rate_limit_error(err) else "request_failed"
                 log_fn(
-                    "%s_failed", log_event,
+                    "%s_failed provider=google_gemini model=%s fallback_used=%s kind=%s error=%s",
+                    log_event,
+                    model,
+                    is_fallback,
+                    error_kind,
+                    error_text,
                     extra={
                         "provider": "google_gemini",
                         "model": model,
-                        "error": str(err),
+                        "error": error_text,
+                        "kind": error_kind,
+                        "fallback_used": is_fallback,
                     },
                 )
 
@@ -264,3 +273,8 @@ class GeminiModelRouter:
             raise RuntimeError("Gemini response JSON root must be an object.")
 
         return parsed
+
+
+def _is_rate_limit_error(error: Exception) -> bool:
+    text = str(error)
+    return "HTTP Error 429" in text or "Too Many Requests" in text

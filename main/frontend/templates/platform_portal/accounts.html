@@ -1,0 +1,197 @@
+{% extends "platform_portal/base.html" %}
+
+{% block title %}PV Lakehouse - Account Management{% endblock %}
+
+{% block head_extra %}
+<link rel="stylesheet" href="{{ url_for('static', path='css/platform_accounts.css') }}">
+{% endblock %}
+
+{% block content %}
+<section class="section-header">
+    <div>
+        <h1 class="page-title">Account Management</h1>
+        <div class="page-subtitle">Manage users, roles, and access permissions across PV Lakehouse</div>
+    </div>
+    <div>
+        <button class="btn btn-sec" id="export-audit-btn" type="button">Export Audit Log</button>
+        <button class="btn btn-pri" id="invite-user-btn" type="button">Invite User</button>
+    </div>
+</section>
+
+<section class="accounts-stats" aria-label="Account summary">
+    <article class="stat-card stat-green">
+        <p class="stat-label">Total Accounts</p>
+        <h2 class="stat-value" id="stat-total">0</h2>
+        <p class="stat-meta" id="stat-total-meta">No records</p>
+    </article>
+    <article class="stat-card stat-blue">
+        <p class="stat-label">Active Accounts</p>
+        <h2 class="stat-value" id="stat-active">0</h2>
+        <p class="stat-meta" id="stat-active-meta">0 percent of total</p>
+    </article>
+    <article class="stat-card stat-amber">
+        <p class="stat-label">Pending Invites</p>
+        <h2 class="stat-value" id="stat-pending">0</h2>
+        <p class="stat-meta" id="stat-pending-meta">No pending invite</p>
+    </article>
+    <article class="stat-card stat-red">
+        <p class="stat-label">Suspended</p>
+        <h2 class="stat-value" id="stat-suspended">0</h2>
+        <p class="stat-meta" id="stat-suspended-meta">Requires review</p>
+    </article>
+</section>
+
+<section class="accounts-toolbar card" aria-label="Account filters">
+    <div class="accounts-toolbar-left">
+        <label class="sr-only" for="account-search">Search users</label>
+        <input id="account-search" type="text" placeholder="Search by name, email, role">
+
+        <label class="sr-only" for="account-role-filter">Filter by role</label>
+        <select id="account-role-filter">
+            <option value="">All Roles</option>
+            <option value="Admin">Admin</option>
+            <option value="Data Engineer">Data Engineer</option>
+            <option value="ML Engineer">ML Engineer</option>
+            <option value="Data Analyst">Data Analyst</option>
+        </select>
+
+        <label class="sr-only" for="account-status-filter">Filter by status</label>
+        <select id="account-status-filter">
+            <option value="">All Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+            <option value="Suspended">Suspended</option>
+            <option value="Pending">Pending</option>
+        </select>
+    </div>
+    <div class="accounts-toolbar-right">
+        <span class="accounts-count" id="accounts-count">0 users</span>
+    </div>
+</section>
+
+<section class="card" aria-label="Account table">
+    <div class="table-wrap">
+        <table id="accounts-table">
+            <thead>
+                <tr>
+                    <th style="width: 40px;"><input id="account-check-all" type="checkbox" aria-label="Select all rows"></th>
+                    <th><button type="button" class="sort-btn" data-sort-key="name">User</button></th>
+                    <th><button type="button" class="sort-btn" data-sort-key="role">Role</button></th>
+                    <th><button type="button" class="sort-btn" data-sort-key="status">Status</button></th>
+                    <th><button type="button" class="sort-btn" data-sort-key="lastActive">Last Active</button></th>
+                    <th><button type="button" class="sort-btn" data-sort-key="joined">Joined</button></th>
+                    <th style="width: 170px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="accounts-tbody"></tbody>
+        </table>
+    </div>
+
+    <div class="accounts-pagination" id="accounts-pagination">
+        <span id="accounts-pagination-info">Showing 0 to 0 of 0 users</span>
+        <div class="accounts-pagination-actions">
+            <button type="button" id="accounts-prev-page">Previous</button>
+            <button type="button" id="accounts-next-page">Next</button>
+        </div>
+    </div>
+</section>
+
+<div class="accounts-modal-overlay" id="accounts-modal-overlay" aria-hidden="true">
+    <section class="accounts-modal" id="accounts-form-modal" role="dialog" aria-modal="true" aria-labelledby="accounts-form-title">
+        <header class="accounts-modal-header">
+            <div>
+                <h2 id="accounts-form-title">Invite User</h2>
+                <p id="accounts-form-subtitle">Create a new account invitation</p>
+            </div>
+            <button type="button" class="modal-close-btn" id="accounts-close-form-modal">Close</button>
+        </header>
+
+        <div class="accounts-modal-body">
+            <form id="accounts-form" novalidate>
+                <div class="form-grid">
+                    <div class="field-group">
+                        <label for="field-first-name">First Name</label>
+                        <input id="field-first-name" name="firstName" type="text" required>
+                    </div>
+                    <div class="field-group">
+                        <label for="field-last-name">Last Name</label>
+                        <input id="field-last-name" name="lastName" type="text" required>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label for="field-email">Email Address</label>
+                    <input id="field-email" name="email" type="email" required>
+                </div>
+
+                <div class="form-grid">
+                    <div class="field-group">
+                        <label for="field-role">Role</label>
+                        <select id="field-role" name="role">
+                            <option>Data Engineer</option>
+                            <option>ML Engineer</option>
+                            <option>Data Analyst</option>
+                            <option>Admin</option>
+                        </select>
+                    </div>
+                    <div class="field-group">
+                        <label for="field-status">Status</label>
+                        <select id="field-status" name="status">
+                            <option>Active</option>
+                            <option>Inactive</option>
+                            <option>Suspended</option>
+                            <option>Pending</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="field-group">
+                    <label for="field-scope">Access Scope</label>
+                    <select id="field-scope" name="scope">
+                        <option>Full Platform Access</option>
+                        <option>Dashboard and Reports Only</option>
+                        <option>Pipeline Read-Only</option>
+                        <option>ML Models Only</option>
+                    </select>
+                </div>
+
+                <div class="field-group">
+                    <label for="field-notes">Notes</label>
+                    <input id="field-notes" name="notes" type="text" placeholder="Optional note">
+                </div>
+            </form>
+        </div>
+
+        <footer class="accounts-modal-footer">
+            <button type="button" class="btn btn-sec" id="accounts-cancel-form-btn">Cancel</button>
+            <button type="button" class="btn btn-pri" id="accounts-submit-form-btn">Save</button>
+        </footer>
+    </section>
+
+    <section class="accounts-modal accounts-modal-small" id="accounts-delete-modal" role="dialog" aria-modal="true" aria-labelledby="accounts-delete-title">
+        <header class="accounts-modal-header">
+            <div>
+                <h2 id="accounts-delete-title">Delete Account</h2>
+                <p>Confirm account removal</p>
+            </div>
+            <button type="button" class="modal-close-btn" id="accounts-close-delete-modal">Close</button>
+        </header>
+
+        <div class="accounts-modal-body">
+            <p class="delete-text">This action is irreversible and will remove account access immediately.</p>
+            <p class="delete-target" id="accounts-delete-target">No account selected</p>
+        </div>
+
+        <footer class="accounts-modal-footer">
+            <button type="button" class="btn btn-sec" id="accounts-cancel-delete-btn">Cancel</button>
+            <button type="button" class="btn btn-danger" id="accounts-confirm-delete-btn">Delete</button>
+        </footer>
+    </section>
+</div>
+
+<div class="accounts-toast" id="accounts-toast" role="status" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='js/platform_portal/accounts_page.js') }}" defer></script>
+{% endblock %}

@@ -17,6 +17,13 @@
     </div>
 
     <div id="cb-session-drawer" class="cb-session-drawer cb-hidden">
+        <div class="cb-session-toolbar">
+            <label class="cb-session-select-all">
+                <input type="checkbox" id="cb-select-all-sessions">
+                <span>Select all</span>
+            </label>
+            <button type="button" id="cb-delete-selected" class="cb-delete-selected" disabled>Delete selected</button>
+        </div>
         <ul id="cb-session-list" class="cb-session-list"></ul>
     </div>
 
@@ -26,7 +33,6 @@
 
     <form id="cb-form" class="cb-input-area" action="#" novalidate>
         <select id="cb-role" class="cb-role-select" title="Role">
-            <option value="viewer">Viewer</option>
             <option value="data_analyst">Analyst</option>
             <option value="data_engineer">Engineer</option>
             <option value="ml_engineer">ML Eng</option>
@@ -39,4 +45,4 @@
     </form>
 </div>
 
-<script src="{{ url_for('static', path='js/chatbot-bubble.js') }}" defer></script>
+<script src="{{ url_for('static', path='js/platform_portal/chatbot-bubble.js') }}" defer></script>

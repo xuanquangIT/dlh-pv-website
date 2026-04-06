@@ -23,6 +23,7 @@ class ChatHistoryRepository:
     def __init__(self, storage_dir: Path) -> None:
         self._storage_dir = storage_dir
         self._storage_dir.mkdir(parents=True, exist_ok=True)
+        self._invalid_role_log_keys: set[str] = set()
 
     def create_session(self, role: ChatRole, title: str) -> ChatSessionSummary:
         session_id = uuid.uuid4().hex[:12]
@@ -51,7 +52,11 @@ class ChatHistoryRepository:
             data = self._read_file(file_path)
             if data is None:
                 continue
-            sessions.append(self._deserialize_session_summary(data))
+            try:
+                sessions.append(self._deserialize_session_summary(data))
+            except ValueError:
+                self._warn_invalid_role_once(f"path:{file_path}", path=str(file_path))
+                continue
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions
 
@@ -59,11 +64,16 @@ class ChatHistoryRepository:
         data = self._load_session(session_id)
         if data is None:
             return None
+        try:
+            role = self._parse_role(data.get("role", ""))
+        except ValueError:
+            self._warn_invalid_role_once(f"session:{session_id}", session_id=session_id)
+            return None
         messages = [self._deserialize_message(msg) for msg in data.get("messages", [])]
         return ChatSessionDetail(
             session_id=data["session_id"],
             title=data["title"],
-            role=ChatRole(data["role"]),
+            role=role,
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             messages=messages,
@@ -138,7 +148,14 @@ class ChatHistoryRepository:
             return None
 
         # C6: new_role is already a ChatRole, no need to unwrap and re-wrap
-        role = new_role if new_role else ChatRole(source_data["role"])
+        try:
+            role = new_role if new_role else self._parse_role(source_data.get("role", ""))
+        except ValueError:
+            self._warn_invalid_role_once(
+                f"fork_source_session:{source_session_id}",
+                session_id=source_session_id,
+            )
+            return None
         title = new_title or f"Fork of {source_data['title']}"
         new_session = self.create_session(role=role, title=title)
 
@@ -175,24 +192,36 @@ class ChatHistoryRepository:
         file_path = self._session_path(session_id)
         file_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _warn_invalid_role_once(self, key: str, **context: str) -> None:
+        if key in self._invalid_role_log_keys:
+            return
+        self._invalid_role_log_keys.add(key)
+        logger.warning("invalid_session_role key=%s context=%s", key, context)
+
     @staticmethod
     def _deserialize_session_summary(data: dict[str, Any]) -> ChatSessionSummary:
         """D11: Shared deserializer used by list_sessions and get_session."""
         return ChatSessionSummary(
             session_id=data["session_id"],
             title=data["title"],
-            role=ChatRole(data["role"]),
+            role=ChatHistoryRepository._parse_role(data.get("role", "")),
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             message_count=len(data.get("messages", [])),
         )
 
     @staticmethod
+    def _parse_role(role_value: str) -> ChatRole:
+        normalized_value = str(role_value).strip().lower().replace(" ", "_")
+        return ChatRole(normalized_value)
+
+    @staticmethod
     def _read_file(file_path: Path) -> dict[str, Any] | None:
         if not file_path.exists():
             return None
         try:
-            return json.loads(file_path.read_text(encoding="utf-8"))
+            # Accept UTF-8 with or without BOM for legacy session files.
+            return json.loads(file_path.read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, OSError):
             logger.warning("corrupted_session_file", extra={"path": str(file_path)})
             return None

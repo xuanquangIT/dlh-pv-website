@@ -21,19 +21,19 @@ class ChatHistoryRepositoryTests(unittest.TestCase):
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
     def test_create_session_returns_summary(self) -> None:
-        session = self.repo.create_session(role=ChatRole.VIEWER, title="Test")
+        session = self.repo.create_session(role=ChatRole.DATA_ENGINEER, title="Test")
         self.assertEqual(session.title, "Test")
-        self.assertEqual(session.role, ChatRole.VIEWER)
+        self.assertEqual(session.role, ChatRole.DATA_ENGINEER)
         self.assertEqual(session.message_count, 0)
 
     def test_list_sessions_returns_created_sessions(self) -> None:
         self.repo.create_session(role=ChatRole.ADMIN, title="A")
-        self.repo.create_session(role=ChatRole.VIEWER, title="B")
+        self.repo.create_session(role=ChatRole.DATA_ENGINEER, title="B")
         sessions = self.repo.list_sessions()
         self.assertEqual(len(sessions), 2)
 
     def test_get_session_returns_detail_with_messages(self) -> None:
-        session = self.repo.create_session(role=ChatRole.VIEWER, title="Detail")
+        session = self.repo.create_session(role=ChatRole.DATA_ENGINEER, title="Detail")
         self.repo.add_message(session.session_id, sender="user", content="Hello")
         detail = self.repo.get_session(session.session_id)
         self.assertIsNotNone(detail)
@@ -44,7 +44,7 @@ class ChatHistoryRepositoryTests(unittest.TestCase):
         self.assertIsNone(self.repo.get_session("nonexistent"))
 
     def test_delete_session_removes_file(self) -> None:
-        session = self.repo.create_session(role=ChatRole.VIEWER, title="Delete")
+        session = self.repo.create_session(role=ChatRole.DATA_ENGINEER, title="Delete")
         self.assertTrue(self.repo.delete_session(session.session_id))
         self.assertIsNone(self.repo.get_session(session.session_id))
 
@@ -66,7 +66,7 @@ class ChatHistoryRepositoryTests(unittest.TestCase):
         self.assertEqual(len(msg.sources), 1)
 
     def test_get_recent_messages_limits_results(self) -> None:
-        session = self.repo.create_session(role=ChatRole.VIEWER, title="Limit")
+        session = self.repo.create_session(role=ChatRole.DATA_ENGINEER, title="Limit")
         for i in range(15):
             self.repo.add_message(session.session_id, sender="user", content=f"Msg {i}")
         recent = self.repo.get_recent_messages(session.session_id, limit=5)
@@ -81,11 +81,11 @@ class ChatHistoryRepositoryTests(unittest.TestCase):
         forked = self.repo.fork_session(
             source_session_id=original.session_id,
             new_title="Forked",
-            new_role=ChatRole.VIEWER,
+            new_role=ChatRole.DATA_ENGINEER,
         )
         self.assertIsNotNone(forked)
         self.assertEqual(forked.title, "Forked")
-        self.assertEqual(forked.role, ChatRole.VIEWER)
+        self.assertEqual(forked.role, ChatRole.DATA_ENGINEER)
         self.assertEqual(forked.message_count, 2)
 
         forked_detail = self.repo.get_session(forked.session_id)
@@ -99,7 +99,7 @@ class ChatHistoryRepositoryTests(unittest.TestCase):
         self.assertIsNone(self.repo.fork_session("fake", "title"))
 
     def test_session_id_sanitized(self) -> None:
-        session = self.repo.create_session(role=ChatRole.VIEWER, title="Sanitize")
+        session = self.repo.create_session(role=ChatRole.DATA_ENGINEER, title="Sanitize")
         path = self.repo._session_path(session.session_id)
         self.assertTrue(path.name.endswith(".json"))
         self.assertNotIn("..", str(path.name))

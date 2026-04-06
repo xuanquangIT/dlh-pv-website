@@ -31,6 +31,8 @@
     {% include "platform_portal/components/chatbot_panel.html" %}
     {% endif %}
 
+    {% include "platform_portal/components/logout_modal.html" %}
+
     <script>
         window.PV_ROUTE = "{{ current_page | default('dashboard') }}";
     </script>

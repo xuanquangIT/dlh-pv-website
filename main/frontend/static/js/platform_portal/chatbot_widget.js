@@ -27,6 +27,112 @@
       messages: [createWelcomeMessage()]
     };
 
+    const dragState = {
+      active: false,
+      pointerId: null,
+      offsetX: 0,
+      offsetY: 0,
+      moved: false,
+      justDragged: false
+    };
+
+    function getPortalBounds() {
+      var sidebar = document.getElementById("sidebar");
+      var topbar = document.getElementById("topbar");
+      var minLeft = sidebar ? Math.max(0, sidebar.getBoundingClientRect().right) : 0;
+      var minTop = topbar ? Math.max(0, topbar.getBoundingClientRect().bottom) : 0;
+      return {
+        minLeft: minLeft,
+        minTop: minTop
+      };
+    }
+
+    function applyButtonPosition(left, top) {
+      const bounds = getPortalBounds();
+      const maxLeft = Math.max(bounds.minLeft, window.innerWidth - openBtn.offsetWidth);
+      const maxTop = Math.max(bounds.minTop, window.innerHeight - openBtn.offsetHeight);
+      const finalLeft = Math.max(bounds.minLeft, Math.min(maxLeft, left));
+      const finalTop = Math.max(bounds.minTop, Math.min(maxTop, top));
+      openBtn.style.left = String(finalLeft) + "px";
+      openBtn.style.top = String(finalTop) + "px";
+      openBtn.style.right = "auto";
+      openBtn.style.bottom = "auto";
+    }
+
+    function positionPanelNearButton() {
+      const bounds = getPortalBounds();
+      const btnRect = openBtn.getBoundingClientRect();
+      const panelWidth = panel.offsetWidth || 470;
+      const panelHeight = panel.offsetHeight || 520;
+      const gap = 12;
+
+      let left = btnRect.right - panelWidth;
+      left = Math.max(bounds.minLeft + 12, Math.min(window.innerWidth - panelWidth - 12, left));
+
+      let top = btnRect.top - panelHeight - gap;
+      if (top < bounds.minTop + 12) {
+        top = btnRect.bottom + gap;
+      }
+      top = Math.max(bounds.minTop + 12, Math.min(window.innerHeight - panelHeight - 12, top));
+
+      panel.style.left = String(left) + "px";
+      panel.style.top = String(top) + "px";
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+    }
+
+    function bindDrag() {
+      openBtn.style.touchAction = "none";
+
+      openBtn.addEventListener("pointerdown", function (event) {
+        dragState.active = true;
+        dragState.pointerId = event.pointerId;
+        dragState.moved = false;
+
+        const rect = openBtn.getBoundingClientRect();
+        dragState.offsetX = event.clientX - rect.left;
+        dragState.offsetY = event.clientY - rect.top;
+
+        if (openBtn.setPointerCapture) {
+          openBtn.setPointerCapture(event.pointerId);
+        }
+      });
+
+      openBtn.addEventListener("pointermove", function (event) {
+        if (!dragState.active || dragState.pointerId !== event.pointerId) {
+          return;
+        }
+
+        const nextLeft = event.clientX - dragState.offsetX;
+        const nextTop = event.clientY - dragState.offsetY;
+        applyButtonPosition(nextLeft, nextTop);
+        positionPanelNearButton();
+        dragState.moved = true;
+      });
+
+      function endDrag(event) {
+        if (!dragState.active || dragState.pointerId !== event.pointerId) {
+          return;
+        }
+
+        dragState.active = false;
+        if (dragState.moved) {
+          dragState.justDragged = true;
+          window.setTimeout(function () {
+            dragState.justDragged = false;
+          }, 120);
+        }
+
+        if (openBtn.releasePointerCapture) {
+          openBtn.releasePointerCapture(event.pointerId);
+        }
+        dragState.pointerId = null;
+      }
+
+      openBtn.addEventListener("pointerup", endDrag);
+      openBtn.addEventListener("pointercancel", endDrag);
+    }
+
     function syncWidgetRoleFromGlobal() {
       const activeRole = getActiveRole();
       if (activeRole !== widgetState.role) {
@@ -105,13 +211,21 @@
     }
 
     openBtn.addEventListener("click", function () {
+      if (dragState.justDragged) {
+        return;
+      }
       panel.classList.add("open");
       panel.setAttribute("aria-hidden", "false");
+      positionPanelNearButton();
     });
 
     closeBtn.addEventListener("click", function () {
       panel.classList.remove("open");
       panel.setAttribute("aria-hidden", "true");
+    });
+
+    window.addEventListener("resize", function () {
+      positionPanelNearButton();
     });
 
     sendBtn.addEventListener("click", sendWidgetMessage);
@@ -139,6 +253,8 @@
     });
 
     normalizeInitialMessages();
+    bindDrag();
+    positionPanelNearButton();
   }
 
   window.PVChatbotWidget = {

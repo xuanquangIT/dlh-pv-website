@@ -80,10 +80,17 @@ class SolarAIChatService:
         if self._model_router is not None:
             try:
                 return self._handle_with_tools(request, started, history_messages)
-            except ModelUnavailableError:
-                logger.warning("solar_chat_tool_path_unavailable, falling back to regex intent")
+            except ModelUnavailableError as model_error:
+                logger.warning(
+                    "solar_chat_tool_path_unavailable error=%s, falling back to regex intent",
+                    model_error,
+                )
             except Exception as tool_err:
-                logger.warning("solar_chat_tool_path_failed (%s), falling back to regex intent", tool_err)
+                logger.warning(
+                    "solar_chat_tool_path_failed error_type=%s error=%s, falling back to regex intent",
+                    type(tool_err).__name__,
+                    tool_err,
+                )
 
         return self._handle_with_regex_fallback(request, started, history_messages)
 

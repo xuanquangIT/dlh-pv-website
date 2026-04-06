@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PV Lakehouse - Logout</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/platform_auth.css') }}">
+</head>
+<body class="auth-page auth-logout-page">
+    <main class="logout-screen">
+        <section class="logout-card" aria-label="Confirm sign out">
+            <p class="logout-kicker">Session Control</p>
+            <h1>Sign out from PV Lakehouse?</h1>
+            <p class="logout-copy">
+                You will return to the login screen. Unsaved dashboard and workflow changes may be lost.
+            </p>
+
+            <div class="logout-user-pill">
+                <span id="logout-user-initials" class="pill-avatar">{{ user_initials | default('AK') }}</span>
+                <span class="pill-text">
+                    <strong id="logout-user-name">{{ user_name | default('Admin User') }}</strong>
+                    <small id="logout-user-role">{{ user_role | default('Platform Owner') }}</small>
+                </span>
+            </div>
+
+            <div class="logout-actions">
+                <a class="btn-secondary" href="/dashboard">Cancel</a>
+                <button id="confirm-logout-btn" class="btn-danger" type="button">Sign Out</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="{{ url_for('static', path='js/platform_portal/auth.js') }}" defer></script>
+</body>
+</html>

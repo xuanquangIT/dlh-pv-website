@@ -58,12 +58,12 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._trino_patcher.stop()
 
-    def test_returns_system_overview_for_viewer(self) -> None:
+    def test_returns_system_overview_for_data_engineer(self) -> None:
         response = self.client.post(
             "/solar-ai-chat/query",
             json={
                 "message": "Cho toi tong quan he thong, san luong va r-squared",
-                "role": "viewer",
+                "role": "data_engineer",
             },
         )
 
@@ -71,7 +71,7 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
         body = response.json()
 
         self.assertEqual(body["topic"], "system_overview")
-        self.assertEqual(body["role"], "viewer")
+        self.assertEqual(body["role"], "data_engineer")
         self.assertGreater(len(body["sources"]), 0)
         self.assertIn("model_used", body)
 
@@ -80,7 +80,7 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
             "/solar-ai-chat/query",
             json={
                 "message": "Cho toi trang thai pipeline va ETA",
-                "role": "viewer",
+                "role": "data_analyst",
             },
         )
 
@@ -288,7 +288,7 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
             "/solar-ai-chat/query",
             json={
                 "message": "Cho toi buc xa mat troi cao nhat cua tram vao luc 5 gio chieu vao ngay 5/2/2025",
-                "role": "viewer",
+                "role": "data_engineer",
             },
         )
 
@@ -358,12 +358,12 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("not allowed", response.json()["detail"])
 
-    def test_viewer_denied_data_quality_issues(self) -> None:
+    def test_ml_engineer_denied_data_quality_issues(self) -> None:
         response = self.client.post(
             "/solar-ai-chat/query",
             json={
                 "message": "Cho toi danh sach co so diem chat luong thap va nguyen nhan",
-                "role": "viewer",
+                "role": "ml_engineer",
             },
         )
         self.assertEqual(response.status_code, 403)
@@ -374,7 +374,7 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
             "/solar-ai-chat/query",
             json={
                 "message": "Cho toi tong quan he thong hom nay",
-                "role": "viewer",
+                "role": "data_engineer",
             },
         )
         self.assertEqual(response.status_code, 200)
@@ -387,7 +387,7 @@ class SolarAIChatApiIntegrationTests(unittest.TestCase):
         standard_queries = [
             {
                 "message": "Cho toi tong quan he thong hom nay",
-                "role": "viewer",
+                "role": "data_engineer",
             },
             {
                 "message": "Du bao 72 gio va khoang tin cay theo ngay",
@@ -443,12 +443,12 @@ class ChatSessionApiTests(unittest.TestCase):
     def test_create_and_list_sessions(self) -> None:
         response = self.client.post(
             "/solar-ai-chat/sessions",
-            json={"role": "viewer", "title": "Test session"},
+            json={"role": "data_engineer", "title": "Test session"},
         )
         self.assertEqual(response.status_code, 201)
         session = response.json()
         self.assertEqual(session["title"], "Test session")
-        self.assertEqual(session["role"], "viewer")
+        self.assertEqual(session["role"], "data_engineer")
         self.assertEqual(session["message_count"], 0)
 
         list_response = self.client.get("/solar-ai-chat/sessions")
@@ -477,7 +477,7 @@ class ChatSessionApiTests(unittest.TestCase):
     def test_delete_session(self) -> None:
         create = self.client.post(
             "/solar-ai-chat/sessions",
-            json={"role": "viewer", "title": "To delete"},
+            json={"role": "data_engineer", "title": "To delete"},
         )
         session_id = create.json()["session_id"]
 
@@ -494,7 +494,7 @@ class ChatSessionApiTests(unittest.TestCase):
     def test_query_persists_messages_in_session(self) -> None:
         create = self.client.post(
             "/solar-ai-chat/sessions",
-            json={"role": "viewer", "title": "Persist test"},
+            json={"role": "data_engineer", "title": "Persist test"},
         )
         session_id = create.json()["session_id"]
 
@@ -502,7 +502,7 @@ class ChatSessionApiTests(unittest.TestCase):
             "/solar-ai-chat/query",
             json={
                 "message": "Cho toi tong quan he thong",
-                "role": "viewer",
+                "role": "data_engineer",
                 "session_id": session_id,
             },
         )
@@ -675,7 +675,7 @@ class FunctionCallingIntegrationTests(unittest.TestCase):
 
         response = self.client.post(
             "/solar-ai-chat/query",
-            json={"message": "Xin chao!", "role": "viewer"},
+            json={"message": "Xin chao!", "role": "data_engineer"},
         )
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -703,7 +703,7 @@ class FunctionCallingIntegrationTests(unittest.TestCase):
 
         response = self.client.post(
             "/solar-ai-chat/query",
-            json={"message": "AQI cao nhat", "role": "viewer"},
+            json={"message": "AQI cao nhat", "role": "ml_engineer"},
         )
         self.assertEqual(response.status_code, 403)
 

@@ -156,7 +156,7 @@ Solar AI Chat endpoint is available at:
 ```json
 {
 	"message": "Cho toi tong quan he thong va san luong",
-	"role": "viewer"
+	"role": "data_engineer"
 }
 ```
 
@@ -165,7 +165,6 @@ Supported role values:
 - `data_engineer`
 - `ml_engineer`
 - `data_analyst`
-- `viewer`
 - `admin`
 
 ### Model routing

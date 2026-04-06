@@ -54,7 +54,7 @@ class DashboardApiIntegrationTests(unittest.TestCase):
     def test_embed_info_allows_authorized_role(self) -> None:
         response = self.client.get(
             "/dashboard/embed-info",
-            headers={"X-User-Role": "viewer"},
+            headers={"X-User-Role": "data_engineer"},
         )
 
         self.assertEqual(response.status_code, 200)
