@@ -10,9 +10,7 @@ class SolarChatSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=(
-            "/home/pvlakehouse/dlh-pv/.env",
             ".env",
-            "dev/config/.env",
             "main/docker/.env",
         ),
         env_file_encoding="utf-8",
@@ -80,9 +78,10 @@ class PowerBISettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=(
-            "/home/pvlakehouse/dlh-pv/.env",
             ".env",
             "dev/config/.env",
+            "stg/config/.env",
+            "prod/config/.env",
             "main/docker/.env",
         ),
         env_file_encoding="utf-8",
