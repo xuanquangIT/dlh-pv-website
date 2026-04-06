@@ -32,10 +32,24 @@ class ReportRepository(BaseRepository):
         data_source = "trino"
         try:
             stations = self._station_daily_report_trino(anchor_date, requested)
+            available_date_min, available_date_max = self._station_report_date_range_trino(requested)
         except Exception as exc:
             logger.warning("Trino unavailable for station_daily_report (%s), falling back to CSV.", exc)
             stations = self._station_daily_report_csv(anchor_date, requested)
+            available_date_min, available_date_max = self._station_report_date_range_csv(requested)
             data_source = "csv"
+
+        has_data = bool(stations)
+        no_data_reason: str | None = None
+        if not has_data:
+            no_data_reason = f"không có dữ liệu cho ngày {anchor_date.isoformat()}"
+            logger.info(
+                "station_daily_report_no_data date=%s available_date_min=%s available_date_max=%s source=%s",
+                anchor_date.isoformat(),
+                available_date_min,
+                available_date_max,
+                data_source,
+            )
 
         sources: list[dict[str, str]] = []
         if requested & {"energy_mwh"}:
@@ -50,7 +64,83 @@ class ReportRepository(BaseRepository):
             "metrics_requested": sorted(requested),
             "stations": stations,
             "station_count": len(stations),
+            "has_data": has_data,
+            "no_data_reason": no_data_reason,
+            "available_date_min": available_date_min,
+            "available_date_max": available_date_max,
         }, sources
+
+    @staticmethod
+    def _normalize_date_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, date):
+            return value.isoformat()
+        return str(value)
+
+    @staticmethod
+    def _merge_date_ranges(
+        current_min: str | None,
+        current_max: str | None,
+        next_min: str | None,
+        next_max: str | None,
+    ) -> tuple[str | None, str | None]:
+        merged_min = current_min
+        if next_min is not None and (merged_min is None or next_min < merged_min):
+            merged_min = next_min
+
+        merged_max = current_max
+        if next_max is not None and (merged_max is None or next_max > merged_max):
+            merged_max = next_max
+
+        return merged_min, merged_max
+
+    @staticmethod
+    def _report_sources_for_metrics(requested: set[str]) -> list[tuple[str, str]]:
+        sources: list[tuple[str, str]] = []
+        if requested & {"energy_mwh"}:
+            sources.append(("lh_silver_clean_hourly_energy", "lh_silver_clean_hourly_energy.csv"))
+        if requested & {"shortwave_radiation", "temperature_2m", "wind_speed_10m", "cloud_cover"}:
+            sources.append(("lh_silver_clean_hourly_weather", "lh_silver_clean_hourly_weather.csv"))
+        if requested & {"aqi_value"}:
+            sources.append(("lh_silver_clean_hourly_air_quality", "lh_silver_clean_hourly_air_quality.csv"))
+        return sources
+
+    def _station_report_date_range_trino(self, requested: set[str]) -> tuple[str | None, str | None]:
+        min_date: str | None = None
+        max_date: str | None = None
+
+        for table_name, _ in self._report_sources_for_metrics(requested):
+            rows = self._execute_query(
+                "SELECT"
+                " MIN(CAST(date_hour AS DATE)) AS min_date,"
+                " MAX(CAST(date_hour AS DATE)) AS max_date"
+                f" FROM {table_name}"
+                " WHERE date_hour IS NOT NULL"
+            )
+            if not rows:
+                continue
+
+            row_min = self._normalize_date_value(rows[0].get("min_date"))
+            row_max = self._normalize_date_value(rows[0].get("max_date"))
+            min_date, max_date = self._merge_date_ranges(min_date, max_date, row_min, row_max)
+
+        return min_date, max_date
+
+    def _station_report_date_range_csv(self, requested: set[str]) -> tuple[str | None, str | None]:
+        min_date: str | None = None
+        max_date: str | None = None
+
+        for _, csv_name in self._report_sources_for_metrics(requested):
+            rows = self._load_csv(self._dataset_path(csv_name))
+            for row in rows:
+                dt = self._parse_datetime(row.get("date_hour"))
+                if dt is None:
+                    continue
+                date_str = dt.date().isoformat()
+                min_date, max_date = self._merge_date_ranges(min_date, max_date, date_str, date_str)
+
+        return min_date, max_date
 
     def _station_daily_report_trino(self, anchor_date: date, requested: set[str]) -> list[dict[str, Any]]:
         date_str = anchor_date.isoformat()

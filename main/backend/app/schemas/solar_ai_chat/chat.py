@@ -1,6 +1,6 @@
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 
@@ -18,6 +18,8 @@ class SolarChatRequest(BaseModel):
 
 
 class SolarChatResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     answer: str
     topic: ChatTopic
     role: ChatRole

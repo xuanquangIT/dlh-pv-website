@@ -4,6 +4,7 @@ All Silver/Gold repositories inherit from this base.
 """
 import csv
 import logging
+import re
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -22,11 +23,31 @@ logger = logging.getLogger(__name__)
 class BaseRepository:
     """Shared infrastructure: connection management, CSV loader, scalar helpers."""
 
+    _LEGACY_TRINO_CATALOG: str = "postgresql"
+    _LAKEHOUSE_TRINO_CATALOG: str = "iceberg"
+    _LEGACY_TRINO_SCHEMA: str = "public"
+    _DEFAULT_ICEBERG_SCHEMA: str = "silver"
+    _ICEBERG_TABLE_MAP: dict[str, str] = {
+        "lh_silver_clean_facility_master": "silver.clean_facility_master",
+        "lh_silver_clean_hourly_energy": "silver.clean_hourly_energy",
+        "lh_silver_clean_hourly_weather": "silver.clean_hourly_weather",
+        "lh_silver_clean_hourly_air_quality": "silver.clean_hourly_air_quality",
+        "lh_gold_dim_date": "gold.dim_date",
+        "lh_gold_dim_time": "gold.dim_time",
+        "lh_gold_dim_aqi_category": "gold.dim_aqi_category",
+        "lh_gold_fact_solar_environmental": "gold.fact_solar_environmental",
+        "lh_gold_dim_facility": "gold.dim_facility",
+    }
+
     # C1: Allowlists for SQL identifiers used in dynamic query building.
     _ALLOWED_TABLES: frozenset[str] = frozenset({
+        "lh_silver_clean_facility_master",
         "lh_silver_clean_hourly_energy",
         "lh_silver_clean_hourly_weather",
         "lh_silver_clean_hourly_air_quality",
+        "lh_gold_dim_date",
+        "lh_gold_dim_time",
+        "lh_gold_dim_aqi_category",
         "lh_gold_fact_solar_environmental",
         "lh_gold_dim_facility",
     })
@@ -41,6 +62,33 @@ class BaseRepository:
     def __init__(self, settings: SolarChatSettings) -> None:
         self._settings = settings
         self._data_root = settings.resolved_data_root
+        self._trino_catalog = self._resolve_trino_catalog(settings.trino_catalog)
+        self._trino_schema = self._resolve_trino_schema(self._trino_catalog, settings.trino_schema)
+
+    @classmethod
+    def _resolve_trino_schema(cls, catalog: str, schema: str) -> str:
+        normalized_catalog = catalog.strip().lower()
+        normalized_schema = schema.strip().lower()
+        if normalized_catalog == cls._LAKEHOUSE_TRINO_CATALOG and normalized_schema == cls._LEGACY_TRINO_SCHEMA:
+            return cls._DEFAULT_ICEBERG_SCHEMA
+        return schema
+
+    def _rewrite_sql_for_iceberg(self, sql: str) -> str:
+        if self._trino_catalog != self._LAKEHOUSE_TRINO_CATALOG:
+            return sql
+
+        rewritten = sql
+        for legacy_name, iceberg_name in sorted(self._ICEBERG_TABLE_MAP.items(), key=lambda x: len(x[0]), reverse=True):
+            qualified_name = f"{self._trino_catalog}.{iceberg_name}"
+            rewritten = re.sub(rf"\b{re.escape(legacy_name)}\b", qualified_name, rewritten)
+        return rewritten
+
+    @classmethod
+    def _resolve_trino_catalog(cls, catalog: str) -> str:
+        normalized = catalog.strip().lower()
+        if normalized == cls._LEGACY_TRINO_CATALOG:
+            return cls._LAKEHOUSE_TRINO_CATALOG
+        return catalog
 
     @classmethod
     def _validate_sql_identifier(cls, value: str, allowed: frozenset[str]) -> str:
@@ -55,8 +103,8 @@ class BaseRepository:
             host=self._settings.trino_host,
             port=self._settings.trino_port,
             user=self._settings.trino_user,
-            catalog=self._settings.trino_catalog,
-            schema=self._settings.trino_schema,
+            catalog=self._trino_catalog,
+            schema=self._trino_schema,
         )
         try:
             yield conn
@@ -64,6 +112,7 @@ class BaseRepository:
             conn.close()
 
     def _execute_query(self, sql: str) -> list[dict[str, Any]]:
+        sql = self._rewrite_sql_for_iceberg(sql)
         with self._trino_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(sql)

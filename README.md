@@ -45,7 +45,7 @@ Docker env files are located in [main/docker](main/docker).
 Create env file from template if needed:
 
 ```powershell
-Copy-Item main/docker/.env_example main/docker/.env -Force
+Copy-Item main/docker/.env.example main/docker/.env -Force
 ```
 
 Update values in [main/docker/.env](main/docker/.env) if required.
