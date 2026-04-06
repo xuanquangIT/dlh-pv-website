@@ -35,12 +35,6 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.FORECAST_72H,
         ChatTopic.DATA_QUALITY_ISSUES,
     },
-    ChatRole.VIEWER: {
-        ChatTopic.GENERAL,
-        ChatTopic.SYSTEM_OVERVIEW,
-        ChatTopic.ENERGY_PERFORMANCE,
-        ChatTopic.FORECAST_72H,
-    },
     ChatRole.ADMIN: {
         ChatTopic.GENERAL,
         ChatTopic.SYSTEM_OVERVIEW,
@@ -58,7 +52,6 @@ _EXTRA_TOOL_GRANTS: dict[ChatRole, set[str]] = {
     ChatRole.DATA_ENGINEER: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather"},
     ChatRole.ML_ENGINEER: {"get_extreme_energy", "get_extreme_weather"},
     ChatRole.DATA_ANALYST: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather"},
-    ChatRole.VIEWER: {"get_extreme_energy", "get_extreme_weather"},
     ChatRole.ADMIN: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather"},
 }
 

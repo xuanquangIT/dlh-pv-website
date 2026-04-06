@@ -440,7 +440,7 @@
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'X-User-Role': '{{ api_role | default("viewer") }}'
+        'X-User-Role': '{{ api_role | default("data_engineer") }}'
       }
     });
     if (!response.ok) throw new Error('Cannot fetch Power BI embed information from backend.');

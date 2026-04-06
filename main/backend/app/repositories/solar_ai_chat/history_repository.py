@@ -63,7 +63,7 @@ class ChatHistoryRepository:
         return ChatSessionDetail(
             session_id=data["session_id"],
             title=data["title"],
-            role=ChatRole(data["role"]),
+            role=self._parse_role(data.get("role", "")),
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             messages=messages,
@@ -138,7 +138,7 @@ class ChatHistoryRepository:
             return None
 
         # C6: new_role is already a ChatRole, no need to unwrap and re-wrap
-        role = new_role if new_role else ChatRole(source_data["role"])
+        role = new_role if new_role else self._parse_role(source_data.get("role", ""))
         title = new_title or f"Fork of {source_data['title']}"
         new_session = self.create_session(role=role, title=title)
 
@@ -181,18 +181,27 @@ class ChatHistoryRepository:
         return ChatSessionSummary(
             session_id=data["session_id"],
             title=data["title"],
-            role=ChatRole(data["role"]),
+            role=ChatHistoryRepository._parse_role(data.get("role", "")),
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
             message_count=len(data.get("messages", [])),
         )
 
     @staticmethod
+    def _parse_role(role_value: str) -> ChatRole:
+        normalized_value = str(role_value).strip().lower().replace(" ", "_")
+        try:
+            return ChatRole(normalized_value)
+        except ValueError:
+            return ChatRole.DATA_ENGINEER
+
+    @staticmethod
     def _read_file(file_path: Path) -> dict[str, Any] | None:
         if not file_path.exists():
             return None
         try:
-            return json.loads(file_path.read_text(encoding="utf-8"))
+            # Accept UTF-8 with or without BOM for legacy session files.
+            return json.loads(file_path.read_text(encoding="utf-8-sig"))
         except (json.JSONDecodeError, OSError):
             logger.warning("corrupted_session_file", extra={"path": str(file_path)})
             return None

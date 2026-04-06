@@ -116,9 +116,9 @@ class TestToolRBAC:
         for tool_name in topic_tools:
             executor.execute(tool_name, {}, ChatRole.ADMIN)
 
-    def test_viewer_denied_extreme_aqi(self, executor: ToolExecutor) -> None:
+    def test_ml_engineer_denied_extreme_aqi(self, executor: ToolExecutor) -> None:
         with pytest.raises(PermissionError):
-            executor.execute("get_extreme_aqi", {"query_type": "highest", "timeframe": "day"}, ChatRole.VIEWER)
+            executor.execute("get_extreme_aqi", {"query_type": "highest", "timeframe": "day"}, ChatRole.ML_ENGINEER)
 
     def test_data_engineer_denied_ml_model(self, executor: ToolExecutor) -> None:
         with pytest.raises(PermissionError):
@@ -128,8 +128,8 @@ class TestToolRBAC:
         with pytest.raises(PermissionError):
             executor.execute("get_pipeline_status", {}, ChatRole.ML_ENGINEER)
 
-    def test_viewer_allowed_energy(self, executor: ToolExecutor) -> None:
-        executor.execute("get_extreme_energy", {"query_type": "highest", "timeframe": "day"}, ChatRole.VIEWER)
+    def test_data_engineer_allowed_energy(self, executor: ToolExecutor) -> None:
+        executor.execute("get_extreme_energy", {"query_type": "highest", "timeframe": "day"}, ChatRole.DATA_ENGINEER)
 
 
 class TestStationDailyReport:
@@ -153,6 +153,6 @@ class TestStationDailyReport:
 
     def test_metrics_filter_passed(self, executor: ToolExecutor, mock_repository: MagicMock) -> None:
         args = {"anchor_date": "2025-05-05", "metrics": ["shortwave_radiation"]}
-        executor.execute("get_station_daily_report", args, ChatRole.VIEWER)
+        executor.execute("get_station_daily_report", args, ChatRole.DATA_ENGINEER)
         call_kwargs = mock_repository.fetch_station_daily_report.call_args[1]
         assert call_kwargs["metrics"] == ["shortwave_radiation"]

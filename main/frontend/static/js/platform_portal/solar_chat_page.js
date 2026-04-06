@@ -16,9 +16,9 @@
     }
     try {
       const storedRole = localStorage.getItem(ROLE_STORAGE_KEY);
-      return storedRole || "viewer";
+      return storedRole || "data_engineer";
     } catch (error) {
-      return "viewer";
+      return "data_engineer";
     }
   }
 

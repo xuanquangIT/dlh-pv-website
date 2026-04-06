@@ -5,7 +5,6 @@ class ChatRole(str, Enum):
     DATA_ENGINEER = "data_engineer"
     ML_ENGINEER = "ml_engineer"
     DATA_ANALYST = "data_analyst"
-    VIEWER = "viewer"
     ADMIN = "admin"
 
 

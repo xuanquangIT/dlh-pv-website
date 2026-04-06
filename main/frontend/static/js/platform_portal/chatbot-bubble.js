@@ -7,6 +7,8 @@ var newSessionBtn = document.getElementById("cb-new-session");
 var toggleSessionsBtn = document.getElementById("cb-toggle-sessions");
 var sessionDrawer = document.getElementById("cb-session-drawer");
 var sessionList = document.getElementById("cb-session-list");
+var selectAllSessionsEl = document.getElementById("cb-select-all-sessions");
+var deleteSelectedBtn = document.getElementById("cb-delete-selected");
 var messagesEl = document.getElementById("cb-messages");
 var form = document.getElementById("cb-form");
 var roleSelect = document.getElementById("cb-role");
@@ -17,6 +19,7 @@ if (!toggle || !panel || !form) return;
 
 var activeSessionId = null;
 var isSending = false;
+var selectedSessionIds = new Set();
 
 function escapeHtml(text) {
     var d = document.createElement("div");
@@ -51,19 +54,105 @@ toggleSessionsBtn.addEventListener("click", function () {
 async function loadSessions() {
     try {
         var resp = await fetch("/solar-ai-chat/sessions");
+        if (!resp.ok) return;
         var sessions = await resp.json();
         sessionList.innerHTML = "";
+
+        var sessionIdSet = new Set();
         sessions.forEach(function (s) {
+            sessionIdSet.add(s.session_id);
             var li = document.createElement("li");
             li.className = "cb-session-item" + (s.session_id === activeSessionId ? " cb-active" : "");
-            li.textContent = s.title + " (" + s.message_count + ")";
+
+            var checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "cb-session-item-checkbox";
+            checkbox.setAttribute("data-session-id", s.session_id);
+            checkbox.checked = selectedSessionIds.has(s.session_id);
+            checkbox.setAttribute("aria-label", "Select session " + s.title);
+            checkbox.addEventListener("click", function (event) {
+                event.stopPropagation();
+            });
+            checkbox.addEventListener("change", function () {
+                if (checkbox.checked) {
+                    selectedSessionIds.add(s.session_id);
+                } else {
+                    selectedSessionIds.delete(s.session_id);
+                }
+                updateSessionSelectionControls(sessionIdSet);
+            });
+
+            var title = document.createElement("span");
+            title.className = "cb-session-item-title";
+            title.textContent = s.title + " (" + s.message_count + ")";
+
+            li.appendChild(checkbox);
+            li.appendChild(title);
             li.addEventListener("click", function () {
                 selectSession(s.session_id);
                 sessionDrawer.classList.add("cb-hidden");
             });
             sessionList.appendChild(li);
         });
+
+        selectedSessionIds.forEach(function (id) {
+            if (!sessionIdSet.has(id)) {
+                selectedSessionIds.delete(id);
+            }
+        });
+
+        updateSessionSelectionControls(sessionIdSet);
     } catch (e) { /* silent */ }
+}
+
+function updateSessionSelectionControls(sessionIdSet) {
+    var totalSessions = sessionIdSet ? sessionIdSet.size : 0;
+    var selectedCount = selectedSessionIds.size;
+
+    if (deleteSelectedBtn) {
+        deleteSelectedBtn.disabled = selectedCount === 0;
+        deleteSelectedBtn.textContent = selectedCount > 0 ? "Delete selected (" + selectedCount + ")" : "Delete selected";
+    }
+
+    if (selectAllSessionsEl) {
+        selectAllSessionsEl.checked = totalSessions > 0 && selectedCount === totalSessions;
+        selectAllSessionsEl.indeterminate = selectedCount > 0 && selectedCount < totalSessions;
+    }
+}
+
+async function deleteSelectedSessions() {
+    if (selectedSessionIds.size === 0) return;
+    if (!window.confirm("Delete selected chat history items?")) return;
+
+    var idsToDelete = Array.from(selectedSessionIds);
+    var activeDeleted = idsToDelete.indexOf(activeSessionId) >= 0;
+    deleteSelectedBtn.disabled = true;
+
+    try {
+        var results = await Promise.allSettled(idsToDelete.map(function (sessionId) {
+            return fetch("/solar-ai-chat/sessions/" + encodeURIComponent(sessionId), {
+                method: "DELETE",
+            });
+        }));
+
+        var hasFailure = results.some(function (result) {
+            return result.status !== "fulfilled" || (result.value && !result.value.ok && result.value.status !== 404);
+        });
+
+        selectedSessionIds.clear();
+
+        if (activeDeleted) {
+            activeSessionId = null;
+            renderMessages([]);
+        }
+
+        loadSessions();
+        if (hasFailure) {
+            appendError("Some selected sessions could not be deleted.");
+        }
+    } catch (error) {
+        appendError("Failed to delete selected sessions.");
+    }
 }
 
 async function selectSession(sessionId) {
@@ -94,6 +183,32 @@ async function createSession() {
 newSessionBtn.addEventListener("click", function () {
     createSession().catch(function () {});
 });
+
+if (selectAllSessionsEl) {
+    selectAllSessionsEl.addEventListener("change", function () {
+        var checkboxes = sessionList.querySelectorAll(".cb-session-item-checkbox");
+        checkboxes.forEach(function (checkbox) {
+            checkbox.checked = selectAllSessionsEl.checked;
+            var sessionId = checkbox.getAttribute("data-session-id");
+            if (sessionId) {
+                if (selectAllSessionsEl.checked) {
+                    selectedSessionIds.add(sessionId);
+                } else {
+                    selectedSessionIds.delete(sessionId);
+                }
+            }
+        });
+        updateSessionSelectionControls(new Set(Array.from(checkboxes).map(function (cb) {
+            return cb.getAttribute("data-session-id");
+        }).filter(Boolean)));
+    });
+}
+
+if (deleteSelectedBtn) {
+    deleteSelectedBtn.addEventListener("click", function () {
+        deleteSelectedSessions().catch(function () {});
+    });
+}
 
 // Message rendering
 function renderMessages(msgs) {

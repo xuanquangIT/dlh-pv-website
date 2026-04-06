@@ -1,10 +1,11 @@
 (function () {
   var USERS = [
     { id: 1, firstName: "Marcus", lastName: "Obi", email: "m.obi@pvlakehouse.io", role: "Admin", status: "Active", lastActive: "Just now", joined: "Jan 2023", scope: "Full Platform Access", notes: "Super admin" },
+    { id: 9, firstName: "Elena", lastName: "Nguyen", email: "e.nguyen@pvlakehouse.io", role: "Data Engineer", status: "Active", lastActive: "12 min ago", joined: "Feb 2023", scope: "Pipeline Read-Only", notes: "Pipeline owner" },
     { id: 2, firstName: "Aarav", lastName: "Kumar", email: "a.kumar@pvlakehouse.io", role: "ML Engineer", status: "Active", lastActive: "5 min ago", joined: "Mar 2023", scope: "Full Platform Access", notes: "" },
     { id: 3, firstName: "Sophie", lastName: "Vance", email: "s.vance@pvlakehouse.io", role: "Data Analyst", status: "Active", lastActive: "1 hour ago", joined: "Apr 2023", scope: "Dashboard and Reports Only", notes: "" },
     { id: 4, firstName: "Lena", lastName: "Fischer", email: "l.fischer@pvlakehouse.io", role: "ML Engineer", status: "Inactive", lastActive: "1 week ago", joined: "May 2023", scope: "ML Models Only", notes: "" },
-    { id: 5, firstName: "Dario", lastName: "Conti", email: "d.conti@pvlakehouse.io", role: "Viewer", status: "Pending", lastActive: "Not yet", joined: "Jun 2023", scope: "Dashboard and Reports Only", notes: "Invite pending" },
+    { id: 5, firstName: "Dario", lastName: "Conti", email: "d.conti@pvlakehouse.io", role: "Data Engineer", status: "Pending", lastActive: "Not yet", joined: "Jun 2023", scope: "Dashboard and Reports Only", notes: "Invite pending" },
     { id: 6, firstName: "Yuna", lastName: "Park", email: "y.park@pvlakehouse.io", role: "Data Analyst", status: "Suspended", lastActive: "2 months ago", joined: "Jul 2023", scope: "Pipeline Read-Only", notes: "Policy review" },
     { id: 7, firstName: "Priya", lastName: "Nair", email: "p.nair@pvlakehouse.io", role: "ML Engineer", status: "Active", lastActive: "4 hours ago", joined: "Nov 2023", scope: "ML Models Only", notes: "" },
     { id: 8, firstName: "Hana", lastName: "Suzuki", email: "h.suzuki@pvlakehouse.io", role: "Admin", status: "Active", lastActive: "20 min ago", joined: "Feb 2024", scope: "Full Platform Access", notes: "Co-admin" }
@@ -30,9 +31,10 @@
 
   function roleClass(role) {
     if (role === "Admin") return "badge-role-admin";
+    if (role === "Data Engineer") return "badge-role-engineer";
     if (role === "ML Engineer") return "badge-role-ml";
     if (role === "Data Analyst") return "badge-role-analyst";
-    return "badge-role-viewer";
+    return "badge-role-analyst";
   }
 
   function statusClass(status) {
