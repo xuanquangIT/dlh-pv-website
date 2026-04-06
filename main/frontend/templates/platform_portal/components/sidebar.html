@@ -11,23 +11,37 @@
         <div class="nav-sec">Overview</div>
         <a class="nav-item {% if current_page == 'dashboard' %}active{% endif %}" href="/dashboard">Dashboard</a>
 
+        {% if api_role in ["data_engineer"] %}
         <div class="nav-sec">Pipeline</div>
         <a class="nav-item {% if current_page == 'pipeline' %}active{% endif %}" href="/pipeline">Data Pipeline</a>
         <a class="nav-item {% if current_page == 'quality' %}active{% endif %}" href="/quality">Data Quality</a>
+        {% endif %}
 
+        {% if api_role in ["ml_engineer"] %}
         <div class="nav-sec">Machine Learning</div>
         <a class="nav-item {% if current_page == 'training' %}active{% endif %}" href="/training">ML Training</a>
+        {% endif %}
+
+        {% if api_role in ["admin", "ml_engineer"] %}
+        <div class="nav-sec">Registry</div>
         <a class="nav-item {% if current_page == 'registry' %}active{% endif %}" href="/registry">Model Registry</a>
+        {% endif %}
 
         <div class="nav-sec">Intelligence</div>
         <a class="nav-item {% if current_page == 'forecast' %}active{% endif %}" href="/forecast">Forecast</a>
+        {% if api_role in ["admin", "analyst"] %}
         <a class="nav-item {% if current_page == 'analytics' %}active{% endif %}" href="/analytics">Analytics</a>
+        {% endif %}
 
+        {% if api_role in ["admin", "data_engineer", "ml_engineer"] %}
         <div class="nav-sec">AI Assistant</div>
         <a class="nav-item {% if current_page == 'solar_chat' %}active{% endif %}" href="/solar-chat">Solar AI Chat</a>
+        {% endif %}
 
         <div class="nav-sec">Settings</div>
+        {% if api_role in ["admin"] %}
         <a class="nav-item {% if current_page == 'accounts' %}active{% endif %}" href="/settings/accounts">Account Management</a>
+        {% endif %}
     </div>
 
     <div class="sidebar-footer">

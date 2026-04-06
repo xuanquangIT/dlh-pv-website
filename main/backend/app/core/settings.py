@@ -1,3 +1,4 @@
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -97,3 +98,60 @@ class PowerBISettings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_powerbi_settings() -> PowerBISettings:
     return PowerBISettings()
+
+
+class DatabaseSettings(BaseSettings):
+    """Runtime settings for Database module."""
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "main/docker/.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    pg_host: str = Field(default="localhost", alias="POSTGRES_HOST")
+    pg_port: int = Field(default=5432, alias="POSTGRES_PORT")
+    pg_database: str = Field(default="pvlakehouse", alias="POSTGRES_DB")
+    pg_user: str = Field(default="pvlakehouse", alias="POSTGRES_USER")
+    pg_password: str = Field(default="pvlakehouse", alias="POSTGRES_PASSWORD")
+
+    @property
+    def database_url(self) -> str:
+        return f"postgresql://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+
+
+class AuthSettings(BaseSettings):
+    """Runtime settings for Authentication module."""
+
+    model_config = SettingsConfigDict(
+        env_file=(".env", "main/docker/.env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    secret_key: str = Field(alias="AUTH_SECRET_KEY")
+    algorithm: str = Field(default="HS256", alias="AUTH_ALGORITHM")
+    access_token_expire_minutes: int = Field(default=1440, alias="AUTH_ACCESS_TOKEN_EXPIRE_MINUTES")
+    cookie_name: str = Field(default="pv_access_token", alias="AUTH_COOKIE_NAME")
+    cookie_secure: bool = Field(default=False, alias="AUTH_COOKIE_SECURE")
+
+
+_db_settings_instance = None
+_db_settings_lock = threading.Lock()
+
+def get_db_settings() -> DatabaseSettings:
+    global _db_settings_instance
+    with _db_settings_lock:
+        if _db_settings_instance is None:
+            _db_settings_instance = DatabaseSettings()
+        return _db_settings_instance
+
+_auth_settings_instance = None
+_auth_settings_lock = threading.Lock()
+
+def get_auth_settings() -> AuthSettings:
+    global _auth_settings_instance
+    with _auth_settings_lock:
+        if _auth_settings_instance is None:
+            _auth_settings_instance = AuthSettings()
+        return _auth_settings_instance

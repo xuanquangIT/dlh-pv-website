@@ -63,10 +63,11 @@
                 <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
                 <p id="login-flash" class="form-flash" role="status" aria-live="polite"></p>
 
-                <form id="login-form" class="login-form" novalidate>
+                <form id="login-form" class="login-form" action="/auth/login" method="POST">
+                    <input type="hidden" name="next" value="{{ next | default('/dashboard') }}">
                     <div class="field-group">
-                        <label for="email">Email Address</label>
-                        <input id="email" name="email" type="email" placeholder="you@pvlakehouse.io" autocomplete="email" required>
+                        <label for="username">Username</label>
+                        <input id="username" name="username" type="text" placeholder="admin" required>
                     </div>
 
                     <div class="field-group">
@@ -88,28 +89,17 @@
                     <button id="sign-in-btn" class="sign-in-btn" type="submit">Sign In</button>
                 </form>
 
-                <div class="demo-separator">Or continue as demo user</div>
+                <div class="demo-separator">Available Accounts</div>
 
                 <div class="demo-users" aria-label="Demo users">
-                    {% for user in demo_users | default([]) %}
-                    <button
-                        type="button"
-                        class="demo-user-card"
-                        data-name="{{ user.name }}"
-                        data-email="{{ user.email }}"
-                        data-role="{{ user.role }}"
-                        data-access="{{ user.access }}"
-                        data-initials="{{ user.initials }}"
-                        data-avatar-class="{{ user.avatar_class }}"
-                    >
-                        <span class="demo-avatar {{ user.avatar_class }}">{{ user.initials }}</span>
+                    <div class="demo-user-card" onclick="document.getElementById('username').value='admin'; document.getElementById('password').value='admin123';">
+                        <span class="demo-avatar avatar-green">AD</span>
                         <span class="demo-copy">
-                            <strong>{{ user.name }}</strong>
-                            <small>{{ user.role }} · {{ user.access }}</small>
+                            <strong>Admin</strong>
+                            <small>Quan ly · Full Access</small>
                         </span>
-                        <span class="demo-arrow" aria-hidden="true">Go</span>
-                    </button>
-                    {% endfor %}
+                        <span class="demo-arrow" aria-hidden="true">Use</span>
+                    </div>
                 </div>
 
                 <footer class="auth-footer">
@@ -120,6 +110,17 @@
         </section>
     </div>
 
-    <script src="{{ url_for('static', path='js/platform_portal/auth.js') }}" defer></script>
+    <script>
+        document.getElementById('toggle-password').addEventListener('click', function() {
+            var pwd = document.getElementById('password');
+            if (pwd.type === 'password') {
+                pwd.type = 'text';
+                this.textContent = 'Hide';
+            } else {
+                pwd.type = 'password';
+                this.textContent = 'Show';
+            }
+        });
+    </script>
 </body>
 </html>

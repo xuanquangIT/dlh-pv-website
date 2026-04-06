@@ -1,8 +1,11 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+
+from app.api.dependencies import get_current_user, require_role
+from app.db.database import AuthUser
 
 router = APIRouter(tags=["Frontend"], include_in_schema=False)
 
@@ -75,20 +78,40 @@ UI_TEST_PAGES: dict[str, str] = {
 }
 
 
+def _sanitize_next_path(next_path: str | None) -> str:
+    candidate = (next_path or "").strip()
+    if not candidate:
+        return "/dashboard"
+    if not candidate.startswith("/"):
+        return "/dashboard"
+    if candidate.startswith("//") or candidate.startswith("/\\"):
+        return "/dashboard"
+    return candidate
+
+
+def _to_chat_role(role_id: str) -> str:
+    if role_id == "analyst":
+        return "data_analyst"
+    return role_id
+
+
 def _render_refactored_page(
     request: Request,
     template_name: str,
     current_page: str,
     page_title: str,
+    current_user: AuthUser,
 ) -> HTMLResponse:
+    user_name = current_user.full_name or current_user.username
     base_context = {
         "current_page": current_page,
         "page_title": page_title,
         "system_health": "Pipeline healthy",
-        "user_name": "Admin User",
-        "user_role": "Platform Owner",
-        "api_role": "admin",
-        "user_initials": "AK",
+        "user_name": user_name,
+        "user_role": current_user.role.name if getattr(current_user, 'role') else current_user.role_id,
+        "api_role": current_user.role_id,
+        "chat_role": _to_chat_role(current_user.role_id),
+        "user_initials": "".join([part[0] for part in user_name.split()[:2]]).upper() or "U",
     }
     return templates.TemplateResponse(
         request=request,
@@ -98,7 +121,7 @@ def _render_refactored_page(
 
 
 @router.get("/", response_class=HTMLResponse)
-def home_page(request: Request) -> HTMLResponse:
+def home_page(request: Request, current_user: AuthUser = Depends(get_current_user)) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="home.html",
@@ -108,11 +131,13 @@ def home_page(request: Request) -> HTMLResponse:
 
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request) -> HTMLResponse:
+    next_path = _sanitize_next_path(request.query_params.get("next"))
     return templates.TemplateResponse(
         request=request,
         name="platform_portal/login.html",
         context={
             "page_title": UI_TEST_PAGES["login"],
+            "next": next_path,
             "active_facilities": 24,
             "total_energy_gwh": "2.46",
             "data_quality_pct": "96.2",
@@ -167,91 +192,124 @@ def solar_ai_chat_legacy_redirect() -> RedirectResponse:
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-def dashboard_page(request: Request) -> HTMLResponse:
+def dashboard_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/dashboard.html",
         current_page="dashboard",
         page_title=UI_TEST_PAGES["dashboard"],
+        current_user=current_user,
     )
 
 
 @router.get("/pipeline", response_class=HTMLResponse)
-def pipeline_page(request: Request) -> HTMLResponse:
+def pipeline_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["data_engineer"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/pipeline.html",
         current_page="pipeline",
         page_title=UI_TEST_PAGES["pipeline"],
+        current_user=current_user,
     )
 
 
 @router.get("/quality", response_class=HTMLResponse)
-def quality_page(request: Request) -> HTMLResponse:
+def quality_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["data_engineer"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/quality.html",
         current_page="quality",
         page_title=UI_TEST_PAGES["quality"],
+        current_user=current_user,
     )
 
 
 @router.get("/training", response_class=HTMLResponse)
-def training_page(request: Request) -> HTMLResponse:
+def training_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["ml_engineer"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/training.html",
         current_page="training",
         page_title=UI_TEST_PAGES["training"],
+        current_user=current_user,
     )
 
 
 @router.get("/registry", response_class=HTMLResponse)
-def registry_page(request: Request) -> HTMLResponse:
+def registry_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["admin", "ml_engineer"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/registry.html",
         current_page="registry",
         page_title=UI_TEST_PAGES["registry"],
+        current_user=current_user,
     )
 
 
 @router.get("/forecast", response_class=HTMLResponse)
-def forecast_page(request: Request) -> HTMLResponse:
+def forecast_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/forecast.html",
         current_page="forecast",
         page_title=UI_TEST_PAGES["forecast"],
+        current_user=current_user,
     )
 
 
 @router.get("/analytics", response_class=HTMLResponse)
-def analytics_page(request: Request) -> HTMLResponse:
+def analytics_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["admin", "analyst"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/analytics.html",
         current_page="analytics",
         page_title=UI_TEST_PAGES["analytics"],
+        current_user=current_user,
     )
 
 
 @router.get("/settings/accounts", response_class=HTMLResponse)
-def accounts_page(request: Request) -> HTMLResponse:
+def accounts_page(request: Request, current_user: AuthUser = Depends(get_current_user)) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/accounts.html",
         current_page="accounts",
         page_title=UI_TEST_PAGES["accounts"],
+        current_user=current_user,
     )
 
 
 @router.get("/solar-chat", response_class=HTMLResponse)
-def solar_chat_page(request: Request) -> HTMLResponse:
+def solar_chat_page(
+    request: Request,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
         template_name="platform_portal/solar_chat.html",
         current_page="solar_chat",
         page_title=UI_TEST_PAGES["solar_chat"],
+        current_user=current_user,
     )
 

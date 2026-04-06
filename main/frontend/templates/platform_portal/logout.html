@@ -28,11 +28,10 @@
 
             <div class="logout-actions">
                 <a class="btn-secondary" href="/dashboard">Cancel</a>
-                <button id="confirm-logout-btn" class="btn-danger" type="button">Sign Out</button>
+                <a id="confirm-logout-btn" class="btn-danger" href="/auth/logout" style="text-decoration: none; text-align: center;">Sign Out</a>
             </div>
         </section>
     </main>
 
-    <script src="{{ url_for('static', path='js/platform_portal/auth.js') }}" defer></script>
 </body>
 </html>

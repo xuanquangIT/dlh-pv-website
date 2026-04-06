@@ -80,7 +80,7 @@
     confirmButton.addEventListener("click", function () {
       sessionStorage.removeItem("pv_user");
       closeModal();
-      window.location.assign("/login?logged_out=1");
+      window.location.assign("/auth/logout");
     });
 
     modal.addEventListener("click", function (event) {
@@ -100,12 +100,10 @@
     if (!window.PV_ROUTE) {
       return;
     }
-    if (applySessionUser()) {
-      return;
-    }
 
-    var nextPath = window.location.pathname || "/dashboard";
-    window.location.assign("/login?next=" + encodeURIComponent(nextPath));
+    // Backend auth is cookie-based (HttpOnly), so client JS cannot read it reliably.
+    // Keep sessionStorage only as optional display data and let server guard routes.
+    applySessionUser();
   }
 
   function applyTheme(theme) {

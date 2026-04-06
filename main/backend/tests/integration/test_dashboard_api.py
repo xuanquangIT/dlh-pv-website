@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +10,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.main import create_app
+from app.api.dependencies import get_current_user
 from app.api.dashboard.routes import get_powerbi_service
 from app.schemas.dashboard import EmbedTokenResponse
 
@@ -29,21 +31,22 @@ def _get_stub_powerbi_service() -> _StubPowerBIService:
 class DashboardApiIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        app = create_app()
-        app.dependency_overrides[get_powerbi_service] = _get_stub_powerbi_service
-        cls.client = TestClient(app)
+        cls.app = create_app()
+        cls.app.dependency_overrides[get_powerbi_service] = _get_stub_powerbi_service
+        cls.client = TestClient(cls.app)
 
-    def test_embed_info_requires_role_header(self) -> None:
+    def tearDown(self) -> None:
+        self.app.dependency_overrides.pop(get_current_user, None)
+
+    def test_embed_info_requires_authenticated_user(self) -> None:
         response = self.client.get("/dashboard/embed-info")
 
         self.assertEqual(response.status_code, 401)
-        self.assertEqual(response.json()["detail"], "Missing X-User-Role header.")
+        self.assertEqual(response.json()["detail"], "Not authenticated")
 
     def test_embed_info_rejects_unauthorized_role(self) -> None:
-        response = self.client.get(
-            "/dashboard/embed-info",
-            headers={"X-User-Role": "guest"},
-        )
+        self.app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(role_id="system")
+        response = self.client.get("/dashboard/embed-info")
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
@@ -52,10 +55,8 @@ class DashboardApiIntegrationTests(unittest.TestCase):
         )
 
     def test_embed_info_allows_authorized_role(self) -> None:
-        response = self.client.get(
-            "/dashboard/embed-info",
-            headers={"X-User-Role": "data_engineer"},
-        )
+        self.app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(role_id="data_engineer")
+        response = self.client.get("/dashboard/embed-info")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()

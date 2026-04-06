@@ -69,8 +69,21 @@ Run from repository root after Docker services are up.
 
 Create lakehouse tables (safe to run again on existing container — uses `CREATE TABLE IF NOT EXISTS`):
 
+Create lakehouse tables (safe to run again on existing container — uses `CREATE TABLE IF NOT EXISTS`):
+
+**PowerShell Component:**
 ```powershell
-docker cp main/docker/postgres/002-create-lakehouse-tables.sql dlhpv_fresh_postgres:/tmp/002-create-lakehouse-tables.sql ; docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/002-create-lakehouse-tables.sql
+docker cp dlh-pv-dashboard/main/002-create-lakehouse-tables.sql dlhpv_fresh_postgres:/tmp/002-create-lakehouse-tables.sql
+docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/002-create-lakehouse-tables.sql
+```
+
+**WSL / Linux Component:**
+If your container is simply named `postgres` and you encounter a missing database error, you can fix it and initialize the schema directly:
+```bash
+# Provide template collation fix and create the database if missing
+docker exec -i postgres psql -U pvlakehouse -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION; CREATE DATABASE pvlakehouse;"
+# Inject the schema script including Authentication tables
+docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/002-create-lakehouse-tables.sql
 ```
 
 Load all CSV data into PostgreSQL (also runs the DDL step automatically):
@@ -95,8 +108,11 @@ Tables created:
 - `lh_silver_clean_hourly_air_quality`
 - `lh_gold_fact_solar_environmental`
 - `lh_gold_dim_facility`
+- `auth_roles` (Authentication)
+- `auth_users` (Authentication - Contains 'admin' user with password 'admin123')
+- `rag_documents` (Vector DB)
 
-## 7) Check service status
+## 6) Run the Backend Server
 
 ```powershell
 docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env ps

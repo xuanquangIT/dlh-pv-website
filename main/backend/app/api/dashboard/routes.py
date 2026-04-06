@@ -1,14 +1,14 @@
-from typing import Annotated
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
-
+from app.api.dependencies import get_current_user, require_role
+from app.db.database import AuthUser
 from app.schemas.dashboard import EmbedTokenResponse
 from app.services.dashboard.powerbi_service import PowerBIService, get_powerbi_service
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 ALLOWED_DASHBOARD_ROLES = {
-    "data_analyst",
+    "analyst",
     "data_engineer",
     "ml_engineer",
     "admin",
@@ -16,15 +16,9 @@ ALLOWED_DASHBOARD_ROLES = {
 
 
 def require_dashboard_embed_access(
-    x_user_role: Annotated[str | None, Header(alias="X-User-Role")] = None,
+    current_user: AuthUser = Depends(get_current_user),
 ) -> str:
-    if not x_user_role:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing X-User-Role header.",
-        )
-
-    normalized_role = x_user_role.strip().lower().replace(" ", "_")
+    normalized_role = (current_user.role_id or "").strip().lower()
     if normalized_role not in ALLOWED_DASHBOARD_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -34,7 +28,9 @@ def require_dashboard_embed_access(
     return normalized_role
 
 @router.get("/summary")
-def get_dashboard_summary() -> dict[str, str]:
+def get_dashboard_summary(
+    _: object = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"])),
+) -> dict[str, str]:
     return {
         "module": "dashboard",
         "message": "Dashboard API placeholder is ready.",
