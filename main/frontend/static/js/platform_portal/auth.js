@@ -15,10 +15,19 @@
     function getNextPath() {
         var params = new URLSearchParams(window.location.search);
         var next = params.get("next") || "/dashboard";
-        if (!next.startsWith("/")) {
+        if (!next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) {
             return "/dashboard";
         }
-        return next;
+
+        try {
+            var resolved = new URL(next, window.location.origin);
+            if (resolved.origin !== window.location.origin) {
+                return "/dashboard";
+            }
+            return resolved.pathname + resolved.search + resolved.hash;
+        } catch (error) {
+            return "/dashboard";
+        }
     }
 
     function byId(id) {

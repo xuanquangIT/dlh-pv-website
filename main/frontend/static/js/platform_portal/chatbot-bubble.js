@@ -27,6 +27,11 @@ function escapeHtml(text) {
     return d.innerHTML;
 }
 
+function logClientError(context, error) {
+    var message = error && error.message ? error.message : String(error);
+    console.error("[chatbot-bubble] " + context + " failed", message, error);
+}
+
 // Panel open/close
 toggle.addEventListener("click", function () {
     panel.classList.toggle("cb-hidden");
@@ -102,7 +107,9 @@ async function loadSessions() {
         });
 
         updateSessionSelectionControls(sessionIdSet);
-    } catch (e) { /* silent */ }
+    } catch (e) {
+        logClientError("loadSessions", e);
+    }
 }
 
 function updateSessionSelectionControls(sessionIdSet) {
@@ -162,7 +169,10 @@ async function selectSession(sessionId) {
         if (!resp.ok) return;
         var session = await resp.json();
         renderMessages(session.messages);
-    } catch (e) { /* silent */ }
+    } catch (e) {
+        logClientError("selectSession", e);
+        appendError("Unable to load the selected session.");
+    }
 }
 
 async function createSession() {
@@ -181,7 +191,10 @@ async function createSession() {
 }
 
 newSessionBtn.addEventListener("click", function () {
-    createSession().catch(function () {});
+    createSession().catch(function (error) {
+        logClientError("createSession", error);
+        appendError("Failed to start a new chat session.");
+    });
 });
 
 if (selectAllSessionsEl) {
@@ -206,7 +219,10 @@ if (selectAllSessionsEl) {
 
 if (deleteSelectedBtn) {
     deleteSelectedBtn.addEventListener("click", function () {
-        deleteSelectedSessions().catch(function () {});
+        deleteSelectedSessions().catch(function (error) {
+            logClientError("deleteSelectedSessions", error);
+            appendError("Failed to delete selected sessions.");
+        });
     });
 }
 
