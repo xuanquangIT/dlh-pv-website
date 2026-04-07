@@ -1,6 +1,3 @@
--- Lakehouse tables for Silver and Gold layers
--- Data is loaded from CSV files via the companion shell script.
-
 -- RAG: pgvector extension and document chunks
 CREATE EXTENSION IF NOT EXISTS vector;
 
