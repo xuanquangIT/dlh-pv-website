@@ -1,3 +1,5 @@
+-- Local PostgreSQL bootstrap for authentication and RAG features.
+-- Silver and Gold datasets are queried from Iceberg via Trino and are not created here.
 -- RAG: pgvector extension and document chunks
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
 
 -- Seed Default Roles
 INSERT INTO auth_roles (id, name, description) VALUES
-    ('admin', 'Quan ly', 'Manager / Approver'),
+    ('admin', 'Manager', 'Manager / Approver'),
     ('data_engineer', 'Data Engineer', 'Pipeline Owner'),
     ('ml_engineer', 'ML Engineer', 'Model Developer'),
     ('analyst', 'Analyst', 'Data Consumer'),

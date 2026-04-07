@@ -63,13 +63,20 @@ Current stack includes:
 - PostgreSQL container: `dlhpv_fresh_postgres`
 - Trino container: `dlhpv_fresh_trino`
 
-## 5) Create database tables and load CSV data
+## 5) Initialize local PostgreSQL tables (auth + RAG)
 
 Run from repository root after Docker services are up.
 
-Create lakehouse tables (safe to run again on existing container — uses `CREATE TABLE IF NOT EXISTS`):
+The migration script `main/002-create-lakehouse-tables.sql` creates only local
+operational tables for authentication and RAG:
 
-Create lakehouse tables (safe to run again on existing container — uses `CREATE TABLE IF NOT EXISTS`):
+- `auth_roles`
+- `auth_users` (contains default admin/demo accounts)
+- `rag_documents` (vector storage)
+
+Silver and Gold analytical datasets are queried directly from Iceberg via Trino.
+You do not need to create local PostgreSQL copies of `lh_silver_*` or
+`lh_gold_*` tables.
 
 **PowerShell Component:**
 ```powershell
@@ -82,35 +89,12 @@ If your container is simply named `postgres` and you encounter a missing databas
 ```bash
 # Provide template collation fix and create the database if missing
 docker exec -i postgres psql -U pvlakehouse -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION; CREATE DATABASE pvlakehouse;"
-# Inject the schema script including Authentication tables
+# Inject the schema script including authentication and RAG tables
 docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/002-create-lakehouse-tables.sql
 ```
 
-Load all CSV data into PostgreSQL (also runs the DDL step automatically):
-
-```powershell
-.\main\docker\scripts\load-csv-data.ps1
-```
-
-Expected output per table:
-
-```
-Copying lh_silver_clean_hourly_energy ...
-  -> 153672 rows loaded into lh_silver_clean_hourly_energy
-...
-All CSV data loaded successfully.
-```
-
-Tables created:
-
-- `lh_silver_clean_hourly_energy`
-- `lh_silver_clean_hourly_weather`
-- `lh_silver_clean_hourly_air_quality`
-- `lh_gold_fact_solar_environmental`
-- `lh_gold_dim_facility`
-- `auth_roles` (Authentication)
-- `auth_users` (Authentication - Contains 'admin' user with password 'admin123')
-- `rag_documents` (Vector DB)
+No CSV-to-PostgreSQL loading step is required in the default runtime path.
+Silver and Gold data should be consumed from Iceberg through Trino.
 
 ## 6) Run the Backend Server
 
