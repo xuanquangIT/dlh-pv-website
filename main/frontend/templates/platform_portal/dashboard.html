@@ -439,8 +439,7 @@
     const response = await fetch('/dashboard/embed-info', {
       method: 'GET',
       headers: {
-        'Accept': 'application/json',
-        'X-User-Role': '{{ api_role | default("data_engineer") }}'
+        'Accept': 'application/json'
       }
     });
     if (!response.ok) throw new Error('Cannot fetch Power BI embed information from backend.');

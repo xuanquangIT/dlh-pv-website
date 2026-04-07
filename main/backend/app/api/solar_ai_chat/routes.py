@@ -3,11 +3,14 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.api.dependencies import require_role
+from app.db.database import AuthUser
 from app.core.settings import get_solar_chat_settings
 from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
+    ChatRole,
     ChatSessionDetail,
     ChatSessionSummary,
     CreateSessionRequest,
@@ -26,6 +29,18 @@ from app.services.solar_ai_chat.intent_service import VietnameseIntentService
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
 
 router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
+
+
+def _resolve_user_chat_role(current_user: AuthUser) -> ChatRole:
+    try:
+        if current_user.role_id == "analyst":
+            return ChatRole.DATA_ANALYST
+        return ChatRole(current_user.role_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Role is not allowed to access Solar AI Chat.",
+        ) from exc
 
 
 # ------------------------------------------------------------------
@@ -83,7 +98,9 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
 # ------------------------------------------------------------------
 
 @router.get("/topics")
-def get_solar_ai_chat_topics() -> dict[str, str]:
+def get_solar_ai_chat_topics(
+    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+) -> dict[str, str]:
     return {
         "module": "solar_ai_chat",
         "message": "Solar AI Chat topics endpoint is ready.",
@@ -93,10 +110,13 @@ def get_solar_ai_chat_topics() -> dict[str, str]:
 @router.post("/query", response_model=SolarChatResponse)
 def query_solar_ai_chat(
     request: SolarChatRequest,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     service: SolarAIChatService = Depends(get_solar_ai_chat_service),
 ) -> SolarChatResponse:
+    effective_role = _resolve_user_chat_role(current_user)
+    scoped_request = request.model_copy(update={"role": effective_role})
     try:
-        return service.handle_query(request)
+        return service.handle_query(scoped_request)
     except PermissionError as permission_error:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -121,13 +141,16 @@ def query_solar_ai_chat(
 @router.post("/sessions", response_model=ChatSessionSummary, status_code=201)
 def create_session(
     request: CreateSessionRequest,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
-    return history.create_session(role=request.role, title=request.title)
+    effective_role = _resolve_user_chat_role(current_user)
+    return history.create_session(role=effective_role, title=request.title)
 
 
 @router.get("/sessions", response_model=list[ChatSessionSummary])
 def list_sessions(
+    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> list[ChatSessionSummary]:
     return history.list_sessions()
@@ -136,6 +159,7 @@ def list_sessions(
 @router.get("/sessions/{session_id}", response_model=ChatSessionDetail)
 def get_session(
     session_id: str,
+    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionDetail:
     session = history.get_session(session_id)
@@ -147,6 +171,7 @@ def get_session(
 @router.delete("/sessions/{session_id}", status_code=204)
 def delete_session(
     session_id: str,
+    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> None:
     if not history.delete_session(session_id):
@@ -157,6 +182,7 @@ def delete_session(
 def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
+    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     updated = history.update_session_title(session_id=session_id, title=request.title)
@@ -169,6 +195,7 @@ def update_session_title(
 def rename_session(
     session_id: str,
     request: UpdateSessionTitleRequest,
+    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     updated = history.update_session_title(session_id=session_id, title=request.title)
@@ -185,12 +212,14 @@ def rename_session(
 def fork_session(
     session_id: str,
     request: ForkSessionRequest,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     history: ChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
+    effective_role = _resolve_user_chat_role(current_user)
     result = history.fork_session(
         source_session_id=session_id,
         new_title=request.title,
-        new_role=request.role,
+        new_role=effective_role,
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Source session not found.")
@@ -208,6 +237,7 @@ def fork_session(
 )
 def ingest_document(
     request: IngestDocumentRequest,
+    _: AuthUser = Depends(require_role(["admin"])),
 ) -> IngestDocumentResponse:
     settings = get_solar_chat_settings()
     if not settings.gemini_api_key:
@@ -259,6 +289,7 @@ def ingest_document(
 
 @router.get("/documents/stats", response_model=RagStatsResponse)
 def get_document_stats(
+    _: AuthUser = Depends(require_role(["admin"])),
     vector_repo: VectorRepository | None = Depends(_get_vector_repository),
 ) -> RagStatsResponse:
     if not vector_repo:
@@ -273,6 +304,7 @@ def get_document_stats(
 @router.delete("/documents/{source_file}", status_code=204)
 def delete_document(
     source_file: str,
+    _: AuthUser = Depends(require_role(["admin"])),
     vector_repo: VectorRepository | None = Depends(_get_vector_repository),
 ) -> None:
     if not vector_repo:

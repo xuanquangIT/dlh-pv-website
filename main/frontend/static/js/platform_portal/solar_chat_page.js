@@ -2,36 +2,25 @@
   const SOLAR_WELCOME_MESSAGE =
     "Xin chào! Tôi là **Solar AI**, trợ lý thông minh của PV Lakehouse.\n\n" +
     "Tôi có thể giúp bạn phân tích dữ liệu năng lượng, kiểm tra pipeline, xem metrics mô hình, hoặc giải thích các dự báo. Bạn cần hỗ trợ gì?";
-  const ROLE_STORAGE_KEY = "pv_solar_chat_test_role";
   const PROJECT_STORAGE_KEY = "pv_solar_chat_projects";
   const PROJECT_SESSION_MAP_STORAGE_KEY = "pv_solar_chat_project_session_map";
   const ACTIVE_PROJECT_STORAGE_KEY = "pv_solar_chat_active_project";
   const NO_PROJECT_KEY = "__no_project__";
   const NO_PROJECT_LABEL = "No Project";
 
-  function getActiveRole() {
-    const roleSelect = document.getElementById("solar-chat-role-select");
-    if (roleSelect && roleSelect.value) {
-      return roleSelect.value;
+  function normalizeChatRole(role) {
+    if (role === "analyst") {
+      return "data_analyst";
     }
-    try {
-      const storedRole = localStorage.getItem(ROLE_STORAGE_KEY);
-      return storedRole || "data_engineer";
-    } catch (error) {
-      return "data_engineer";
-    }
+    return role || "data_engineer";
   }
 
-  function setActiveRole(role) {
-    if (!role) {
-      return;
-    }
-    try {
-      localStorage.setItem(ROLE_STORAGE_KEY, role);
-    } catch (error) {
-      // Ignore storage write failures in private mode.
-    }
-    window.dispatchEvent(new CustomEvent("pv-role-changed", { detail: { role: role } }));
+  function getActiveRole() {
+    return normalizeChatRole(window.PV_CHAT_ROLE || window.PV_USER_ROLE || "");
+  }
+
+  function setActiveRole() {
+    // Role is controlled by authenticated backend session and is immutable on UI.
   }
 
   const SolarChatApi = {
@@ -338,7 +327,6 @@
     const loadingElement = document.getElementById("page-chat-loading");
     const exportButton = document.getElementById("solar-chat-export-btn");
     const pipelineButton = document.getElementById("pipeline-status-btn");
-    const roleSelect = document.getElementById("solar-chat-role-select");
     const newChatButton = document.getElementById("solar-chat-new-chat-btn");
     const sessionListElement = document.getElementById("solar-chat-session-list");
     const searchInputElement = document.getElementById("solar-chat-search-input");
@@ -460,9 +448,6 @@
       state.loading = loading;
       messageInput.setDisabled(loading);
       loadingElement.hidden = !loading;
-      if (roleSelect) {
-        roleSelect.disabled = loading;
-      }
       if (loading) {
         loadingElement.textContent = messageText || "Assistant is analyzing your request.";
       }
@@ -958,17 +943,6 @@
       renderSessionGroups();
     }
 
-    async function changeRole(nextRole) {
-      if (!nextRole || nextRole === state.role || state.loading) {
-        return;
-      }
-
-      state.role = nextRole;
-      setActiveRole(nextRole);
-      await resetConversation();
-      setStatus("Role switched");
-    }
-
     exportButton.addEventListener("click", function () {
       setStatus("Export is not implemented yet.");
     });
@@ -1178,13 +1152,6 @@
         closeSessionMenu();
       }
     });
-
-    if (roleSelect) {
-      roleSelect.value = state.role;
-      roleSelect.addEventListener("change", async function () {
-        await changeRole(roleSelect.value);
-      });
-    }
 
     document.querySelectorAll("[data-chat-prompt]").forEach(function (button) {
       button.addEventListener("click", async function () {

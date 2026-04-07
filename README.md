@@ -63,40 +63,40 @@ Current stack includes:
 - PostgreSQL container: `dlhpv_fresh_postgres`
 - Trino container: `dlhpv_fresh_trino`
 
-## 5) Create database tables and load CSV data
+## 5) Initialize local PostgreSQL tables (auth + RAG)
 
 Run from repository root after Docker services are up.
 
-Create lakehouse tables (safe to run again on existing container — uses `CREATE TABLE IF NOT EXISTS`):
+The migration script `main/002-create-lakehouse-tables.sql` creates only local
+operational tables for authentication and RAG:
 
+- `auth_roles`
+- `auth_users` (contains default admin/demo accounts)
+- `rag_documents` (vector storage)
+
+Silver and Gold analytical datasets are queried directly from Iceberg via Trino.
+You do not need to create local PostgreSQL copies of `lh_silver_*` or
+`lh_gold_*` tables.
+
+**PowerShell Component:**
 ```powershell
-docker cp main/docker/postgres/002-create-lakehouse-tables.sql dlhpv_fresh_postgres:/tmp/002-create-lakehouse-tables.sql ; docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/002-create-lakehouse-tables.sql
+docker cp dlh-pv-dashboard/main/002-create-lakehouse-tables.sql dlhpv_fresh_postgres:/tmp/002-create-lakehouse-tables.sql
+docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/002-create-lakehouse-tables.sql
 ```
 
-Load all CSV data into PostgreSQL (also runs the DDL step automatically):
-
-```powershell
-.\main\docker\scripts\load-csv-data.ps1
+**WSL / Linux Component:**
+If your container is simply named `postgres` and you encounter a missing database error, you can fix it and initialize the schema directly:
+```bash
+# Provide template collation fix and create the database if missing
+docker exec -i postgres psql -U pvlakehouse -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION; CREATE DATABASE pvlakehouse;"
+# Inject the schema script including authentication and RAG tables
+docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/002-create-lakehouse-tables.sql
 ```
 
-Expected output per table:
+No CSV-to-PostgreSQL loading step is required in the default runtime path.
+Silver and Gold data should be consumed from Iceberg through Trino.
 
-```
-Copying lh_silver_clean_hourly_energy ...
-  -> 153672 rows loaded into lh_silver_clean_hourly_energy
-...
-All CSV data loaded successfully.
-```
-
-Tables created:
-
-- `lh_silver_clean_hourly_energy`
-- `lh_silver_clean_hourly_weather`
-- `lh_silver_clean_hourly_air_quality`
-- `lh_gold_fact_solar_environmental`
-- `lh_gold_dim_facility`
-
-## 7) Check service status
+## 6) Run the Backend Server
 
 ```powershell
 docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env ps
