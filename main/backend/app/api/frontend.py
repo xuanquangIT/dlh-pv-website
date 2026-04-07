@@ -132,42 +132,19 @@ def home_page(request: Request, current_user: AuthUser = Depends(get_current_use
 @router.get("/login", response_class=HTMLResponse)
 def login_page(request: Request) -> HTMLResponse:
     next_path = _sanitize_next_path(request.query_params.get("next"))
+    error_code = request.query_params.get("error")
+    login_error_map = {
+        "inactive": "Your account is inactive. Please contact an administrator.",
+        "invalid_credentials": "Incorrect username or password.",
+    }
+    login_error = login_error_map.get(error_code, "")
     return templates.TemplateResponse(
         request=request,
         name="platform_portal/login.html",
         context={
             "page_title": UI_TEST_PAGES["login"],
             "next": next_path,
-            "active_facilities": 24,
-            "total_energy_gwh": "2.46",
-            "data_quality_pct": "96.2",
-            "model_score": "0.94",
-            "demo_users": [
-                {
-                    "name": "Aarav Kumar",
-                    "email": "a.kumar@pvlakehouse.io",
-                    "role": "ML Engineer",
-                    "access": "Full Access",
-                    "initials": "AK",
-                    "avatar_class": "avatar-blue",
-                },
-                {
-                    "name": "Sophie Vance",
-                    "email": "s.vance@pvlakehouse.io",
-                    "role": "Data Analyst",
-                    "access": "Read Only",
-                    "initials": "SV",
-                    "avatar_class": "avatar-rose",
-                },
-                {
-                    "name": "Marcus Obi",
-                    "email": "m.obi@pvlakehouse.io",
-                    "role": "Platform Admin",
-                    "access": "Super User",
-                    "initials": "MO",
-                    "avatar_class": "avatar-green",
-                },
-            ],
+            "login_error": login_error,
         },
     )
 

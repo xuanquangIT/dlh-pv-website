@@ -1,77 +1,130 @@
 (function () {
-  var USERS = [
-    { id: 1, firstName: "Marcus", lastName: "Obi", email: "m.obi@pvlakehouse.io", role: "Admin", status: "Active", lastActive: "Just now", joined: "Jan 2023", scope: "Full Platform Access", notes: "Super admin" },
-    { id: 9, firstName: "Elena", lastName: "Nguyen", email: "e.nguyen@pvlakehouse.io", role: "Data Engineer", status: "Active", lastActive: "12 min ago", joined: "Feb 2023", scope: "Pipeline Read-Only", notes: "Pipeline owner" },
-    { id: 2, firstName: "Aarav", lastName: "Kumar", email: "a.kumar@pvlakehouse.io", role: "ML Engineer", status: "Active", lastActive: "5 min ago", joined: "Mar 2023", scope: "Full Platform Access", notes: "" },
-    { id: 3, firstName: "Sophie", lastName: "Vance", email: "s.vance@pvlakehouse.io", role: "Data Analyst", status: "Active", lastActive: "1 hour ago", joined: "Apr 2023", scope: "Dashboard and Reports Only", notes: "" },
-    { id: 4, firstName: "Lena", lastName: "Fischer", email: "l.fischer@pvlakehouse.io", role: "ML Engineer", status: "Inactive", lastActive: "1 week ago", joined: "May 2023", scope: "ML Models Only", notes: "" },
-    { id: 5, firstName: "Dario", lastName: "Conti", email: "d.conti@pvlakehouse.io", role: "Data Engineer", status: "Pending", lastActive: "Not yet", joined: "Jun 2023", scope: "Dashboard and Reports Only", notes: "Invite pending" },
-    { id: 6, firstName: "Yuna", lastName: "Park", email: "y.park@pvlakehouse.io", role: "Data Analyst", status: "Suspended", lastActive: "2 months ago", joined: "Jul 2023", scope: "Pipeline Read-Only", notes: "Policy review" },
-    { id: 7, firstName: "Priya", lastName: "Nair", email: "p.nair@pvlakehouse.io", role: "ML Engineer", status: "Active", lastActive: "4 hours ago", joined: "Nov 2023", scope: "ML Models Only", notes: "" },
-    { id: 8, firstName: "Hana", lastName: "Suzuki", email: "h.suzuki@pvlakehouse.io", role: "Admin", status: "Active", lastActive: "20 min ago", joined: "Feb 2024", scope: "Full Platform Access", notes: "Co-admin" }
-  ];
+  var ROLE_LABELS = {
+    admin: "Admin",
+    data_engineer: "Data Engineer",
+    ml_engineer: "ML Engineer",
+    analyst: "Data Analyst",
+    system: "System"
+  };
+
+  var users = [];
 
   var state = {
-    filtered: USERS.slice(),
+    filtered: [],
     page: 1,
     perPage: 8,
     sortKey: "name",
     sortDirection: "asc",
-    editingId: null,
-    deletingId: null
+    selectedUserId: null
   };
 
+  function roleLabel(roleId) {
+    return ROLE_LABELS[roleId] || String(roleId || "").replace(/_/g, " ");
+  }
+
+  function formatDate(value) {
+    if (!value) {
+      return "-";
+    }
+
+    var date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "-";
+    }
+
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      year: "numeric"
+    });
+  }
+
   function getName(user) {
-    return user.firstName + " " + user.lastName;
+    var fullName = String(user.full_name || "").trim();
+    if (fullName) {
+      return fullName;
+    }
+    return String(user.username || "");
   }
 
   function getInitials(user) {
-    return String(user.firstName || "").charAt(0).toUpperCase() + String(user.lastName || "").charAt(0).toUpperCase();
+    var name = getName(user);
+    var parts = name.split(/\s+/).filter(Boolean).slice(0, 2);
+    var initials = parts.map(function (part) {
+      return part.charAt(0).toUpperCase();
+    }).join("");
+
+    return initials || "U";
+  }
+
+  function userStatus(user) {
+    return user.is_active ? "Active" : "Inactive";
   }
 
   function roleClass(role) {
     if (role === "Admin") return "badge-role-admin";
     if (role === "Data Engineer") return "badge-role-engineer";
     if (role === "ML Engineer") return "badge-role-ml";
-    if (role === "Data Analyst") return "badge-role-analyst";
     return "badge-role-analyst";
   }
 
   function statusClass(status) {
     if (status === "Active") return "status-active";
     if (status === "Inactive") return "status-inactive";
-    if (status === "Suspended") return "status-suspended";
     return "status-pending";
   }
 
-  function updateStats() {
-    var total = USERS.length;
-    var active = USERS.filter(function (u) { return u.status === "Active"; }).length;
-    var pending = USERS.filter(function (u) { return u.status === "Pending"; }).length;
-    var suspended = USERS.filter(function (u) { return u.status === "Suspended"; }).length;
-
-    document.getElementById("stat-total").textContent = String(total);
-    document.getElementById("stat-total-meta").textContent = total === 1 ? "1 user in system" : total + " users in system";
-
-    document.getElementById("stat-active").textContent = String(active);
-    document.getElementById("stat-active-meta").textContent = (Math.round((active / Math.max(total, 1)) * 100)) + " percent of total";
-
-    document.getElementById("stat-pending").textContent = String(pending);
-    document.getElementById("stat-pending-meta").textContent = pending === 0 ? "No pending invite" : pending + " invite(s) waiting";
-
-    document.getElementById("stat-suspended").textContent = String(suspended);
-    document.getElementById("stat-suspended-meta").textContent = suspended === 0 ? "No suspended account" : suspended + " account(s) require review";
+  function findUserById(userId) {
+    return users.find(function (item) {
+      return item.id === userId;
+    }) || null;
   }
 
   function compare(a, b) {
-    var aValue = state.sortKey === "name" ? getName(a).toLowerCase() : String(a[state.sortKey] || "").toLowerCase();
-    var bValue = state.sortKey === "name" ? getName(b).toLowerCase() : String(b[state.sortKey] || "").toLowerCase();
+    var left = "";
+    var right = "";
 
-    if (aValue === bValue) return 0;
-    if (state.sortDirection === "asc") {
-      return aValue < bValue ? -1 : 1;
+    if (state.sortKey === "name") {
+      left = getName(a).toLowerCase();
+      right = getName(b).toLowerCase();
+    } else if (state.sortKey === "role") {
+      left = roleLabel(a.role_id).toLowerCase();
+      right = roleLabel(b.role_id).toLowerCase();
+    } else if (state.sortKey === "status") {
+      left = userStatus(a).toLowerCase();
+      right = userStatus(b).toLowerCase();
+    } else if (state.sortKey === "joined") {
+      left = String(a.created_at || "").toLowerCase();
+      right = String(b.created_at || "").toLowerCase();
     }
-    return aValue > bValue ? -1 : 1;
+
+    if (left === right) return 0;
+    if (state.sortDirection === "asc") {
+      return left < right ? -1 : 1;
+    }
+    return left > right ? -1 : 1;
+  }
+
+  function updateStats() {
+    var total = users.length;
+    var active = users.filter(function (u) { return u.is_active; }).length;
+    var adminCount = users.filter(function (u) { return u.role_id === "admin"; }).length;
+    var inactive = users.filter(function (u) { return !u.is_active; }).length;
+
+    document.getElementById("stat-total").textContent = String(total);
+    document.getElementById("stat-total-meta").textContent =
+      total === 1 ? "1 user in system" : total + " users in system";
+
+    document.getElementById("stat-active").textContent = String(active);
+    document.getElementById("stat-active-meta").textContent =
+      Math.round((active / Math.max(total, 1)) * 100) + " percent of total";
+
+    document.getElementById("stat-admin").textContent = String(adminCount);
+    document.getElementById("stat-admin-meta").textContent =
+      adminCount === 0 ? "No admin account" : adminCount + " admin account(s)";
+
+    document.getElementById("stat-inactive").textContent = String(inactive);
+    document.getElementById("stat-inactive-meta").textContent =
+      inactive === 0 ? "No inactive account" : inactive + " inactive account(s)";
   }
 
   function applyFilters() {
@@ -79,11 +132,15 @@
     var role = document.getElementById("account-role-filter").value;
     var status = document.getElementById("account-status-filter").value;
 
-    state.filtered = USERS.filter(function (user) {
-      var haystack = (getName(user) + " " + user.email + " " + user.role).toLowerCase();
+    state.filtered = users.filter(function (user) {
+      var name = getName(user);
+      var roleName = roleLabel(user.role_id);
+      var userStatusText = userStatus(user);
+      var haystack = (name + " " + user.email + " " + roleName).toLowerCase();
+
       return (!query || haystack.indexOf(query) >= 0)
-        && (!role || user.role === role)
-        && (!status || user.status === status);
+        && (!role || roleName === role)
+        && (!status || userStatusText === status);
     }).sort(compare);
 
     state.page = 1;
@@ -95,23 +152,43 @@
     var start = (state.page - 1) * state.perPage;
     var pageRows = state.filtered.slice(start, start + state.perPage);
 
-    tbody.innerHTML = pageRows.map(function (user) {
-      return ""
+    if (!pageRows.length) {
+      tbody.innerHTML = ""
         + "<tr>"
-        + "<td><input type=\"checkbox\" class=\"row-selector\" data-id=\"" + user.id + "\"></td>"
-        + "<td><div class=\"user-cell\"><div class=\"user-avatar\">" + getInitials(user) + "</div><div><p class=\"user-name\">" + getName(user) + "</p><p class=\"user-email\">" + user.email + "</p></div></div></td>"
-        + "<td><span class=\"badge " + roleClass(user.role) + "\">" + user.role + "</span></td>"
-        + "<td><span class=\"status-label " + statusClass(user.status) + "\">" + user.status + "</span></td>"
-        + "<td>" + user.lastActive + "</td>"
-        + "<td>" + user.joined + "</td>"
-        + "<td><div class=\"row-actions\"><button data-action=\"edit\" data-id=\"" + user.id + "\">Edit</button><button data-action=\"toggle-status\" data-id=\"" + user.id + "\">Toggle</button><button data-action=\"delete\" data-id=\"" + user.id + "\">Delete</button></div></td>"
+        + "<td colspan=\"6\" style=\"text-align:center; padding:24px;\">No accounts found</td>"
         + "</tr>";
-    }).join("");
+    } else {
+      tbody.innerHTML = pageRows.map(function (user) {
+        var name = getName(user);
+        var roleName = roleLabel(user.role_id);
+        var status = userStatus(user);
 
-    document.getElementById("accounts-count").textContent = state.filtered.length + (state.filtered.length === 1 ? " user" : " users");
+        return ""
+          + "<tr>"
+          + "<td><div class=\"user-cell\"><div class=\"user-avatar\">" + getInitials(user)
+          + "</div><div><p class=\"user-name\">" + name + "</p><p class=\"user-email\">"
+          + user.email + "</p></div></div></td>"
+          + "<td><span class=\"badge " + roleClass(roleName) + "\">" + roleName + "</span></td>"
+          + "<td><span class=\"status-label " + statusClass(status) + "\">" + status + "</span></td>"
+          + "<td>-</td>"
+          + "<td>" + formatDate(user.created_at) + "</td>"
+          + "<td><div class=\"row-actions\">"
+          + "<button type=\"button\" data-action=\"toggle\" data-user-id=\"" + user.id + "\">"
+          + (user.is_active ? "Set Inactive" : "Set Active")
+          + "</button>"
+          + "<button type=\"button\" data-action=\"password\" data-user-id=\"" + user.id + "\">Reset Password</button>"
+          + "</div></td>"
+          + "</tr>";
+      }).join("");
+    }
+
+    document.getElementById("accounts-count").textContent =
+      state.filtered.length + (state.filtered.length === 1 ? " user" : " users");
 
     var end = Math.min(start + state.perPage, state.filtered.length);
-    document.getElementById("accounts-pagination-info").textContent = "Showing " + (state.filtered.length ? (start + 1) : 0) + " to " + end + " of " + state.filtered.length + " users";
+    document.getElementById("accounts-pagination-info").textContent =
+      "Showing " + (state.filtered.length ? (start + 1) : 0)
+      + " to " + end + " of " + state.filtered.length + " users";
 
     var maxPage = Math.max(1, Math.ceil(state.filtered.length / state.perPage));
     document.getElementById("accounts-prev-page").disabled = state.page <= 1;
@@ -124,14 +201,7 @@
     toast.classList.add("show");
     window.setTimeout(function () {
       toast.classList.remove("show");
-    }, 1800);
-  }
-
-  function resetForm() {
-    document.getElementById("accounts-form").reset();
-    document.getElementById("field-role").value = "ML Engineer";
-    document.getElementById("field-status").value = "Active";
-    document.getElementById("field-scope").value = "Full Platform Access";
+    }, 2000);
   }
 
   function openOverlay(modalId) {
@@ -148,128 +218,153 @@
     var overlay = document.getElementById("accounts-modal-overlay");
     overlay.classList.remove("open");
     overlay.setAttribute("aria-hidden", "true");
+    state.selectedUserId = null;
   }
 
-  function handleInviteClick() {
-    state.editingId = null;
-    document.getElementById("accounts-form-title").textContent = "Invite User";
-    document.getElementById("accounts-form-subtitle").textContent = "Create a new account invitation";
-    document.getElementById("accounts-submit-form-btn").textContent = "Send Invitation";
-    resetForm();
-    openOverlay("accounts-form-modal");
+  function apiRequest(url, method, payload) {
+    return fetch(url, {
+      method: method,
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      },
+      credentials: "same-origin",
+      body: payload ? JSON.stringify(payload) : undefined
+    }).then(function (response) {
+      if (!response.ok) {
+        return response.text().then(function (message) {
+          throw new Error(message || "Request failed");
+        });
+      }
+      if (response.status === 204) {
+        return null;
+      }
+      return response.json();
+    });
   }
 
-  function openEditForm(id) {
-    var user = USERS.find(function (item) { return item.id === id; });
-    if (!user) return;
-
-    state.editingId = id;
-    document.getElementById("accounts-form-title").textContent = "Edit Account";
-    document.getElementById("accounts-form-subtitle").textContent = "Update user profile and access";
-    document.getElementById("accounts-submit-form-btn").textContent = "Save Changes";
-
-    document.getElementById("field-first-name").value = user.firstName;
-    document.getElementById("field-last-name").value = user.lastName;
-    document.getElementById("field-email").value = user.email;
-    document.getElementById("field-role").value = user.role;
-    document.getElementById("field-status").value = user.status;
-    document.getElementById("field-scope").value = user.scope;
-    document.getElementById("field-notes").value = user.notes;
-
-    openOverlay("accounts-form-modal");
+  function loadUsers() {
+    return fetch("/auth/users", {
+      method: "GET",
+      headers: {
+        "Accept": "application/json"
+      },
+      credentials: "same-origin"
+    }).then(function (response) {
+      if (!response.ok) {
+        throw new Error("Failed to load account data");
+      }
+      return response.json();
+    });
   }
 
-  function openDeleteForm(id) {
-    var user = USERS.find(function (item) { return item.id === id; });
-    if (!user) return;
-
-    state.deletingId = id;
-    document.getElementById("accounts-delete-target").textContent = getName(user) + " (" + user.email + ")";
-    openOverlay("accounts-delete-modal");
+  function refreshUsers() {
+    return loadUsers().then(function (result) {
+      users = Array.isArray(result) ? result : [];
+      updateStats();
+      applyFilters();
+    });
   }
 
-  function saveForm() {
-    var firstName = document.getElementById("field-first-name").value.trim();
-    var lastName = document.getElementById("field-last-name").value.trim();
+  function showLoadError() {
+    var tbody = document.getElementById("accounts-tbody");
+    tbody.innerHTML = ""
+      + "<tr>"
+      + "<td colspan=\"6\" style=\"text-align:center; padding:24px;\">"
+      + "Unable to load account data"
+      + "</td>"
+      + "</tr>";
+  }
+
+  function onCreateAccount() {
+    var form = document.getElementById("accounts-create-form");
+    form.reset();
+    document.getElementById("field-role").value = "data_engineer";
+    document.getElementById("field-is-active").value = "true";
+    openOverlay("accounts-create-modal");
+  }
+
+  function submitCreateAccount() {
+    var username = document.getElementById("field-username").value.trim();
+    var fullName = document.getElementById("field-full-name").value.trim();
     var email = document.getElementById("field-email").value.trim();
-    var role = document.getElementById("field-role").value;
-    var status = document.getElementById("field-status").value;
-    var scope = document.getElementById("field-scope").value;
-    var notes = document.getElementById("field-notes").value.trim();
+    var roleId = document.getElementById("field-role").value;
+    var password = document.getElementById("field-password").value;
+    var isActive = document.getElementById("field-is-active").value === "true";
 
-    if (!firstName || !lastName || !email || email.indexOf("@") < 0) {
-      showToast("Please fill required fields with a valid email");
+    if (!username || !email || !password) {
+      showToast("Username, email, and password are required");
+      return;
+    }
+    if (password.length < 8) {
+      showToast("Password must be at least 8 characters");
       return;
     }
 
-    if (state.editingId) {
-      USERS = USERS.map(function (user) {
-        if (user.id !== state.editingId) return user;
-        return {
-          id: user.id,
-          firstName: firstName,
-          lastName: lastName,
-          email: email,
-          role: role,
-          status: status,
-          lastActive: user.lastActive,
-          joined: user.joined,
-          scope: scope,
-          notes: notes
-        };
-      });
-      showToast("Account updated successfully");
-    } else {
-      USERS.unshift({
-        id: Date.now(),
-        firstName: firstName,
-        lastName: lastName,
-        email: email,
-        role: role,
-        status: status,
-        lastActive: "Pending",
-        joined: "Apr 2026",
-        scope: scope,
-        notes: notes
-      });
-      showToast("Invitation created successfully");
+    apiRequest("/auth/users", "POST", {
+      username: username,
+      full_name: fullName || null,
+      email: email,
+      role_id: roleId,
+      password: password,
+      is_active: isActive
+    }).then(function () {
+      closeOverlay();
+      return refreshUsers();
+    }).then(function () {
+      showToast("Account created successfully");
+    }).catch(function () {
+      showToast("Failed to create account");
+    });
+  }
+
+  function openPasswordModal(userId) {
+    var user = findUserById(userId);
+    if (!user) {
+      return;
+    }
+    state.selectedUserId = user.id;
+    document.getElementById("accounts-password-subtitle").textContent =
+      getName(user) + " (" + user.username + ")";
+    document.getElementById("field-new-password").value = "";
+    openOverlay("accounts-password-modal");
+  }
+
+  function submitPasswordReset() {
+    var newPassword = document.getElementById("field-new-password").value;
+    if (!state.selectedUserId) {
+      return;
+    }
+    if (newPassword.length < 8) {
+      showToast("Password must be at least 8 characters");
+      return;
     }
 
-    closeOverlay();
-    applyFilters();
-    updateStats();
-  }
-
-  function confirmDelete() {
-    if (!state.deletingId) return;
-    USERS = USERS.filter(function (user) { return user.id !== state.deletingId; });
-    state.deletingId = null;
-    closeOverlay();
-    applyFilters();
-    updateStats();
-    showToast("Account deleted");
-  }
-
-  function toggleStatus(id) {
-    USERS = USERS.map(function (user) {
-      if (user.id !== id) return user;
-      var nextStatus = user.status === "Suspended" ? "Active" : "Suspended";
-      return {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: user.role,
-        status: nextStatus,
-        lastActive: user.lastActive,
-        joined: user.joined,
-        scope: user.scope,
-        notes: user.notes
-      };
+    apiRequest("/auth/users/" + state.selectedUserId + "/password", "PATCH", {
+      new_password: newPassword
+    }).then(function () {
+      closeOverlay();
+      showToast("Password updated");
+    }).catch(function () {
+      showToast("Failed to update password");
     });
-    applyFilters();
-    updateStats();
-    showToast("Account status changed");
+  }
+
+  function toggleUserStatus(userId) {
+    var user = findUserById(userId);
+    if (!user) {
+      return;
+    }
+
+    apiRequest("/auth/users/" + user.id + "/status", "PATCH", {
+      is_active: !user.is_active
+    }).then(function () {
+      return refreshUsers();
+    }).then(function () {
+      showToast("Account status updated");
+    }).catch(function () {
+      showToast("Failed to update account status");
+    });
   }
 
   function bindEvents() {
@@ -286,7 +381,9 @@
           state.sortKey = key;
           state.sortDirection = "asc";
         }
-        document.querySelectorAll(".sort-btn").forEach(function (btn) { btn.classList.remove("active"); });
+        document.querySelectorAll(".sort-btn").forEach(function (btn) {
+          btn.classList.remove("active");
+        });
         button.classList.add("active");
         applyFilters();
       });
@@ -309,31 +406,30 @@
 
     document.getElementById("accounts-tbody").addEventListener("click", function (event) {
       var target = event.target;
-      if (!target || target.tagName !== "BUTTON") return;
+      if (!target || target.tagName !== "BUTTON") {
+        return;
+      }
 
-      var id = Number(target.dataset.id);
-      var action = target.dataset.action;
-      if (action === "edit") {
-        openEditForm(id);
-      } else if (action === "delete") {
-        openDeleteForm(id);
-      } else if (action === "toggle-status") {
-        toggleStatus(id);
+      var action = target.getAttribute("data-action");
+      var userId = target.getAttribute("data-user-id");
+      if (!action || !userId) {
+        return;
+      }
+
+      if (action === "toggle") {
+        toggleUserStatus(userId);
+      } else if (action === "password") {
+        openPasswordModal(userId);
       }
     });
 
-    document.getElementById("invite-user-btn").addEventListener("click", handleInviteClick);
-    document.getElementById("export-audit-btn").addEventListener("click", function () {
-      showToast("Audit log export queued");
+    document.getElementById("create-account-btn").addEventListener("click", onCreateAccount);
+    document.getElementById("accounts-create-submit-btn").addEventListener("click", submitCreateAccount);
+    document.getElementById("accounts-password-submit-btn").addEventListener("click", submitPasswordReset);
+
+    document.querySelectorAll("[data-close-overlay='true']").forEach(function (button) {
+      button.addEventListener("click", closeOverlay);
     });
-
-    document.getElementById("accounts-close-form-modal").addEventListener("click", closeOverlay);
-    document.getElementById("accounts-cancel-form-btn").addEventListener("click", closeOverlay);
-    document.getElementById("accounts-submit-form-btn").addEventListener("click", saveForm);
-
-    document.getElementById("accounts-close-delete-modal").addEventListener("click", closeOverlay);
-    document.getElementById("accounts-cancel-delete-btn").addEventListener("click", closeOverlay);
-    document.getElementById("accounts-confirm-delete-btn").addEventListener("click", confirmDelete);
 
     document.getElementById("accounts-modal-overlay").addEventListener("click", function (event) {
       if (event.target.id === "accounts-modal-overlay") {
@@ -352,8 +448,14 @@
     if (window.PV_ROUTE !== "accounts") {
       return;
     }
+
     bindEvents();
-    applyFilters();
-    updateStats();
+
+    refreshUsers().catch(function () {
+      users = [];
+      updateStats();
+      applyFilters();
+      showLoadError();
+    });
   });
 })();

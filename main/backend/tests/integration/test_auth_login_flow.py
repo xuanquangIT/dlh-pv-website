@@ -19,7 +19,7 @@ os.environ.setdefault("AUTH_COOKIE_SECURE", "false")
 from app.api.dependencies import get_current_user
 from app.main import create_app
 from app.schemas.auth import Token
-from app.services.auth_service import AuthService
+from app.services.auth.service import AuthService
 
 
 def _stub_current_user() -> SimpleNamespace:

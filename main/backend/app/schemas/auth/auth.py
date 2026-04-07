@@ -6,13 +6,18 @@ from pydantic import BaseModel, EmailStr
 
 class UserBase(BaseModel):
     username: str
-    email: EmailStr
+    email: str
     full_name: str | None = None
     role_id: str
 
 
 class UserCreate(UserBase):
+    email: EmailStr
     password: str
+
+
+class AdminUserCreate(UserCreate):
+    is_active: bool = True
 
 
 class UserRead(UserBase):
@@ -31,3 +36,11 @@ class LoginRequest(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+
+
+class UserPasswordUpdate(BaseModel):
+    new_password: str

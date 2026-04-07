@@ -60,7 +60,7 @@
                     Sign in to access your solar intelligence dashboard and real-time analytics.
                 </p>
 
-                <p id="login-error" class="form-error" role="alert" aria-live="polite"></p>
+                <p id="login-error" class="form-error{% if login_error %} visible{% endif %}" role="alert" aria-live="polite">{{ login_error | default('') }}</p>
                 <p id="login-flash" class="form-flash" role="status" aria-live="polite"></p>
 
                 <form id="login-form" class="login-form" action="/auth/login" method="POST">
@@ -88,19 +88,6 @@
 
                     <button id="sign-in-btn" class="sign-in-btn" type="submit">Sign In</button>
                 </form>
-
-                <div class="demo-separator">Available Accounts</div>
-
-                <div class="demo-users" aria-label="Demo users">
-                    <div class="demo-user-card" onclick="document.getElementById('username').value='admin'; document.getElementById('password').value='admin123';">
-                        <span class="demo-avatar avatar-green">AD</span>
-                        <span class="demo-copy">
-                            <strong>Admin</strong>
-                            <small>Quan ly · Full Access</small>
-                        </span>
-                        <span class="demo-arrow" aria-hidden="true">Use</span>
-                    </div>
-                </div>
 
                 <footer class="auth-footer">
                     <span>PV Lakehouse v3.0</span>

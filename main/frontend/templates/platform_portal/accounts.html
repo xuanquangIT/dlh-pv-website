@@ -13,8 +13,7 @@
         <div class="page-subtitle">Manage users, roles, and access permissions across PV Lakehouse</div>
     </div>
     <div>
-        <button class="btn btn-sec" id="export-audit-btn" type="button">Export Audit Log</button>
-        <button class="btn btn-pri" id="invite-user-btn" type="button">Invite User</button>
+        <button class="btn btn-pri" id="create-account-btn" type="button">Create Account</button>
     </div>
 </section>
 
@@ -30,14 +29,14 @@
         <p class="stat-meta" id="stat-active-meta">0 percent of total</p>
     </article>
     <article class="stat-card stat-amber">
-        <p class="stat-label">Pending Invites</p>
-        <h2 class="stat-value" id="stat-pending">0</h2>
-        <p class="stat-meta" id="stat-pending-meta">No pending invite</p>
+        <p class="stat-label">Admin Accounts</p>
+        <h2 class="stat-value" id="stat-admin">0</h2>
+        <p class="stat-meta" id="stat-admin-meta">No admin account</p>
     </article>
     <article class="stat-card stat-red">
-        <p class="stat-label">Suspended</p>
-        <h2 class="stat-value" id="stat-suspended">0</h2>
-        <p class="stat-meta" id="stat-suspended-meta">Requires review</p>
+        <p class="stat-label">Inactive Accounts</p>
+        <h2 class="stat-value" id="stat-inactive">0</h2>
+        <p class="stat-meta" id="stat-inactive-meta">No inactive account</p>
     </article>
 </section>
 
@@ -60,8 +59,6 @@
             <option value="">All Status</option>
             <option value="Active">Active</option>
             <option value="Inactive">Inactive</option>
-            <option value="Suspended">Suspended</option>
-            <option value="Pending">Pending</option>
         </select>
     </div>
     <div class="accounts-toolbar-right">
@@ -74,13 +71,12 @@
         <table id="accounts-table">
             <thead>
                 <tr>
-                    <th style="width: 40px;"><input id="account-check-all" type="checkbox" aria-label="Select all rows"></th>
                     <th><button type="button" class="sort-btn" data-sort-key="name">User</button></th>
                     <th><button type="button" class="sort-btn" data-sort-key="role">Role</button></th>
                     <th><button type="button" class="sort-btn" data-sort-key="status">Status</button></th>
                     <th><button type="button" class="sort-btn" data-sort-key="lastActive">Last Active</button></th>
                     <th><button type="button" class="sort-btn" data-sort-key="joined">Joined</button></th>
-                    <th style="width: 170px;">Actions</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
             <tbody id="accounts-tbody"></tbody>
@@ -97,25 +93,25 @@
 </section>
 
 <div class="accounts-modal-overlay" id="accounts-modal-overlay" aria-hidden="true">
-    <section class="accounts-modal" id="accounts-form-modal" role="dialog" aria-modal="true" aria-labelledby="accounts-form-title">
+    <section class="accounts-modal" id="accounts-create-modal" role="dialog" aria-modal="true" aria-labelledby="accounts-create-title">
         <header class="accounts-modal-header">
             <div>
-                <h2 id="accounts-form-title">Invite User</h2>
-                <p id="accounts-form-subtitle">Create a new account invitation</p>
+                <h2 id="accounts-create-title">Create Account</h2>
+                <p>Add a new user account</p>
             </div>
-            <button type="button" class="modal-close-btn" id="accounts-close-form-modal">Close</button>
+            <button type="button" class="modal-close-btn" data-close-overlay="true">Close</button>
         </header>
 
         <div class="accounts-modal-body">
-            <form id="accounts-form" novalidate>
+            <form id="accounts-create-form" novalidate>
                 <div class="form-grid">
                     <div class="field-group">
-                        <label for="field-first-name">First Name</label>
-                        <input id="field-first-name" name="firstName" type="text" required>
+                        <label for="field-username">Username</label>
+                        <input id="field-username" name="username" type="text" required>
                     </div>
                     <div class="field-group">
-                        <label for="field-last-name">Last Name</label>
-                        <input id="field-last-name" name="lastName" type="text" required>
+                        <label for="field-full-name">Full Name</label>
+                        <input id="field-full-name" name="full_name" type="text">
                     </div>
                 </div>
 
@@ -127,64 +123,54 @@
                 <div class="form-grid">
                     <div class="field-group">
                         <label for="field-role">Role</label>
-                        <select id="field-role" name="role">
-                            <option>Data Engineer</option>
-                            <option>ML Engineer</option>
-                            <option>Data Analyst</option>
-                            <option>Admin</option>
+                        <select id="field-role" name="role_id">
+                            <option value="admin">Admin</option>
+                            <option value="data_engineer">Data Engineer</option>
+                            <option value="ml_engineer">ML Engineer</option>
+                            <option value="analyst">Data Analyst</option>
                         </select>
                     </div>
                     <div class="field-group">
-                        <label for="field-status">Status</label>
-                        <select id="field-status" name="status">
-                            <option>Active</option>
-                            <option>Inactive</option>
-                            <option>Suspended</option>
-                            <option>Pending</option>
+                        <label for="field-is-active">Status</label>
+                        <select id="field-is-active" name="is_active">
+                            <option value="true">Active</option>
+                            <option value="false">Inactive</option>
                         </select>
                     </div>
                 </div>
 
                 <div class="field-group">
-                    <label for="field-scope">Access Scope</label>
-                    <select id="field-scope" name="scope">
-                        <option>Full Platform Access</option>
-                        <option>Dashboard and Reports Only</option>
-                        <option>Pipeline Read-Only</option>
-                        <option>ML Models Only</option>
-                    </select>
-                </div>
-
-                <div class="field-group">
-                    <label for="field-notes">Notes</label>
-                    <input id="field-notes" name="notes" type="text" placeholder="Optional note">
+                    <label for="field-password">Temporary Password</label>
+                    <input id="field-password" name="password" type="password" minlength="8" required>
                 </div>
             </form>
         </div>
 
         <footer class="accounts-modal-footer">
-            <button type="button" class="btn btn-sec" id="accounts-cancel-form-btn">Cancel</button>
-            <button type="button" class="btn btn-pri" id="accounts-submit-form-btn">Save</button>
+            <button type="button" class="btn btn-sec" data-close-overlay="true">Cancel</button>
+            <button type="button" class="btn btn-pri" id="accounts-create-submit-btn">Create</button>
         </footer>
     </section>
 
-    <section class="accounts-modal accounts-modal-small" id="accounts-delete-modal" role="dialog" aria-modal="true" aria-labelledby="accounts-delete-title">
+    <section class="accounts-modal accounts-modal-small" id="accounts-password-modal" role="dialog" aria-modal="true" aria-labelledby="accounts-password-title">
         <header class="accounts-modal-header">
             <div>
-                <h2 id="accounts-delete-title">Delete Account</h2>
-                <p>Confirm account removal</p>
+                <h2 id="accounts-password-title">Reset Password</h2>
+                <p id="accounts-password-subtitle">Selected account</p>
             </div>
-            <button type="button" class="modal-close-btn" id="accounts-close-delete-modal">Close</button>
+            <button type="button" class="modal-close-btn" data-close-overlay="true">Close</button>
         </header>
 
         <div class="accounts-modal-body">
-            <p class="delete-text">This action is irreversible and will remove account access immediately.</p>
-            <p class="delete-target" id="accounts-delete-target">No account selected</p>
+            <div class="field-group">
+                <label for="field-new-password">New Password</label>
+                <input id="field-new-password" type="password" minlength="8" required>
+            </div>
         </div>
 
         <footer class="accounts-modal-footer">
-            <button type="button" class="btn btn-sec" id="accounts-cancel-delete-btn">Cancel</button>
-            <button type="button" class="btn btn-danger" id="accounts-confirm-delete-btn">Delete</button>
+            <button type="button" class="btn btn-sec" data-close-overlay="true">Cancel</button>
+            <button type="button" class="btn btn-pri" id="accounts-password-submit-btn">Update Password</button>
         </footer>
     </section>
 </div>
@@ -193,5 +179,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="{{ url_for('static', path='js/platform_portal/accounts_page.js') }}" defer></script>
+<script src="{{ url_for('static', path='js/platform_portal/accounts_page.js') }}?v=20260407-accounts-admin-actions" defer></script>
 {% endblock %}

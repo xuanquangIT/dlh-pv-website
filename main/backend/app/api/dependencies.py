@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_access_token
 from app.core.settings import get_auth_settings
 from app.db.database import AuthUser, get_db
-from app.repositories.user_repository import UserRepository
+from app.repositories.auth.user_repository import UserRepository
 
 
 def get_token_from_cookie(request: Request) -> str | None:
