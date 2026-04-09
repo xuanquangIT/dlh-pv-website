@@ -16,3 +16,4 @@ class ChatTopic(str, Enum):
     PIPELINE_STATUS = "pipeline_status"
     FORECAST_72H = "forecast_72h"
     DATA_QUALITY_ISSUES = "data_quality_issues"
+    FACILITY_INFO = "facility_info"

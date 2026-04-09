@@ -4,10 +4,11 @@ from functools import lru_cache
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import require_role
-from app.db.database import AuthUser
+from app.db.database import AuthUser, SessionLocal
 from app.core.settings import get_solar_chat_settings
 from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
+from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
     ChatRole,
@@ -48,8 +49,13 @@ def _resolve_user_chat_role(current_user: AuthUser) -> ChatRole:
 # ------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
-def _get_history_repository() -> ChatHistoryRepository:
+def _get_history_repository() -> ChatHistoryRepository | PostgresChatHistoryRepository:
     settings = get_solar_chat_settings()
+    backend = settings.history_backend.strip().lower()
+
+    if backend == "postgres":
+        return PostgresChatHistoryRepository(session_factory=SessionLocal)
+
     storage_dir = settings.resolved_data_root.parent / "chat_history"
     return ChatHistoryRepository(storage_dir=storage_dir)
 
@@ -112,8 +118,16 @@ def query_solar_ai_chat(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     service: SolarAIChatService = Depends(get_solar_ai_chat_service),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> SolarChatResponse:
     effective_role = _resolve_user_chat_role(current_user)
+    if request.session_id:
+        owned_session = history.get_session(
+            session_id=request.session_id,
+            owner_user_id=str(current_user.id),
+        )
+        if owned_session is None:
+            raise HTTPException(status_code=404, detail="Session not found.")
     scoped_request = request.model_copy(update={"role": effective_role})
     try:
         return service.handle_query(scoped_request)
@@ -142,27 +156,31 @@ def query_solar_ai_chat(
 def create_session(
     request: CreateSessionRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     effective_role = _resolve_user_chat_role(current_user)
-    return history.create_session(role=effective_role, title=request.title)
+    return history.create_session(
+        role=effective_role,
+        title=request.title,
+        owner_user_id=str(current_user.id),
+    )
 
 
 @router.get("/sessions", response_model=list[ChatSessionSummary])
 def list_sessions(
-    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> list[ChatSessionSummary]:
-    return history.list_sessions()
+    return history.list_sessions(owner_user_id=str(current_user.id))
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionDetail)
 def get_session(
     session_id: str,
-    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionDetail:
-    session = history.get_session(session_id)
+    session = history.get_session(session_id=session_id, owner_user_id=str(current_user.id))
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return session
@@ -171,10 +189,10 @@ def get_session(
 @router.delete("/sessions/{session_id}", status_code=204)
 def delete_session(
     session_id: str,
-    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> None:
-    if not history.delete_session(session_id):
+    if not history.delete_session(session_id=session_id, owner_user_id=str(current_user.id)):
         raise HTTPException(status_code=404, detail="Session not found.")
 
 
@@ -182,10 +200,14 @@ def delete_session(
 def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
-    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
-    updated = history.update_session_title(session_id=session_id, title=request.title)
+    updated = history.update_session_title(
+        session_id=session_id,
+        title=request.title,
+        owner_user_id=str(current_user.id),
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return updated
@@ -195,10 +217,14 @@ def update_session_title(
 def rename_session(
     session_id: str,
     request: UpdateSessionTitleRequest,
-    _: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
-    updated = history.update_session_title(session_id=session_id, title=request.title)
+    updated = history.update_session_title(
+        session_id=session_id,
+        title=request.title,
+        owner_user_id=str(current_user.id),
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return updated
@@ -213,13 +239,14 @@ def fork_session(
     session_id: str,
     request: ForkSessionRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository = Depends(_get_history_repository),
+    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     effective_role = _resolve_user_chat_role(current_user)
     result = history.fork_session(
         source_session_id=session_id,
         new_title=request.title,
         new_role=effective_role,
+        owner_user_id=str(current_user.id),
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Source session not found.")

@@ -57,6 +57,10 @@ class BaseRepository:
         "temperature_2m", "wind_speed_10m", "wind_gusts_10m",
         "shortwave_radiation", "cloud_cover",
         "quality_issues", "quality_flag",
+        "facility_name", "facility_code",
+        "location_lat", "location_lng",
+        "total_capacity_mw", "total_capacity_registered_mw",
+        "total_capacity_maximum_mw",
     })
 
     def __init__(self, settings: SolarChatSettings) -> None:

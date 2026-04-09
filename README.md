@@ -1,12 +1,12 @@
 # PV Lakehouse - Local Setup Guide
 
-This guide explains how to set up a local Python virtual environment, install required libraries, and run Docker services (PostgreSQL and Trino).
+This guide explains how to set up a local Python virtual environment, install required libraries, initialize local PostgreSQL tables, and run Docker services (PostgreSQL and Trino).
 
 ## Prerequisites
 
 - Python 3.11+
 - Docker Desktop (with Docker Compose)
-- PowerShell (Windows)
+- PowerShell (Windows) or Bash (Linux/WSL)
 
 ## 1) Create and activate a virtual environment
 
@@ -15,6 +15,13 @@ From repository root:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+```
+
+Linux / WSL:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
 ```
 
 If PowerShell blocks activation, run:
@@ -63,16 +70,22 @@ Current stack includes:
 - PostgreSQL container: `dlhpv_fresh_postgres`
 - Trino container: `dlhpv_fresh_trino`
 
-## 5) Initialize local PostgreSQL tables (auth + RAG)
+## 5) Initialize local PostgreSQL tables (auth + RAG + chat history)
 
 Run from repository root after Docker services are up.
 
-The migration script `main/002-create-lakehouse-tables.sql` creates only local
-operational tables for authentication and RAG:
+The migration scripts below create only local operational tables:
+
+- main/002-create-lakehouse-tables.sql
+- main/003-create-chat-history-tables.sql
+
+Created tables include:
 
 - `auth_roles`
 - `auth_users` (contains default admin/demo accounts)
 - `rag_documents` (vector storage)
+- `chat_sessions`
+- `chat_messages`
 
 Silver and Gold analytical datasets are queried directly from Iceberg via Trino.
 You do not need to create local PostgreSQL copies of `lh_silver_*` or
@@ -82,6 +95,8 @@ You do not need to create local PostgreSQL copies of `lh_silver_*` or
 ```powershell
 docker cp dlh-pv-dashboard/main/002-create-lakehouse-tables.sql dlhpv_fresh_postgres:/tmp/002-create-lakehouse-tables.sql
 docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/002-create-lakehouse-tables.sql
+docker cp dlh-pv-dashboard/main/003-create-chat-history-tables.sql dlhpv_fresh_postgres:/tmp/003-create-chat-history-tables.sql
+docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/003-create-chat-history-tables.sql
 ```
 
 **WSL / Linux Component:**
@@ -89,14 +104,15 @@ If your container is simply named `postgres` and you encounter a missing databas
 ```bash
 # Provide template collation fix and create the database if missing
 docker exec -i postgres psql -U pvlakehouse -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION; CREATE DATABASE pvlakehouse;"
-# Inject the schema script including authentication and RAG tables
+# Inject the schema scripts including authentication, RAG, and chat history tables
 docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/002-create-lakehouse-tables.sql
+docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/003-create-chat-history-tables.sql
 ```
 
 No CSV-to-PostgreSQL loading step is required in the default runtime path.
 Silver and Gold data should be consumed from Iceberg through Trino.
 
-## 6) Run the Backend Server
+## 6) Verify services
 
 ```powershell
 docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env ps
@@ -106,6 +122,15 @@ Optional health checks:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File main/docker/scripts/stack-health.ps1
+```
+
+## 7) Run the backend API (local)
+
+From repository root:
+
+```bash
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
 ```
 
 ## 8) Stop services

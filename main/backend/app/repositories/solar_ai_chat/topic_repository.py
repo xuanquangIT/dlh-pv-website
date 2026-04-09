@@ -436,3 +436,109 @@ class TopicRepository(BaseRepository):
         if not low_score:
             result["summary"] = "All facilities have quality score >= 95%. No issues detected."
         return result
+
+    # ------ Facility Info -------------------------------------------------
+
+    def _facility_info(
+        self, facility_name: str | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        """Return facility details including location and capacity."""
+        return self._with_trino_fallback(
+            "facility_info",
+            lambda: self._facility_info_trino(facility_name),
+            lambda: self._facility_info_csv(facility_name),
+            [{"layer": "Gold", "dataset": "lh_gold_dim_facility"}],
+        )
+
+    def _facility_info_trino(
+        self, facility_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Query dim_facility via Trino."""
+        sql = (
+            "SELECT facility_code, facility_name,"
+            " location_lat, location_lng,"
+            " total_capacity_mw,"
+            " total_capacity_registered_mw,"
+            " total_capacity_maximum_mw"
+            " FROM lh_gold_dim_facility"
+        )
+        if facility_name:
+            safe_name = facility_name.replace("'", "''")
+            sql += (
+                f" WHERE LOWER(facility_name)"
+                f" LIKE LOWER('%{safe_name}%')"
+                f" OR LOWER(facility_code)"
+                f" LIKE LOWER('%{safe_name}%')"
+            )
+        sql += " ORDER BY facility_name"
+        rows = self._execute_query(sql)
+        return self._build_facility_result(rows)
+
+    def _facility_info_csv(
+        self, facility_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Fallback: read dim_facility from CSV."""
+        all_rows = self._load_csv(
+            self._dataset_path("lh_gold_dim_facility.csv"),
+        )
+        if facility_name:
+            needle = facility_name.lower()
+            filtered = [
+                r for r in all_rows
+                if needle in (r.get("facility_name") or "").lower()
+                or needle in (r.get("facility_code") or "").lower()
+            ]
+        else:
+            filtered = all_rows
+
+        rows = [
+            {
+                "facility_code": r.get("facility_code", ""),
+                "facility_name": r.get("facility_name", ""),
+                "location_lat": r.get("location_lat"),
+                "location_lng": r.get("location_lng"),
+                "total_capacity_mw": r.get("total_capacity_mw"),
+                "total_capacity_registered_mw": r.get(
+                    "total_capacity_registered_mw",
+                ),
+                "total_capacity_maximum_mw": r.get(
+                    "total_capacity_maximum_mw",
+                ),
+            }
+            for r in filtered
+        ]
+        return self._build_facility_result(rows)
+
+    def _build_facility_result(
+        self, rows: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Format facility rows with GPS coordinates.
+
+        Geographic interpretation (country, state) is
+        delegated to the LLM which has built-in knowledge
+        of world geography from lat/lng coordinates.
+        """
+        facilities = []
+        for r in rows:
+            lat = self._to_float(
+                str(r.get("location_lat", "")), default=0.0,
+            )
+            lng = self._to_float(
+                str(r.get("location_lng", "")), default=0.0,
+            )
+            facilities.append({
+                "facility_code": r.get("facility_code", ""),
+                "facility_name": r.get("facility_name", ""),
+                "location_lat": round(lat, 6),
+                "location_lng": round(lng, 6),
+                "total_capacity_mw": round(
+                    self._to_float(
+                        str(r.get("total_capacity_mw", "")),
+                    ), 2,
+                ),
+            })
+        return {
+            "facility_count": len(facilities),
+            "facilities": facilities,
+        }
+

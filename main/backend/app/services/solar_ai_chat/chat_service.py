@@ -11,6 +11,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
+from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.schemas.solar_ai_chat import (
     ChatMessage,
@@ -59,7 +60,7 @@ class SolarAIChatService:
         repository: SolarChatRepository,
         intent_service: VietnameseIntentService,
         model_router: GeminiModelRouter | None,
-        history_repository: ChatHistoryRepository | None = None,
+        history_repository: ChatHistoryRepository | PostgresChatHistoryRepository | None = None,
         vector_repo: "VectorRepository | None" = None,
         embedding_client: "GeminiEmbeddingClient | None" = None,
     ) -> None:

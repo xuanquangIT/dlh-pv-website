@@ -13,13 +13,82 @@ from typing import Any
 from app.schemas.solar_ai_chat import ChatMessage, ChatRole, ChatTopic, SourceMetadata
 
 # Maximum messages from history to include in any prompt
-MAX_HISTORY_IN_PROMPT = 6
-# Maximum characters from a single past message to include
-MAX_MESSAGE_PREVIEW_LENGTH = 300
+MAX_HISTORY_IN_PROMPT = 10
+# Recent messages get full content; older ones get truncated
+MAX_RECENT_FULL_LENGTH = 500
+# Older messages get a shorter preview
+MAX_OLD_PREVIEW_LENGTH = 150
+# Number of recent messages to keep at full length
+NUM_RECENT_FULL = 4
 
 
 def format_source_text(sources: list[SourceMetadata]) -> str:
     return ", ".join(f"{s.layer}:{s.dataset}" for s in sources)
+
+
+def _build_system_prompt(role_value: str) -> str:
+    """Build a rich system prompt with domain context.
+
+    Does NOT hardcode country/region — the chatbot discovers
+    station locations dynamically via get_facility_info tool.
+    """
+    return (
+        "Ban la Solar AI, tro ly thong minh cua he thong PV Lakehouse "
+        "- nen tang phan tich du lieu nang luong mat troi.\n\n"
+        "HE THONG PV LAKEHOUSE:\n"
+        "- Kien truc du lieu: Bronze (raw) -> Silver (clean) -> Gold (dimensional)\n"
+        "- Luu tru: Apache Iceberg tren MinIO, truy van qua Trino\n"
+        "- Du lieu: nang luong (MWh), thoi tiet (buc xa, nhiet do, gio, may), "
+        "chat luong khong khi (AQI), mo hinh ML du bao\n"
+        "- Cac tram nang luong mat troi duoc luu trong bang dim_facility "
+        "voi toa do GPS (latitude, longitude) va cong suat (MW)\n\n"
+        "QUY TAC TRA LOI:\n"
+        "1. Tra loi bang tieng Viet, ngan gon, ro rang, toi da 8 cau\n"
+        "2. LUON su dung tool de lay du lieu thuc truoc khi tra loi "
+        "- KHONG bao gio doan so lieu\n"
+        "3. Khi nguoi dung hoi ve vi tri, quoc gia, toa do, "
+        "o dau -> dung tool get_facility_info\n"
+        "4. Khi nguoi dung hoi bao cao theo ngay -> dung tool "
+        "get_station_daily_report\n"
+        "5. Khi nguoi dung hoi follow-up, tham khao lich su "
+        "hoi thoai de hieu ngu canh\n"
+        "6. Khi nhan duoc toa do GPS (lat/lng), ban bat buoc phai "
+        "chuyen doi toa do do thanh thong tin dia ly cu the (bang, "
+        "khu vuc, quoc gia...) bang kien thuc san co cua ban. Khong duoc "
+        "tu choi hoac tra loi rang ban chi co the cung cap toa do.\n"
+        "7. Tuye doi KHONG de cap den cac kien truc du lieu noi bo "
+        "(nhu: bang Gold, bang Silver, nguon Bronze, dim_facility, "
+        "lh_silver_*, lh_gold_*) hay bat ky tu ngu ky thuat nao lien quan "
+        "den CSDL trong cau tra loi cho nguoi dung.\n"
+        "8. Neu khong tim thay du lieu, thong bao ro rang thay vi doan\n"
+        f"9. Vai tro nguoi dung hien tai: {role_value}\n"
+    )
+
+
+def _format_history_messages(
+    history: list[ChatMessage],
+) -> list[dict[str, object]]:
+    """Format chat history with smart truncation.
+
+    Recent messages get full content, older ones are truncated.
+    """
+    trimmed = history[-MAX_HISTORY_IN_PROMPT:]
+    messages: list[dict[str, object]] = []
+    total = len(trimmed)
+    for idx, msg in enumerate(trimmed):
+        role = "user" if msg.sender == "user" else "model"
+        is_recent = (total - idx) <= NUM_RECENT_FULL
+        max_len = (
+            MAX_RECENT_FULL_LENGTH if is_recent
+            else MAX_OLD_PREVIEW_LENGTH
+        )
+        content = msg.content[:max_len]
+        if len(msg.content) > max_len:
+            content += "..."
+        messages.append(
+            {"role": role, "parts": [{"text": content}]},
+        )
+    return messages
 
 
 def build_tool_messages(
@@ -29,21 +98,26 @@ def build_tool_messages(
 ) -> list[dict[str, object]]:
     """Build the Gemini messages list for a tool-calling request."""
     messages: list[dict[str, object]] = []
-    system_text = (
-        "Ban la tro ly Solar AI Chat cho nguoi dung khong ky thuat. "
-        "Hay tra loi bang tieng Viet ngan gon, ro rang, toi da 5 cau. "
-        f"Vai tro nguoi dung: {role_value}. "
-        "Su dung tool de lay du lieu truoc khi tra loi."
+    system_text = _build_system_prompt(role_value)
+    messages.append(
+        {"role": "user", "parts": [{"text": system_text}]},
     )
-    messages.append({"role": "user", "parts": [{"text": system_text}]})
-    messages.append({"role": "model", "parts": [{"text": "Da hieu. Toi se su dung tool de tra loi."}]})
+    messages.append(
+        {"role": "model", "parts": [{
+            "text": (
+                "Da hieu. Toi la Solar AI, tro ly PV Lakehouse. "
+                "Toi se su dung tool de lay du lieu thuc "
+                "va tra loi chinh xac bang tieng Viet."
+            ),
+        }]},
+    )
 
     if history:
-        for msg in history[-MAX_HISTORY_IN_PROMPT:]:
-            role = "user" if msg.sender == "user" else "model"
-            messages.append({"role": role, "parts": [{"text": msg.content[:MAX_MESSAGE_PREVIEW_LENGTH]}]})
+        messages.extend(_format_history_messages(history))
 
-    messages.append({"role": "user", "parts": [{"text": request_message}]})
+    messages.append(
+        {"role": "user", "parts": [{"text": request_message}]},
+    )
     return messages
 
 
@@ -60,16 +134,27 @@ def build_prompt(
     metrics_json = json.dumps(metrics, ensure_ascii=False)
 
     parts = [
-        "Ban la tro ly Solar AI Chat cho nguoi dung khong ky thuat. "
-        "Hay tra loi bang tieng Viet ngan gon, ro rang, toi da 5 cau. "
-        "Can neu chi so chinh, y nghia ngu canh va nhac nguon du lieu Silver/Gold.",
+        _build_system_prompt(role.value),
+        "Hay tra loi dua tren du lieu da truy xuat ben duoi. "
+        "Can neu chi so chinh, y nghia ngu canh va nhac "
+        "nguon du lieu Silver/Gold.",
     ]
 
     if history:
         parts.append("Lich su hoi thoai gan day:")
-        for msg in history[-MAX_HISTORY_IN_PROMPT:]:
+        trimmed = history[-MAX_HISTORY_IN_PROMPT:]
+        total = len(trimmed)
+        for idx, msg in enumerate(trimmed):
             label = "Nguoi dung" if msg.sender == "user" else "Tro ly"
-            parts.append(f"  {label}: {msg.content[:MAX_MESSAGE_PREVIEW_LENGTH]}")
+            is_recent = (total - idx) <= NUM_RECENT_FULL
+            max_len = (
+                MAX_RECENT_FULL_LENGTH if is_recent
+                else MAX_OLD_PREVIEW_LENGTH
+            )
+            content = msg.content[:max_len]
+            if len(msg.content) > max_len:
+                content += "..."
+            parts.append(f"  {label}: {content}")
 
     parts.extend([
         f"Vai tro nguoi dung: {role.value}",
@@ -138,11 +223,34 @@ def build_fallback_summary(
 
     if topic is ChatTopic.DATA_QUALITY_ISSUES:
         return (
-            "Các cơ sở có điểm chất lượng thấp đã được xác định kèm nguyên nhân khả dĩ từ cờ chất lượng. "
+            "Các cơ sở có điểm chất lượng thấp đã được xác định "
+            "kèm nguyên nhân khả dĩ từ cờ chất lượng. "
             f"Nguồn: {source_text}."
         )
 
-    raise ValueError(f"No fallback summary defined for topic '{topic.value}'.")
+    if topic is ChatTopic.FACILITY_INFO:
+        facilities = metrics.get("facilities", [])
+        count = metrics.get("facility_count", len(facilities))
+        if not facilities:
+            return (
+                "Không tìm thấy thông tin trạm phù hợp. "
+                f"Nguồn: {source_text}."
+            )
+        lines = [f"Tìm thấy {count} trạm năng lượng mặt trời:"]
+        for f in facilities[:8]:
+            name = f.get("facility_name", "Unknown")
+            lat = f.get("location_lat", 0)
+            lng = f.get("location_lng", 0)
+            cap = f.get("total_capacity_mw", 0)
+            lines.append(
+                f"  - {name}: tọa độ ({lat}, {lng}), "
+                f"Công suất {cap} MW"
+            )
+        return "\n".join(lines)
+
+    raise ValueError(
+        f"No fallback summary for topic '{topic.value}'."
+    )
 
 
 def format_extreme_fallback(
