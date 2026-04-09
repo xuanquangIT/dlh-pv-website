@@ -41,5 +41,6 @@ class SolarChatRepository(ExtremeRepository, TopicRepository, ReportRepository):
             ChatTopic.PIPELINE_STATUS: self._pipeline_status,
             ChatTopic.FORECAST_72H: self._forecast_72h,
             ChatTopic.DATA_QUALITY_ISSUES: self._data_quality_issues,
+            ChatTopic.FACILITY_INFO: self._facility_info,
         }
         return handlers[topic]()

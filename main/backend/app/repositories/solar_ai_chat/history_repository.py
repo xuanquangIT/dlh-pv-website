@@ -25,13 +25,14 @@ class ChatHistoryRepository:
         self._storage_dir.mkdir(parents=True, exist_ok=True)
         self._invalid_role_log_keys: set[str] = set()
 
-    def create_session(self, role: ChatRole, title: str) -> ChatSessionSummary:
+    def create_session(self, role: ChatRole, title: str, owner_user_id: str) -> ChatSessionSummary:
         session_id = uuid.uuid4().hex[:12]
         now = datetime.now(tz=timezone.utc)
         session_data: dict[str, Any] = {
             "session_id": session_id,
             "title": title,
             "role": role.value,
+            "owner_user_id": owner_user_id,
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
             "messages": [],
@@ -46,11 +47,13 @@ class ChatHistoryRepository:
             message_count=0,
         )
 
-    def list_sessions(self) -> list[ChatSessionSummary]:
+    def list_sessions(self, owner_user_id: str) -> list[ChatSessionSummary]:
         sessions: list[ChatSessionSummary] = []
         for file_path in sorted(self._storage_dir.glob("*.json"), reverse=True):
             data = self._read_file(file_path)
             if data is None:
+                continue
+            if data.get("owner_user_id") != owner_user_id:
                 continue
             try:
                 sessions.append(self._deserialize_session_summary(data))
@@ -60,9 +63,11 @@ class ChatHistoryRepository:
         sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return sessions
 
-    def get_session(self, session_id: str) -> ChatSessionDetail | None:
+    def get_session(self, session_id: str, owner_user_id: str) -> ChatSessionDetail | None:
         data = self._load_session(session_id)
         if data is None:
+            return None
+        if data.get("owner_user_id") != owner_user_id:
             return None
         try:
             role = self._parse_role(data.get("role", ""))
@@ -79,10 +84,11 @@ class ChatHistoryRepository:
             messages=messages,
         )
 
-    def delete_session(self, session_id: str) -> bool:
-        file_path = self._session_path(session_id)
-        if not file_path.exists():
+    def delete_session(self, session_id: str, owner_user_id: str) -> bool:
+        data = self._load_session(session_id)
+        if data is None or data.get("owner_user_id") != owner_user_id:
             return False
+        file_path = self._session_path(session_id)
         file_path.unlink()
         return True
 
@@ -90,9 +96,12 @@ class ChatHistoryRepository:
         self,
         session_id: str,
         title: str,
+        owner_user_id: str,
     ) -> ChatSessionSummary | None:
         data = self._load_session(session_id)
         if data is None:
+            return None
+        if data.get("owner_user_id") != owner_user_id:
             return None
 
         now = datetime.now(tz=timezone.utc)
@@ -141,10 +150,13 @@ class ChatHistoryRepository:
         self,
         source_session_id: str,
         new_title: str,
+        owner_user_id: str,
         new_role: ChatRole | None = None,
     ) -> ChatSessionSummary | None:
         source_data = self._load_session(source_session_id)
         if source_data is None:
+            return None
+        if source_data.get("owner_user_id") != owner_user_id:
             return None
 
         # C6: new_role is already a ChatRole, no need to unwrap and re-wrap
@@ -157,7 +169,7 @@ class ChatHistoryRepository:
             )
             return None
         title = new_title or f"Fork of {source_data['title']}"
-        new_session = self.create_session(role=role, title=title)
+        new_session = self.create_session(role=role, title=title, owner_user_id=owner_user_id)
 
         # C7: source_data is still valid; create_session writes to a different file
         new_data = self._load_session(new_session.session_id)

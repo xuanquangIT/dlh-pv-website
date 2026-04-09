@@ -11,6 +11,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
+from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.schemas.solar_ai_chat import (
     ChatMessage,
@@ -59,7 +60,7 @@ class SolarAIChatService:
         repository: SolarChatRepository,
         intent_service: VietnameseIntentService,
         model_router: GeminiModelRouter | None,
-        history_repository: ChatHistoryRepository | None = None,
+        history_repository: ChatHistoryRepository | PostgresChatHistoryRepository | None = None,
         vector_repo: "VectorRepository | None" = None,
         embedding_client: "GeminiEmbeddingClient | None" = None,
     ) -> None:
@@ -105,64 +106,85 @@ class SolarAIChatService:
             role_value=request.role.value,
             history=history_messages,
         )
-        tool_result = self._model_router.generate_with_tools(messages, TOOL_DECLARATIONS)
+        
+        all_metrics: dict[str, Any] = {}
+        all_sources: list[SourceMetadata] = []
+        topic = ChatTopic.GENERAL
+        last_model_used = ""
+        last_fallback_used = False
 
-        if tool_result.text is not None:
-            topic = self._detect_topic_from_text(request.message)
-            return self._finalize_response(
-                request=request,
-                answer=tool_result.text,
-                topic=topic,
-                metrics={},
-                sources=[],
-                model_used=tool_result.model_used,
-                fallback_used=tool_result.fallback_used,
-                started=started,
-                intent_confidence=TEXT_ONLY_CONFIDENCE,
-            )
+        for _ in range(5):
+            tool_result = self._model_router.generate_with_tools(messages, TOOL_DECLARATIONS)
+            last_model_used = tool_result.model_used
+            last_fallback_used = tool_result.fallback_used
 
-        fc = tool_result.function_call
-        metrics, source_rows = self._tool_executor.execute(fc.name, fc.arguments, request.role)
-        sources = [SourceMetadata(**row) for row in source_rows]
-        topic = ChatTopic(TOOL_NAME_TO_TOPIC.get(fc.name, "general"))
+            if tool_result.text is not None:
+                if not all_metrics:
+                    topic = self._detect_topic_from_text(request.message)
+                return self._finalize_response(
+                    request=request,
+                    answer=tool_result.text,
+                    topic=topic,
+                    metrics=all_metrics,
+                    sources=all_sources,
+                    model_used=last_model_used,
+                    fallback_used=last_fallback_used,
+                    started=started,
+                    intent_confidence=TOOL_PATH_CONFIDENCE if all_metrics else TEXT_ONLY_CONFIDENCE,
+                )
 
-        if self._is_station_daily_report_no_data(fc.name, metrics):
-            answer = self._build_station_report_no_data_answer(metrics)
-            logger.info(
-                "station_daily_report_no_data_guard date=%s available_date_min=%s available_date_max=%s",
-                metrics.get("report_date"),
-                metrics.get("available_date_min"),
-                metrics.get("available_date_max"),
-            )
-            return self._finalize_response(
-                request=request,
-                answer=answer,
-                topic=topic,
-                metrics=metrics,
-                sources=sources,
-                model_used="deterministic-summary",
-                fallback_used=True,
-                started=started,
-                intent_confidence=TOOL_PATH_CONFIDENCE,
-            )
+            fc = tool_result.function_call
+            if fc is None:
+                break
+                
+            try:
+                metrics, source_rows = self._tool_executor.execute(fc.name, fc.arguments, request.role)
+                all_metrics.update(metrics)
+                for row in source_rows:
+                    sm = SourceMetadata(**row)
+                    if sm not in all_sources:
+                        all_sources.append(sm)
 
-        messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
-        messages.append({
-            "role": "user",
-            "parts": [{"functionResponse": {"name": fc.name, "response": {"result": metrics}}}],
-        })
+                if topic == ChatTopic.GENERAL:
+                    topic = ChatTopic(TOOL_NAME_TO_TOPIC.get(fc.name, "general"))
 
-        final_result = self._model_router.send_tool_result(messages, tool_result.model_used)
-        answer = final_result.text or build_fallback_summary(topic, metrics, sources)
+                if self._is_station_daily_report_no_data(fc.name, metrics):
+                    answer = self._build_station_report_no_data_answer(metrics)
+                    logger.info("station_daily_report_no_data_guard triggered")
+                    return self._finalize_response(
+                        request=request,
+                        answer=answer,
+                        topic=topic,
+                        metrics=all_metrics,
+                        sources=all_sources,
+                        model_used="deterministic-summary",
+                        fallback_used=True,
+                        started=started,
+                        intent_confidence=TOOL_PATH_CONFIDENCE,
+                    )
 
+                messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": fc.name, "response": {"result": metrics}}}],
+                })
+            except Exception as e:
+                logger.warning("Tool execution failed in loop: %s", e)
+                messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": fc.name, "response": {"error": str(e)}}}],
+                })
+
+        answer = build_fallback_summary(topic, all_metrics, all_sources)
         return self._finalize_response(
             request=request,
             answer=answer,
             topic=topic,
-            metrics=metrics,
-            sources=sources,
-            model_used=tool_result.model_used,
-            fallback_used=tool_result.fallback_used,
+            metrics=all_metrics,
+            sources=all_sources,
+            model_used=last_model_used,
+            fallback_used=last_fallback_used,
             started=started,
             intent_confidence=TOOL_PATH_CONFIDENCE,
         )

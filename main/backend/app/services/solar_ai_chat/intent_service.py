@@ -88,12 +88,127 @@ class VietnameseIntentService:
             "so co so",
             "facility count",
         ),
+        ChatTopic.FACILITY_INFO: (
+            "vi tri",
+            "o dau",
+            "toa do",
+            "quoc gia",
+            "nuoc nao",
+            "bang nao",
+            "tinh nao",
+            "gps",
+            "location",
+            "latitude",
+            "longitude",
+            "cong suat",
+            "capacity",
+            "thong tin tram",
+            "thong tin co so",
+            "thong tin nha may",
+            "dia ly",
+            "dia chi",
+            "nam o",
+            "dat o",
+            "tram nao o",
+            "co so o",
+        ),
     }
+
+    _TOPIC_CANONICAL_PHRASES: dict[ChatTopic, list[str]] = {
+        ChatTopic.DATA_QUALITY_ISSUES: [
+            "Chất lượng dữ liệu hôm nay có tốt không",
+            "Có trạm nào bị cảnh báo lỗi dữ liệu hay AQI thấp không",
+            "Nguyên nhân trạm bị rớt dữ liệu là gì",
+        ],
+        ChatTopic.FORECAST_72H: [
+            "Dự báo sản lượng năng lượng trong 72 giờ tới",
+            "Năng lượng khoảng tin cậy 3 ngày tiếp theo",
+            "Xu hướng thời tiết 3 ngày tới ra sao",
+        ],
+        ChatTopic.PIPELINE_STATUS: [
+            "Tiến độ chạy ETL pipeline dạo này tốt không",
+            "Pipeline trạng thái báo lỗi hay cảnh báo gì không",
+        ],
+        ChatTopic.ML_MODEL: [
+            "Thông số mô hình GBT đang dùng bản v4.1 hay v4.2",
+            "Mô hình học máy dự báo có độ chính xác R-squared bao nhiêu",
+        ],
+        ChatTopic.ENERGY_PERFORMANCE: [
+            "Cho xem sản lượng cao nhất và thấp nhất hôm nay",
+            "Top trạm có hiệu suất năng lượng tốt nhất là gì",
+            "Tình hình thời tiết tác động thế nào đến công suất",
+        ],
+        ChatTopic.SYSTEM_OVERVIEW: [
+            "Tổng quan toàn bộ hệ thống các cơ sở năng lượng",
+            "Tổng bao nhiêu cơ sở tổng sản lượng thế nào",
+        ],
+        ChatTopic.FACILITY_INFO: [
+            "Trạm năng lượng này nằm ở tọa độ nào",
+            "Vị trí địa lý quốc gia nào thành phố nào",
+            "Thông tin địa chỉ của cơ sở là gì",
+        ],
+    }
+
+    def __init__(self, embedding_client=None) -> None:
+        self._embedding_client = embedding_client
+        self._topic_embeddings: dict[ChatTopic, list[list[float]]] = {}
+        
+    def initialize_semantic_router(self) -> None:
+        """Pre-compute embeddings for canonical phrases."""
+        if not self._embedding_client:
+            return
+        logger = __import__("logging").getLogger(__name__)
+        try:
+            flat_phrases = []
+            topic_map = []
+            for topic, phrases in self._TOPIC_CANONICAL_PHRASES.items():
+                for phrase in phrases:
+                    flat_phrases.append(phrase)
+                    topic_map.append(topic)
+                    
+            embeddings = self._embedding_client.embed_batch(flat_phrases)
+            
+            for i, topic in enumerate(topic_map):
+                if topic not in self._topic_embeddings:
+                    self._topic_embeddings[topic] = []
+                self._topic_embeddings[topic].append(embeddings[i])
+            logger.info("Semantic router loaded %d canonical vectors.", len(flat_phrases))
+        except Exception as e:
+            logger.error("Failed to init semantic router semantics: %s", e)
+
+    def _cosine_similarity(self, vec_a: list[float], vec_b: list[float]) -> float:
+        dot = sum(a * b for a, b in zip(vec_a, vec_b))
+        norm_a = sum(a * a for a in vec_a) ** 0.5
+        norm_b = sum(b * b for b in vec_b) ** 0.5
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
 
     def detect_intent(self, message: str) -> IntentDetectionResult:
         normalized_message = normalize_vietnamese_text(message)
         if not normalized_message:
             raise ValueError("The question cannot be empty.")
+
+        if self._embedding_client and self._topic_embeddings:
+            try:
+                user_vec = self._embedding_client.embed_text(message)
+                max_sim = 0.0
+                best_topic = None
+                
+                for topic, vecs in self._topic_embeddings.items():
+                    for v in vecs:
+                        sim = self._cosine_similarity(user_vec, v)
+                        if sim > max_sim:
+                            max_sim = sim
+                            best_topic = topic
+                            
+                if max_sim > 0.65 and best_topic:
+                    return IntentDetectionResult(
+                        topic=best_topic,
+                        confidence=round(max_sim, 2)
+                    )
+            except Exception as e:
+                __import__("logging").getLogger(__name__).warning("Semantic routing failed, fallback to keyword: %s", e)
 
         matched_topic: ChatTopic | None = None
         matched_score = 0

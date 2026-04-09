@@ -53,6 +53,7 @@ class ToolExecutor:
             "get_extreme_energy": self._get_extreme_energy,
             "get_extreme_weather": self._get_extreme_weather,
             "get_station_daily_report": self._get_station_daily_report,
+            "get_facility_info": self._get_facility_info,
             "search_documents": self._search_documents,
         }
 
@@ -127,6 +128,15 @@ class ToolExecutor:
             return date.fromisoformat(value)
         except (ValueError, TypeError):
             return None
+
+    def _get_facility_info(
+        self, arguments: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        """Return facility details including location and capacity."""
+        facility_name = arguments.get("facility_name")
+        return self._repository._facility_info(
+            facility_name=facility_name,
+        )
 
     def _search_documents(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
         if not self._vector_repo or not self._embedding_client:

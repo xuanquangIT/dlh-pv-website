@@ -60,6 +60,7 @@ class SolarChatSettings(BaseSettings):
     rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
+    history_backend: str = Field(default="file", alias="SOLAR_CHAT_HISTORY_BACKEND")
 
     @property
     def resolved_data_root(self) -> Path:

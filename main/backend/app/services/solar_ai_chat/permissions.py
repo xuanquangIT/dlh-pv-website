@@ -19,6 +19,7 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.PIPELINE_STATUS,
         ChatTopic.FORECAST_72H,
         ChatTopic.DATA_QUALITY_ISSUES,
+        ChatTopic.FACILITY_INFO,
     },
     ChatRole.ML_ENGINEER: {
         ChatTopic.GENERAL,
@@ -26,6 +27,7 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.ENERGY_PERFORMANCE,
         ChatTopic.ML_MODEL,
         ChatTopic.FORECAST_72H,
+        ChatTopic.FACILITY_INFO,
     },
     ChatRole.DATA_ANALYST: {
         ChatTopic.GENERAL,
@@ -34,6 +36,7 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.ML_MODEL,
         ChatTopic.FORECAST_72H,
         ChatTopic.DATA_QUALITY_ISSUES,
+        ChatTopic.FACILITY_INFO,
     },
     ChatRole.ADMIN: {
         ChatTopic.GENERAL,
@@ -43,6 +46,7 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.PIPELINE_STATUS,
         ChatTopic.FORECAST_72H,
         ChatTopic.DATA_QUALITY_ISSUES,
+        ChatTopic.FACILITY_INFO,
     },
 }
 
