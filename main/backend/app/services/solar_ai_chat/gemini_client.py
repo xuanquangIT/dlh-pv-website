@@ -98,20 +98,6 @@ class GeminiModelRouter:
         )
         return self._parse_tool_response(raw, model_used, fallback_used)
 
-    def send_tool_result(
-        self,
-        messages: list[dict[str, object]],
-        model_name: str,
-    ) -> GeminiToolResult:
-        if not self._api_key:
-            raise ModelUnavailableError("Gemini API key is not configured.")
-
-        payload: dict[str, object] = {"contents": messages}
-        raw = self._call_model_raw(model_name, payload)
-        return self._parse_tool_response(
-            raw, model_name,
-            fallback_used=(model_name == self._fallback_model),
-        )
 
     # ------------------------------------------------------------------
     # Model fallback routing (eliminates D3 duplication)
@@ -132,41 +118,53 @@ class GeminiModelRouter:
         ]
         last_error: Exception = RuntimeError("No models configured.")
 
-        for model, is_fallback in models:
-            started = time.perf_counter()
-            try:
-                result = action(model)
-                duration_ms = int((time.perf_counter() - started) * 1000)
-                logger.info(
-                    log_event,
-                    extra={
-                        "provider": "google_gemini",
-                        "selected_model": model,
-                        "latency_ms": duration_ms,
-                        "fallback_used": is_fallback,
-                    },
-                )
-                return result, model, is_fallback
-            except Exception as err:
-                last_error = err
-                log_fn = logger.warning if not is_fallback else logger.error
-                error_text = str(err)
-                error_kind = "rate_limited" if _is_rate_limit_error(err) else "request_failed"
-                log_fn(
-                    "%s_failed provider=google_gemini model=%s fallback_used=%s kind=%s error=%s",
-                    log_event,
-                    model,
-                    is_fallback,
-                    error_kind,
-                    error_text,
-                    extra={
-                        "provider": "google_gemini",
-                        "model": model,
-                        "error": error_text,
-                        "kind": error_kind,
-                        "fallback_used": is_fallback,
-                    },
-                )
+        for attempt in range(1, 4):
+            for model, is_fallback in models:
+                started = time.perf_counter()
+                try:
+                    result = action(model)
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    logger.info(
+                        log_event,
+                        extra={
+                            "provider": "google_gemini",
+                            "selected_model": model,
+                            "latency_ms": duration_ms,
+                            "fallback_used": is_fallback,
+                        },
+                    )
+                    return result, model, is_fallback
+                except Exception as err:
+                    last_error = err
+                    log_fn = logger.warning if not is_fallback else logger.error
+                    error_text = str(err)
+                    is_rate_limit = _is_rate_limit_error(err)
+                    error_kind = "rate_limited" if is_rate_limit else "request_failed"
+                    log_fn(
+                        "%s_failed provider=google_gemini model=%s fallback_used=%s kind=%s error=%s",
+                        log_event,
+                        model,
+                        is_fallback,
+                        error_kind,
+                        error_text,
+                        extra={
+                            "provider": "google_gemini",
+                            "model": model,
+                            "error": error_text,
+                            "kind": error_kind,
+                            "fallback_used": is_fallback,
+                        },
+                    )
+            
+            # Exhausted models in this attempt. Should we retry?
+            last_err_str = str(last_error)
+            if attempt < 3 and ("429" in last_err_str or "503" in last_err_str or "Too Many" in last_err_str):
+                sleep_sec = 2.0 * attempt
+                logger.warning("All models failed (429/503). Retrying %d/3 in %.1fs...", attempt, sleep_sec)
+                time.sleep(sleep_sec)
+                continue
+                
+            break # Not retryable or exhausted all attempts
 
         raise ModelUnavailableError(
             "Primary and fallback Gemini models are both unavailable."

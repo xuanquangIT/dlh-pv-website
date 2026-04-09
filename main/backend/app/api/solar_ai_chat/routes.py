@@ -89,13 +89,17 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
     if settings.gemini_api_key:
         model_router = GeminiModelRouter(settings=settings)
 
+    embedding_client = _get_embedding_client()
+    intent_svc = VietnameseIntentService(embedding_client=embedding_client)
+    intent_svc.initialize_semantic_router()
+
     return SolarAIChatService(
         repository=SolarChatRepository(settings=settings),
-        intent_service=VietnameseIntentService(),
+        intent_service=intent_svc,
         model_router=model_router,
         history_repository=_get_history_repository(),
         vector_repo=_get_vector_repository(),
-        embedding_client=_get_embedding_client(),
+        embedding_client=embedding_client,
     )
 
 
