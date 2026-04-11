@@ -1,0 +1,218 @@
+/* Data Pipeline Dashboard Styles */
+
+.pipeline-container {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.pipeline-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+}
+
+.pipeline-card {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(0,0,0,0.05);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.pipeline-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.05);
+}
+
+.pipeline-card h3 {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    color: #555;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.pipeline-card .value {
+    font-size: 28px;
+    font-weight: 700;
+    color: #111;
+}
+
+.pipeline-dag {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    background: #fff;
+    padding: 24px;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+    border: 1px solid rgba(0,0,0,0.05);
+}
+
+.dag-layer {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    position: relative;
+    padding-left: 20px;
+}
+
+.dag-layer::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    border-radius: 4px;
+}
+
+.layer-bronze::before { background: #cd7f32; }
+.layer-silver::before { background: #c0c0c0; }
+.layer-gold::before { background: #ffd700; }
+.layer-ml::before { background: #9c27b0; }
+
+.task-node {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    min-width: 160px;
+    cursor: default;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.task-node:hover {
+    background: #fff;
+    border-color: #94a3b8;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.task-status {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+}
+
+.status-SUCCESS { background: #10b981; }
+.status-FAILED { background: #ef4444; }
+.status-RUNNING { background: #3b82f6; animation: pulse 1.5s infinite; }
+.status-PENDING { background: #cbd5e1; }
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+    70% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+.task-node .task-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    margin-bottom: 4px;
+}
+
+.task-node .task-duration {
+    font-size: 11px;
+    color: #64748b;
+}
+
+/* Recent Runs Table */
+.recent-runs {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.recent-runs th, .recent-runs td {
+    padding: 12px 16px;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.recent-runs th {
+    font-size: 12px;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    background: #f8fafc;
+}
+
+.recent-runs tbody tr:hover {
+    background: #f1f5f9;
+}
+
+/* Tabs UI */
+.pipeline-tabs {
+    display: flex;
+    gap: 20px;
+    border-bottom: 2px solid #e2e8f0;
+    margin-bottom: 20px;
+}
+
+.tab-btn {
+    background: none;
+    border: none;
+    padding: 12px 16px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #64748b;
+    cursor: pointer;
+    position: relative;
+    transition: color 0.2s;
+}
+
+.tab-btn:hover {
+    color: #0f172a;
+}
+
+.tab-btn.active {
+    color: #0ea5e9;
+}
+
+.tab-btn.active::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #0ea5e9;
+    border-radius: 2px 2px 0 0;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Cancel Button */
+.btn-danger-sm {
+    background: #fff;
+    color: #ef4444;
+    border: 1px solid #ef4444;
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-danger-sm:hover {
+    background: #ef4444;
+    color: #fff;
+}
