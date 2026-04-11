@@ -9,6 +9,14 @@ from urllib.request import Request, urlopen
 from app.core.settings import SolarChatSettings
 
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 _TEMP_UNAVAILABLE_COOLDOWN_SECONDS = 45.0
 
@@ -162,7 +170,6 @@ class LLMModelRouter:
             "solar_chat_tool_call",
             max_attempts=1,
             skip_models=self._tool_call_disabled_models,
-            prefer_fallback_first=True,
         )
         return self._parse_openai_tool_response(raw, model_used, fallback_used)
 
@@ -202,7 +209,6 @@ class LLMModelRouter:
         log_event: str,
         max_attempts: int = 3,
         skip_models: set[str] | None = None,
-        prefer_fallback_first: bool = False,
     ) -> tuple[Any, str, bool]:
         now = time.monotonic()
         if now < self._cooldown_until:
@@ -214,9 +220,6 @@ class LLMModelRouter:
         models = [(self._primary_model, False)]
         if self._fallback_model and self._fallback_model != self._primary_model:
             models.append((self._fallback_model, True))
-
-        if prefer_fallback_first:
-            models = sorted(models, key=lambda item: 0 if item[1] else 1)
 
         if skip_models:
             models = [
@@ -267,23 +270,40 @@ class LLMModelRouter:
                     saw_temporary_unavailable = saw_temporary_unavailable or is_temporary_unavailable
                     error_kind = "rate_limited" if _is_rate_limit_error(err) else "request_failed"
                     has_more_models = model_index < (len(models) - 1)
-                    log_fn = logger.debug if has_more_models else logger.warning
-                    log_fn(
-                        "%s_failed provider=%s model=%s fallback_used=%s kind=%s error=%s",
-                        log_event,
-                        self._api_format,
-                        model,
-                        is_fallback,
-                        error_kind,
-                        error_text,
-                        extra={
-                            "provider": self._api_format,
-                            "model": model,
-                            "error": error_text,
-                            "kind": error_kind,
-                            "fallback_used": is_fallback,
-                        },
-                    )
+                    if has_more_models:
+                        logger.info(
+                            "%s_failed provider=%s model=%s fallback_used=%s kind=%s will_try_next_model=True error=%s",
+                            log_event,
+                            self._api_format,
+                            model,
+                            is_fallback,
+                            error_kind,
+                            error_text,
+                            extra={
+                                "provider": self._api_format,
+                                "model": model,
+                                "error": error_text,
+                                "kind": error_kind,
+                                "fallback_used": is_fallback,
+                            },
+                        )
+                    else:
+                        logger.warning(
+                            "%s_failed provider=%s model=%s fallback_used=%s kind=%s error=%s",
+                            log_event,
+                            self._api_format,
+                            model,
+                            is_fallback,
+                            error_kind,
+                            error_text,
+                            extra={
+                                "provider": self._api_format,
+                                "model": model,
+                                "error": error_text,
+                                "kind": error_kind,
+                                "fallback_used": is_fallback,
+                            },
+                        )
 
             last_err_str = str(last_error)
             if attempt < effective_attempts and (

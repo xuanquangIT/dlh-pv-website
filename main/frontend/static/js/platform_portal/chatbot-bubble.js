@@ -23,8 +23,54 @@ var selectedSessionIds = new Set();
 
 function escapeHtml(text) {
     var d = document.createElement("div");
-    d.textContent = text;
+    d.textContent = String(text || "");
     return d.innerHTML;
+}
+
+function fallbackAssistantFormatting(content) {
+    return escapeHtml(content || "")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\n/g, "<br>");
+}
+
+function formatAssistantContent(content) {
+    var markdown = String(content || "");
+    var canParseMarkdown = Boolean(window.marked && typeof window.marked.parse === "function");
+    var canSanitizeHtml = Boolean(window.DOMPurify && typeof window.DOMPurify.sanitize === "function");
+
+    if (!canParseMarkdown || !canSanitizeHtml) {
+        return fallbackAssistantFormatting(markdown);
+    }
+
+    var parsedHtml = window.marked.parse(markdown, {
+        gfm: true,
+        breaks: true,
+        headerIds: false,
+        mangle: false,
+    });
+
+    var safeHtml = window.DOMPurify.sanitize(parsedHtml, {
+        USE_PROFILES: { html: true },
+    });
+
+    var wrapper = document.createElement("div");
+    wrapper.innerHTML = safeHtml;
+    wrapper.querySelectorAll("a[href]").forEach(function (anchor) {
+        anchor.setAttribute("target", "_blank");
+        anchor.setAttribute("rel", "noopener noreferrer");
+    });
+    return wrapper.innerHTML;
+}
+
+function buildTypingIndicatorHtml() {
+    return [
+        '<span class="cb-typing-indicator" role="status" aria-label="Assistant is typing">',
+        '<span class="cb-typing-dot"></span>',
+        '<span class="cb-typing-dot"></span>',
+        '<span class="cb-typing-dot"></span>',
+        "</span>"
+    ].join("");
 }
 
 function logClientError(context, error) {
@@ -238,16 +284,38 @@ function renderMessages(msgs) {
     });
 }
 
-function appendMessage(sender, content, sources) {
+function appendMessage(sender, content, sources, thinkingTrace, isPending) {
     var existing = messagesEl.querySelector(".cb-empty");
     if (existing) existing.remove();
 
     var div = document.createElement("div");
     div.className = "cb-msg cb-msg-" + sender;
 
-    var html = escapeHtml(content);
+    var html;
+    if (sender === "assistant" && isPending) {
+        div.classList.add("cb-msg-typing");
+        html = buildTypingIndicatorHtml();
+    } else if (sender === "assistant") {
+        html = formatAssistantContent(content);
+    } else {
+        html = escapeHtml(content);
+    }
     div.innerHTML = html;
+    div.setAttribute("data-message-text", content || "");
+
     messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return div;
+}
+
+function updateAssistantMessageContent(messageEl, content, thinkingTrace) {
+    if (!messageEl) return;
+    messageEl.classList.remove("cb-msg-typing");
+    var nextText = content || "";
+    if (messageEl.getAttribute("data-message-text") !== nextText) {
+        messageEl.innerHTML = formatAssistantContent(nextText);
+        messageEl.setAttribute("data-message-text", nextText);
+    }
     messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -271,6 +339,7 @@ form.addEventListener("submit", async function (e) {
 
     isSending = true;
     sendBtn.disabled = true;
+    var pendingAssistantEl = null;
 
     try {
         if (!activeSessionId) {
@@ -280,12 +349,7 @@ form.addEventListener("submit", async function (e) {
         appendMessage("user", message);
         inputEl.value = "";
 
-        // Typing indicator
-        var typing = document.createElement("div");
-        typing.className = "cb-msg cb-msg-assistant cb-typing";
-        typing.textContent = "Thinking...";
-        messagesEl.appendChild(typing);
-        messagesEl.scrollTop = messagesEl.scrollHeight;
+        pendingAssistantEl = appendMessage("assistant", "", null, null, true);
 
         var resp = await fetch("/solar-ai-chat/query", {
             method: "POST",
@@ -297,21 +361,24 @@ form.addEventListener("submit", async function (e) {
             }),
         });
 
-        // Remove typing indicator
-        if (typing.parentNode) typing.remove();
-
         var body = await resp.json();
         if (!resp.ok) {
             var detail = typeof body.detail === "string" ? body.detail : "Request failed.";
+            if (pendingAssistantEl && pendingAssistantEl.parentNode) {
+                pendingAssistantEl.remove();
+            }
             appendError(detail);
             return;
         }
 
-        appendMessage("assistant", body.answer, body.sources);
+        updateAssistantMessageContent(
+            pendingAssistantEl,
+            body.answer || ""
+        );
     } catch (err) {
-        // Remove typing indicator if still present
-        var typingEl = messagesEl.querySelector(".cb-typing");
-        if (typingEl) typingEl.remove();
+        if (pendingAssistantEl && pendingAssistantEl.parentNode) {
+            pendingAssistantEl.remove();
+        }
         appendError(err.message || "Connection error.");
     } finally {
         isSending = false;

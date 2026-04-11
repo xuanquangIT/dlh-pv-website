@@ -10,6 +10,14 @@ from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.permissions import ROLE_TOOL_PERMISSIONS
 
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
 
 # Weather metric label/unit lookup — shared with chat_service._WEATHER_METRIC_CATALOG
 WEATHER_METRIC_LABELS: dict[str, tuple[str, str]] = {
@@ -42,6 +50,12 @@ class ToolExecutor:
         arguments: dict[str, Any],
         role: ChatRole,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        logger.info(
+            "solar_chat_tool_executor_start tool=%s role=%s args=%s",
+            function_name,
+            role.value,
+            self._short(arguments, 300),
+        )
         topic_handlers = {
             "get_system_overview": self._get_topic_metrics,
             "get_energy_performance": self._get_topic_metrics,
@@ -65,9 +79,31 @@ class ToolExecutor:
 
         if function_name in TOOL_NAME_TO_TOPIC and handler == self._get_topic_metrics:
             topic = ChatTopic(TOOL_NAME_TO_TOPIC[function_name])
-            return self._repository.fetch_topic_metrics(topic)
+            metrics, sources = self._repository.fetch_topic_metrics(topic)
+            logger.info(
+                "solar_chat_tool_executor_done tool=%s topic=%s metric_keys=%s source_count=%d",
+                function_name,
+                topic.value,
+                sorted(list(metrics.keys())),
+                len(sources),
+            )
+            return metrics, sources
 
-        return handler(arguments)
+        metrics, sources = handler(arguments)
+        logger.info(
+            "solar_chat_tool_executor_done tool=%s metric_keys=%s source_count=%d",
+            function_name,
+            sorted(list(metrics.keys())),
+            len(sources),
+        )
+        return metrics, sources
+
+    @staticmethod
+    def _short(value: Any, limit: int = 300) -> str:
+        text = str(value)
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
 
     @staticmethod
     def _validate_permission(function_name: str, role: ChatRole) -> None:

@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -17,6 +17,18 @@ class SolarChatRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=100)
 
 
+class ThinkingStep(BaseModel):
+    step: str
+    detail: str
+    status: Literal["info", "warning", "success"] = "info"
+
+
+class ThinkingTrace(BaseModel):
+    summary: str
+    steps: list[ThinkingStep] = Field(default_factory=list)
+    trace_id: str | None = None
+
+
 class SolarChatResponse(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
@@ -30,3 +42,4 @@ class SolarChatResponse(BaseModel):
     latency_ms: int
     intent_confidence: float
     warning_message: str | None = None
+    thinking_trace: ThinkingTrace | None = None

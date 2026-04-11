@@ -29,6 +29,7 @@ from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailab
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
 from app.services.solar_ai_chat.intent_service import VietnameseIntentService
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
+from app.services.solar_ai_chat.web_search_client import WebSearchClient
 
 router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
 
@@ -81,6 +82,14 @@ def _get_embedding_client() -> GeminiEmbeddingClient | None:
 
 
 @lru_cache(maxsize=1)
+def _get_web_search_client() -> WebSearchClient | None:
+    settings = get_solar_chat_settings()
+    if not settings.websearch_api_key:
+        return None
+    return WebSearchClient(settings=settings)
+
+
+@lru_cache(maxsize=1)
 def get_solar_ai_chat_service() -> SolarAIChatService:
     settings = get_solar_chat_settings()
 
@@ -89,7 +98,12 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
         model_router = LLMModelRouter(settings=settings)
 
     embedding_client = _get_embedding_client()
-    intent_svc = VietnameseIntentService(embedding_client=embedding_client)
+    intent_svc = VietnameseIntentService(
+        embedding_client=embedding_client,
+        semantic_enabled=settings.intent_semantic_enabled,
+        semantic_min_confidence=settings.intent_semantic_min_confidence,
+        semantic_keyword_score_threshold=settings.intent_keyword_fastpath_score,
+    )
     intent_svc.initialize_semantic_router()
 
     return SolarAIChatService(
@@ -99,6 +113,7 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
         history_repository=_get_history_repository(),
         vector_repo=_get_vector_repository(),
         embedding_client=embedding_client,
+        web_search_client=_get_web_search_client(),
     )
 
 
@@ -215,10 +230,10 @@ def benchmark_solar_ai_chat_model_only(
 
     model_router = LLMModelRouter(settings=settings)
     prompt = (
-        "Ban la Solar AI. Tra loi bang tieng Viet ngan gon, ro rang, toi da 8 cau.\n"
-        f"Vai tro nguoi dung: {effective_role.value}\n"
-        f"Cau hoi: {request.message}\n"
-        "Khong goi tool, khong truy xuat du lieu bo sung."
+        "You are Solar AI. Answer concisely and clearly in English (max 8 sentences).\n"
+        f"User Role: {effective_role.value}\n"
+        f"Question: {request.message}\n"
+        "Do not call tools, do not retrieve additional data."
     )
 
     model_started = time.perf_counter()

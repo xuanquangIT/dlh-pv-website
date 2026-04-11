@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import time
 from typing import Any
@@ -17,9 +18,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--password", default="admin123", help="Login password.")
     parser.add_argument(
         "--mode",
-        choices=["full", "model-only"],
-        default="full",
-        help="Benchmark mode: full pipeline or model-only (no RAG/data fetch).",
+        choices=["chat", "full", "model-only"],
+        default="chat",
+        help=(
+            "Benchmark mode: "
+            "chat=/solar-ai-chat/query (matches website), "
+            "full=/query/benchmark, model-only=/query/benchmark/model-only"
+        ),
     )
     parser.add_argument("--role", default="data_engineer", help="Chat role value in request body.")
     parser.add_argument("--message", required=True, help="Message to send for benchmark.")
@@ -29,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=180.0, help="Overall request timeout.")
     parser.add_argument("--connect-timeout-seconds", type=float, default=10.0, help="Connection timeout.")
     parser.add_argument("--print-answer", action="store_true", help="Print assistant answer text.")
+    parser.add_argument("--print-metrics", action="store_true", help="Print key_metrics JSON from chat response.")
     return parser.parse_args()
 
 
@@ -110,6 +116,45 @@ def benchmark_full_once(
         "topic": str(chat_response.get("topic", "")),
         "model_used": str(chat_response.get("model_used", "")),
         "fallback_used": bool(chat_response.get("fallback_used", False)),
+        "warning_message": str(chat_response.get("warning_message", "") or ""),
+        "key_metrics": chat_response.get("key_metrics", {}),
+    }
+
+
+def chat_once(
+    client: httpx.Client,
+    role: str,
+    session_id: str,
+    message: str,
+) -> dict[str, Any]:
+    request_payload = {
+        "role": role,
+        "session_id": session_id,
+        "message": message,
+    }
+
+    started = time.perf_counter()
+    response = client.post("/solar-ai-chat/query", json=request_payload)
+    roundtrip_ms = int((time.perf_counter() - started) * 1000)
+
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Chat request failed with status {response.status_code}: {response.text[:500]}"
+        )
+
+    payload = response.json()
+    return {
+        "benchmark_type": "chat",
+        "roundtrip_ms": roundtrip_ms,
+        "latency_ms": int(payload.get("latency_ms", -1)),
+        "answer": str(payload.get("answer", "")),
+        "topic": str(payload.get("topic", "")),
+        "model_used": str(payload.get("model_used", "")),
+        "fallback_used": bool(payload.get("fallback_used", False)),
+        "warning_message": str(payload.get("warning_message", "") or ""),
+        "intent_confidence": float(payload.get("intent_confidence", 0.0)),
+        "key_metrics": payload.get("key_metrics", {}),
+        "sources": payload.get("sources", []),
     }
 
 
@@ -170,7 +215,7 @@ def main() -> int:
     with httpx.Client(base_url=base_url, timeout=timeout) as client:
         login(client=client, username=args.username, password=args.password)
         session_id = ""
-        if args.mode == "full":
+        if args.mode in {"full", "chat"}:
             session_id = args.session_id.strip()
             if not session_id:
                 session_id = create_session(client=client, role=args.role, title=args.session_title)
@@ -203,6 +248,31 @@ def main() -> int:
                         fallback=result["fallback_used"],
                     )
                 )
+                if result.get("warning_message"):
+                    print(f"  warning={result['warning_message']}")
+            elif args.mode == "chat":
+                result = chat_once(
+                    client=client,
+                    role=args.role,
+                    session_id=session_id,
+                    message=args.message,
+                )
+                print(
+                    "run={run} type={rtype} roundtrip_ms={roundtrip} latency_ms={latency} "
+                    "topic={topic} model={model} fallback={fallback} intent_confidence={intent:.2f} source_count={source_count}".format(
+                        run=run_index,
+                        rtype=result["benchmark_type"],
+                        roundtrip=result["roundtrip_ms"],
+                        latency=result["latency_ms"],
+                        topic=result["topic"],
+                        model=result["model_used"],
+                        fallback=result["fallback_used"],
+                        intent=result["intent_confidence"],
+                        source_count=len(result.get("sources", [])),
+                    )
+                )
+                if result.get("warning_message"):
+                    print(f"  warning={result['warning_message']}")
             else:
                 result = benchmark_model_only_once(
                     client=client,
@@ -227,10 +297,27 @@ def main() -> int:
 
             results.append(result)
 
-        roundtrip_values = [int(item["roundtrip_ms"]) for item in results]
-        server_values = [int(item["server_elapsed_ms"]) for item in results if int(item["server_elapsed_ms"]) >= 0]
-        service_values = [int(item["service_latency_ms"]) for item in results if int(item.get("service_latency_ms", -1)) >= 0]
-        model_values = [int(item["model_generation_ms"]) for item in results if int(item.get("model_generation_ms", -1)) >= 0]
+        roundtrip_values = [int(item.get("roundtrip_ms", 0)) for item in results]
+        server_values = [
+            int(item.get("server_elapsed_ms", -1))
+            for item in results
+            if int(item.get("server_elapsed_ms", -1)) >= 0
+        ]
+        service_values = [
+            int(item.get("service_latency_ms", -1))
+            for item in results
+            if int(item.get("service_latency_ms", -1)) >= 0
+        ]
+        model_values = [
+            int(item.get("model_generation_ms", -1))
+            for item in results
+            if int(item.get("model_generation_ms", -1)) >= 0
+        ]
+        chat_latency_values = [
+            int(item.get("latency_ms", -1))
+            for item in results
+            if int(item.get("latency_ms", -1)) >= 0
+        ]
 
         print("summary:")
         print(f"  roundtrip_avg_ms={_mean(roundtrip_values)}")
@@ -241,6 +328,9 @@ def main() -> int:
         if args.mode == "full" and service_values:
             print(f"  service_latency_avg_ms={_mean(service_values)}")
             print(f"  service_latency_p95_ms={_p95(service_values)}")
+        if args.mode == "chat" and chat_latency_values:
+            print(f"  chat_latency_avg_ms={_mean(chat_latency_values)}")
+            print(f"  chat_latency_p95_ms={_p95(chat_latency_values)}")
         if args.mode == "model-only" and model_values:
             print(f"  model_generation_avg_ms={_mean(model_values)}")
             print(f"  model_generation_p95_ms={_p95(model_values)}")
@@ -248,6 +338,9 @@ def main() -> int:
         if args.print_answer and results:
             print("answer:")
             print(results[-1]["answer"])
+        if args.print_metrics and results:
+            print("key_metrics:")
+            print(json.dumps(results[-1].get("key_metrics", {}), ensure_ascii=False, indent=2))
 
     return 0
 

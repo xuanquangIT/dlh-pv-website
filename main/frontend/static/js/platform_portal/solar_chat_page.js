@@ -229,7 +229,7 @@
   }
 
   function escapeHtml(value) {
-    return value
+    return String(value || "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
@@ -237,10 +237,50 @@
       .replace(/'/g, "&#39;");
   }
 
-  function formatAssistantContent(content) {
-    return escapeHtml(content)
+  function fallbackAssistantFormatting(content) {
+    return escapeHtml(content || "")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
       .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
       .replace(/\n/g, "<br>");
+  }
+
+  function formatAssistantContent(content) {
+    const markdown = String(content || "");
+    const canParseMarkdown = Boolean(window.marked && typeof window.marked.parse === "function");
+    const canSanitizeHtml = Boolean(window.DOMPurify && typeof window.DOMPurify.sanitize === "function");
+
+    if (!canParseMarkdown || !canSanitizeHtml) {
+      return fallbackAssistantFormatting(markdown);
+    }
+
+    const parsedHtml = window.marked.parse(markdown, {
+      gfm: true,
+      breaks: true,
+      headerIds: false,
+      mangle: false,
+    });
+
+    const safeHtml = window.DOMPurify.sanitize(parsedHtml, {
+      USE_PROFILES: { html: true },
+    });
+
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = safeHtml;
+    wrapper.querySelectorAll("a[href]").forEach(function (anchor) {
+      anchor.setAttribute("target", "_blank");
+      anchor.setAttribute("rel", "noopener noreferrer");
+    });
+    return wrapper.innerHTML;
+  }
+
+  function buildTypingIndicatorHtml() {
+    return [
+      '<span class="typing-indicator" role="status" aria-label="Assistant is typing">',
+      '<span class="typing-dot"></span>',
+      '<span class="typing-dot"></span>',
+      '<span class="typing-dot"></span>',
+      "</span>"
+    ].join("");
   }
 
   function createWelcomeMessage() {
@@ -274,18 +314,33 @@
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
 
-  function createMessageElement(role, content, timestamp) {
+  function renderMessageContent(messageElement, role, content, isPending) {
+    if (role === "assistant") {
+      if (isPending) {
+        messageElement.classList.add("msg-typing");
+        messageElement.innerHTML = buildTypingIndicatorHtml();
+      } else {
+        messageElement.classList.remove("msg-typing");
+        messageElement.innerHTML = formatAssistantContent(content || "");
+      }
+      return;
+    }
+
+    messageElement.classList.remove("msg-typing");
+    messageElement.textContent = content || "";
+  }
+
+  function createMessageElement(role, content, timestamp, thinkingTrace, messageId, isPending) {
     const normalizedRole = role === "user" ? "user" : "assistant";
     const row = document.createElement("div");
     row.className = "msg-row " + (normalizedRole === "user" ? "msg-row-user" : "msg-row-assistant");
+    if (messageId) {
+      row.dataset.messageId = messageId;
+    }
 
     const message = document.createElement("div");
     message.className = "msg " + (normalizedRole === "user" ? "msg-user" : "msg-bot");
-    if (normalizedRole === "assistant") {
-      message.innerHTML = formatAssistantContent(content);
-    } else {
-      message.textContent = content;
-    }
+    renderMessageContent(message, normalizedRole, content, Boolean(isPending));
 
     const time = document.createElement("div");
     time.className = "msg-time";
@@ -294,6 +349,21 @@
     row.appendChild(message);
     row.appendChild(time);
     return row;
+  }
+
+  function updateMessageElement(row, role, content, timestamp, thinkingTrace, isPending) {
+    const normalizedRole = role === "user" ? "user" : "assistant";
+    const message = row.querySelector(".msg");
+    if (!message) {
+      return;
+    }
+
+    renderMessageContent(message, normalizedRole, content, Boolean(isPending));
+
+    const time = row.querySelector(".msg-time");
+    if (time) {
+      time.textContent = formatTime(timestamp);
+    }
   }
 
   function MessageList(container) {
@@ -305,14 +375,51 @@
     messages.forEach(function (message) {
       const role = message.role === "assistant" || message.role === "bot" ? "assistant" : "user";
       const content = message.content || "";
-      this.container.appendChild(createMessageElement(role, content, message.timestamp));
+      const thinkingTrace = message.thinkingTrace || message.thinking_trace || null;
+      const messageId = typeof message.id === "string" ? message.id : "";
+      const isPending = Boolean(message.isPending);
+      this.container.appendChild(createMessageElement(role, content, message.timestamp, thinkingTrace, messageId, isPending));
     }, this);
     this.scrollToBottom();
   };
 
-  MessageList.prototype.append = function (role, content, timestamp) {
-    this.container.appendChild(createMessageElement(role, content, timestamp));
+  MessageList.prototype.append = function (role, content, timestamp, thinkingTrace, messageId, isPending) {
+    const row = createMessageElement(role, content, timestamp, thinkingTrace, messageId || "", Boolean(isPending));
+    this.container.appendChild(row);
     this.scrollToBottom();
+    return row;
+  };
+
+  MessageList.prototype.findById = function (messageId) {
+    if (!messageId) {
+      return null;
+    }
+    const rows = this.container.querySelectorAll(".msg-row");
+    for (let index = 0; index < rows.length; index += 1) {
+      if (rows[index].dataset.messageId === messageId) {
+        return rows[index];
+      }
+    }
+    return null;
+  };
+
+  MessageList.prototype.updateById = function (messageId, role, content, timestamp, thinkingTrace, isPending) {
+    const row = this.findById(messageId);
+    if (!row) {
+      return false;
+    }
+    updateMessageElement(row, role, content, timestamp, thinkingTrace, Boolean(isPending));
+    this.scrollToBottom();
+    return true;
+  };
+
+  MessageList.prototype.removeById = function (messageId) {
+    const row = this.findById(messageId);
+    if (!row) {
+      return false;
+    }
+    row.remove();
+    return true;
   };
 
   MessageList.prototype.scrollToBottom = function () {
@@ -520,6 +627,10 @@
       }
       errorElement.hidden = false;
       errorElement.textContent = message;
+    }
+
+    function shouldSurfaceWarningAsError(warningMessage) {
+      return false;
     }
 
     function openProjectModal() {
@@ -875,7 +986,8 @@
         return {
           role: message.sender === "assistant" ? "assistant" : "user",
           content: message.content || "",
-          timestamp: message.timestamp
+          timestamp: message.timestamp,
+          thinkingTrace: message.thinking_trace || null
         };
       });
       state.messages = withWelcomeMessage(loadedMessages);
@@ -937,13 +1049,23 @@
         return;
       }
 
+      const pendingMessageId =
+        "pending-" + Date.now().toString(36) + "-" + Math.random().toString(16).slice(2, 8);
       const userMessage = {
         role: "user",
         content: text,
         timestamp: new Date().toISOString()
       };
+      const pendingAssistantMessage = {
+        id: pendingMessageId,
+        role: "assistant",
+        content: "",
+        timestamp: new Date().toISOString(),
+        isPending: true
+      };
 
       state.messages.push(userMessage);
+      state.messages.push(pendingAssistantMessage);
       messageList.render(state.messages);
       messageInput.clear();
       updateContext();
@@ -961,15 +1083,40 @@
         });
 
         state.modelUsed = response.model_used || state.modelUsed;
-        state.messages.push({
+        const assistantMessage = {
           role: "assistant",
           content: response.answer || "",
           timestamp: new Date().toISOString()
+        };
+        const pendingIndex = state.messages.findIndex(function (item) {
+          return item.id === pendingMessageId && item.isPending;
         });
-        messageList.render(state.messages);
+        if (pendingIndex >= 0) {
+          state.messages.splice(pendingIndex, 1, assistantMessage);
+          if (!messageList.updateById(
+            pendingMessageId,
+            "assistant",
+            assistantMessage.content,
+            assistantMessage.timestamp,
+            null,
+            false
+          )) {
+            messageList.render(state.messages);
+          }
+        } else {
+          state.messages.push(assistantMessage);
+          messageList.append(
+            "assistant",
+            assistantMessage.content,
+            assistantMessage.timestamp,
+            null,
+            "",
+            false
+          );
+        }
         updateContext();
 
-        if (response.warning_message) {
+        if (shouldSurfaceWarningAsError(response.warning_message)) {
           setError(response.warning_message);
         }
 
@@ -978,6 +1125,15 @@
         });
         setStatus("Ready");
       } catch (error) {
+        const pendingIndex = state.messages.findIndex(function (item) {
+          return item.id === pendingMessageId && item.isPending;
+        });
+        if (pendingIndex >= 0) {
+          state.messages.splice(pendingIndex, 1);
+          if (!messageList.removeById(pendingMessageId)) {
+            messageList.render(state.messages);
+          }
+        }
         setStatus("Error");
         setError(error instanceof Error ? error.message : "Unexpected error occurred.");
       } finally {
