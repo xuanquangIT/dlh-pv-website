@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import func
+
 from app.db.database import ChatMessage as ChatMessageModel
 from app.db.database import ChatSession as ChatSessionModel
 from app.db.database import AuthUser as AuthUserModel
@@ -117,19 +119,22 @@ class PostgresChatHistoryRepository:
     def list_sessions(self, owner_user_id: str) -> list[ChatSessionSummary]:
         owner_uuid = self._to_uuid(owner_user_id)
         with SessionLocal() as db:
-            sessions = (
-                db.query(ChatSessionModel)
+            rows = (
+                db.query(
+                    ChatSessionModel,
+                    func.count(ChatMessageModel.id).label("message_count"),
+                )
+                .outerjoin(
+                    ChatMessageModel,
+                    ChatMessageModel.session_id == ChatSessionModel.session_id,
+                )
                 .filter(ChatSessionModel.owner_user_id == owner_uuid)
+                .group_by(ChatSessionModel.session_id)
                 .order_by(ChatSessionModel.updated_at.desc())
                 .all()
             )
             results: list[ChatSessionSummary] = []
-            for session in sessions:
-                message_count = (
-                    db.query(ChatMessageModel)
-                    .filter(ChatMessageModel.session_id == session.session_id)
-                    .count()
-                )
+            for session, message_count in rows:
                 results.append(
                     ChatSessionSummary(
                         session_id=session.session_id,
@@ -137,7 +142,7 @@ class PostgresChatHistoryRepository:
                         role=ChatRole(session.role),
                         created_at=session.created_at,
                         updated_at=session.updated_at,
-                        message_count=message_count,
+                        message_count=int(message_count or 0),
                     )
                 )
             return results

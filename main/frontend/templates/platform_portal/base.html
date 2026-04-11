@@ -38,6 +38,8 @@
         window.PV_USER_ROLE = "{{ api_role | default('') }}";
         window.PV_CHAT_ROLE = "{{ chat_role | default('') }}";
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
     <script src="{{ url_for('static', path='js/platform_portal/charts.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/platform_portal/solar_chat_page.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/platform_portal/chatbot_widget.js') }}" defer></script>

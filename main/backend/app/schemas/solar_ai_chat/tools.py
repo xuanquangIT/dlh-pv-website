@@ -2,70 +2,70 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_system_overview",
         "description": (
-            "Lay tong quan he thong PV Lakehouse: tong san luong dien (MWh), "
-            "he so R-squared cua mo hinh ML, diem chat luong du lieu trung binh, "
-            "va tong so co so/tram nang luong mat troi. "
-            "Dung khi nguoi dung hoi ve tong quan, tinh hinh chung, "
-            "hoac so lieu toan he thong."
+            "Retrieve the PV Lakehouse system overview: total energy production (MWh), "
+            "ML model R-squared score, average data quality score, "
+            "and total number of facilities/solar stations. "
+            "Use this when the user asks about the overall system status, "
+            "general situation, or system-wide metrics."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "get_energy_performance",
         "description": (
-            "Lay hieu suat nang luong mat troi: top co so san xuat nhieu nhat, "
-            "cac gio cao diem san xuat dien, du bao san luong ngay mai (MWh). "
-            "Dung khi nguoi dung hoi ve hieu suat, so sanh cac tram, "
-            "gio nao san xuat nhieu nhat, hoac du bao ngan han."
+            "Retrieve solar energy performance: top producing facilities, "
+            "peak hour energy production, and tomorrow's energy forecast (MWh). "
+            "Use this when the user asks about performance, comparing stations, "
+            "peak hours, or short-term forecasts."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "get_ml_model_info",
         "description": (
-            "Lay thong tin mo hinh ML du bao nang luong: tham so GBT-v4.2 "
-            "(max_depth, learning_rate, estimators), so sanh R-squared voi v4.1, "
-            "va diem on dinh. Dung khi nguoi dung hoi ve mo hinh, "
-            "thuat toan, tham so, do chinh xac, hoac so sanh phien ban."
+            "Retrieve ML energy forecast model information: GBT-v4.2 parameters "
+            "(max_depth, learning_rate, estimators), R-squared comparison with v4.1, "
+            "and stability score. Use this when the user asks about the ML model, "
+            "algorithms, parameters, accuracy, or version comparisons."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "get_pipeline_status",
         "description": (
-            "Lay trang thai pipeline du lieu: tien do tung tang (Bronze, Silver, Gold), "
-            "thoi gian con lai (ETA), va danh sach canh bao chat luong du lieu. "
-            "Dung khi nguoi dung hoi ve trang thai pipeline, "
-            "loi du lieu, canh bao, hoac tien do xu ly."
+            "Retrieve the data pipeline status: progress of each layer (Bronze, Silver, Gold), "
+            "estimated time of arrival (ETA), and a list of data quality alerts. "
+            "Use this when the user asks about the pipeline status, "
+            "data errors, alerts, or processing progress."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "get_forecast_72h",
         "description": (
-            "Lay du bao san luong dien mat troi 72 gio toi (3 ngay): "
-            "san luong du kien theo ngay va khoang tin cay (confidence interval). "
-            "Dung khi nguoi dung hoi ve du bao, san luong ngay mai, "
-            "3 ngay toi, hoac xu huong san xuat."
+            "Retrieve the 72-hour (3 days) solar energy forecast: "
+            "expected production by day and confidence interval. "
+            "Use this when the user asks about the forecast, tomorrow's production, "
+            "the next 3 days, or production trends."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "get_data_quality_issues",
         "description": (
-            "Lay cac van de chat luong du lieu: co so co diem chat luong thap nhat, "
-            "nguyen nhan co the (thieu du lieu, thiet bi loi, gia tri bat thuong). "
-            "Dung khi nguoi dung hoi ve chat luong du lieu, loi, "
-            "co so nao co van de, hoac chi so AQI bat thuong."
+            "Retrieve data quality issues: facilities with the lowest quality scores, "
+            "and possible causes (missing data, equipment failure, anomalies). "
+            "Use this when the user asks about data quality, errors, "
+            "which facilities have issues, or abnormal AQI metrics."
         ),
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "get_extreme_aqi",
         "description": (
-            "Lay chi so AQI (chat luong khong khi) cao nhat hoac thap nhat "
-            "theo khoang thoi gian. Dung khi nguoi dung hoi tram nao "
-            "co AQI cao nhat/thap nhat trong ngay, tuan, thang, hoac nam."
+            "Retrieve the highest or lowest AQI (Air Quality Index) "
+            "for a specified timeframe. Use this when the user asks which station "
+            "has the highest/lowest AQI in a day, week, month, or year."
         ),
         "parameters": {
             "type": "object",
@@ -73,23 +73,23 @@ TOOL_DECLARATIONS: list[dict] = [
                 "query_type": {
                     "type": "string",
                     "enum": ["highest", "lowest"],
-                    "description": "Cao nhat hoac thap nhat.",
+                    "description": "Highest or lowest.",
                 },
                 "timeframe": {
                     "type": "string",
                     "enum": ["hour", "day", "24h", "week", "month", "year"],
-                    "description": "Khoang thoi gian truy van.",
+                    "description": "Timeframe for the query.",
                 },
                 "anchor_date": {
                     "type": "string",
                     "description": (
-                        "Ngay neo (YYYY-MM-DD). Bo trong de dung ngay moi nhat."
+                        "Anchor date (YYYY-MM-DD). Leave empty to use the latest date."
                     ),
                 },
                 "specific_hour": {
                     "type": "integer",
                     "description": (
-                        "Gio cu the (0-23). Chi dung khi timeframe=hour."
+                        "Specific hour (0-23). Only used when timeframe=hour."
                     ),
                 },
             },
@@ -99,9 +99,9 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_extreme_energy",
         "description": (
-            "Lay san luong nang luong cao nhat hoac thap nhat "
-            "theo khoang thoi gian. Dung khi nguoi dung hoi tram nao "
-            "san xuat nhieu/it nhat, hoac so sanh san luong giua cac tram."
+            "Retrieve the highest or lowest energy production "
+            "for a specified timeframe. Use this when the user asks which station "
+            "produced the most/least energy, or to compare production between stations."
         ),
         "parameters": {
             "type": "object",
@@ -109,23 +109,23 @@ TOOL_DECLARATIONS: list[dict] = [
                 "query_type": {
                     "type": "string",
                     "enum": ["highest", "lowest"],
-                    "description": "Cao nhat hoac thap nhat.",
+                    "description": "Highest or lowest.",
                 },
                 "timeframe": {
                     "type": "string",
                     "enum": ["hour", "day", "24h", "week", "month", "year"],
-                    "description": "Khoang thoi gian truy van.",
+                    "description": "Timeframe for the query.",
                 },
                 "anchor_date": {
                     "type": "string",
                     "description": (
-                        "Ngay neo (YYYY-MM-DD). Bo trong de dung ngay moi nhat."
+                        "Anchor date (YYYY-MM-DD). Leave empty to use the latest date."
                     ),
                 },
                 "specific_hour": {
                     "type": "integer",
                     "description": (
-                        "Gio cu the (0-23). Chi dung khi timeframe=hour."
+                        "Specific hour (0-23). Only used when timeframe=hour."
                     ),
                 },
             },
@@ -135,9 +135,9 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_extreme_weather",
         "description": (
-            "Lay chi so thoi tiet cao nhat hoac thap nhat: "
-            "nhiet do, toc do gio, gio giat, buc xa mat troi, may. "
-            "Dung khi nguoi dung hoi ve thoi tiet tai cac tram."
+            "Retrieve the highest or lowest weather metric: "
+            "temperature, wind speed, wind gusts, shortwave radiation, cloud cover. "
+            "Use this when the user asks about the weather at the stations."
         ),
         "parameters": {
             "type": "object",
@@ -145,12 +145,12 @@ TOOL_DECLARATIONS: list[dict] = [
                 "query_type": {
                     "type": "string",
                     "enum": ["highest", "lowest"],
-                    "description": "Cao nhat hoac thap nhat.",
+                    "description": "Highest or lowest.",
                 },
                 "timeframe": {
                     "type": "string",
                     "enum": ["hour", "day", "24h", "week", "month", "year"],
-                    "description": "Khoang thoi gian truy van.",
+                    "description": "Timeframe for the query.",
                 },
                 "weather_metric": {
                     "type": "string",
@@ -161,18 +161,18 @@ TOOL_DECLARATIONS: list[dict] = [
                         "shortwave_radiation",
                         "cloud_cover",
                     ],
-                    "description": "Chi so thoi tiet can truy van.",
+                    "description": "Weather metric to query.",
                 },
                 "anchor_date": {
                     "type": "string",
                     "description": (
-                        "Ngay neo (YYYY-MM-DD). Bo trong de dung ngay moi nhat."
+                        "Anchor date (YYYY-MM-DD). Leave empty to use the latest date."
                     ),
                 },
                 "specific_hour": {
                     "type": "integer",
                     "description": (
-                        "Gio cu the (0-23). Chi dung khi timeframe=hour."
+                        "Specific hour (0-23). Only used when timeframe=hour."
                     ),
                 },
             },
@@ -182,17 +182,17 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_station_daily_report",
         "description": (
-            "Lay bao cao tong hop cho 1 ngay cu the cua tat ca tram: "
-            "nang luong (MWh), buc xa mat troi (W/m2), AQI, "
-            "nhiet do, gio. Dung khi nguoi dung yeu cau bao cao theo mot ngay cu the. "
-            "KHONG dung tool nay cho yeu cau x ngay gan nhat/3 ngay/toan bo xu huong."
+            "Retrieve a comprehensive report for a specific day across all stations: "
+            "energy (MWh), shortwave radiation (W/m2), AQI, "
+            "temperature, wind. Use this when the user requests a report for a specific day. "
+            "DO NOT use this tool for requests over the last X days/3 days/general trends."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "anchor_date": {
                     "type": "string",
-                    "description": "Ngay can bao cao (YYYY-MM-DD). Bo trong de dung ngay du lieu moi nhat.",
+                    "description": "Date for the report (YYYY-MM-DD). Leave empty for the latest data date.",
                 },
                 "metrics": {
                     "type": "array",
@@ -208,8 +208,8 @@ TOOL_DECLARATIONS: list[dict] = [
                         ],
                     },
                     "description": (
-                        "Danh sach chi so can lay. "
-                        "Bo trong de lay tat ca."
+                        "List of metrics to retrieve. "
+                        "Leave empty to retrieve all."
                     ),
                 },
             },
@@ -219,14 +219,13 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_facility_info",
         "description": (
-            "Lay thong tin chi tiet ve cac tram nang luong mat troi: "
-            "ten tram, ma tram, vi tri dia ly (latitude, longitude), "
-            "mui gio va do lech UTC cua tram, "
-            "quoc gia, bang/tinh, cong suat lap dat (MW). "
-            "Dung khi nguoi dung hoi ve vi tri tram, tram nam o dau, "
-            "mui gio cua tram, UTC cua tram, "
-            "quoc gia nao, toa do GPS, thong tin co so, "
-            "hoac cong suat cua tram/nha may."
+            "Retrieve detailed information about solar energy facilities: "
+            "station name, station code, geographical location (latitude, longitude), "
+            "timezone and UTC offset of the station, "
+            "country, state/province, installed capacity (MW). "
+            "Use this when the user asks about the location of a station, where it is, "
+            "its timezone, UTC offset, country, GPS coordinates, facility info, "
+            "or the capacity of the station/plant."
         ),
         "parameters": {
             "type": "object",
@@ -234,8 +233,8 @@ TOOL_DECLARATIONS: list[dict] = [
                 "facility_name": {
                     "type": "string",
                     "description": (
-                        "Ten hoac ma cua tram cu the. "
-                        "Bo trong de lay tat ca cac tram."
+                        "Name or code of a specific station. "
+                        "Leave empty to retrieve all stations."
                     ),
                 },
             },
@@ -245,16 +244,16 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "search_documents",
         "description": (
-            "Tim kiem tai lieu bao cao su co, huong dan thiet bi, "
-            "hoac changelog mo hinh. Dung khi cau hoi lien quan den "
-            "tai lieu, bao cao, huong dan, hoac lich su thay doi."
+            "Search for incident reports, equipment manuals, "
+            "or model changelogs. Use this when the query is related "
+            "to documentation, reports, manuals, or changelog history."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Truy van tim kiem tai lieu.",
+                    "description": "Search query for documents.",
                 },
                 "doc_type": {
                     "type": "string",
@@ -264,7 +263,7 @@ TOOL_DECLARATIONS: list[dict] = [
                         "model_changelog",
                     ],
                     "description": (
-                        "Loai tai lieu can tim. Bo trong de tim tat ca."
+                        "Type of document to search for. Leave empty to search all."
                     ),
                 },
             },
@@ -287,3 +286,4 @@ TOOL_NAME_TO_TOPIC: dict[str, str] = {
     "get_facility_info": "facility_info",
     "search_documents": "general",
 }
+

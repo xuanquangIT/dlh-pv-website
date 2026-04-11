@@ -110,6 +110,11 @@ def make_extreme_query(
 def extract_extreme_metric_query(message: str) -> ExtremeMetricQuery | None:
     normalized = normalize_vietnamese_text(message)
 
+    # Ranking requests (top-N/listing) should follow topic-intent path,
+    # not the single-station extreme metric path.
+    if _is_ranking_request(normalized):
+        return None
+
     query_type: str | None = None
     if any(m in normalized for m in ("thap nhat", "nho nhat", "min")):
         query_type = "lowest"
@@ -131,6 +136,20 @@ def extract_extreme_metric_query(message: str) -> ExtremeMetricQuery | None:
         return make_extreme_query("weather", query_type, timeframe, specific_hour)
 
     return None
+
+
+def _is_ranking_request(normalized_message: str) -> bool:
+    if re.search(r"\btop\s*\d+\b", normalized_message):
+        return True
+
+    ranking_markers = (
+        "top ",
+        "xep hang",
+        "danh sach",
+        "cac tram",
+        "nhung tram",
+    )
+    return any(marker in normalized_message for marker in ranking_markers)
 
 
 def extract_timeframe(normalized_message: str, specific_hour: int | None = None) -> str:

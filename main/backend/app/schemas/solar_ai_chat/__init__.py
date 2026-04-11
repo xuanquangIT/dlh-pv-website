@@ -1,5 +1,11 @@
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
-from app.schemas.solar_ai_chat.chat import SourceMetadata, SolarChatRequest, SolarChatResponse
+from app.schemas.solar_ai_chat.chat import (
+    SourceMetadata,
+    SolarChatRequest,
+    SolarChatResponse,
+    ThinkingStep,
+    ThinkingTrace,
+)
 from app.schemas.solar_ai_chat.session import (
     ChatMessage,
     ChatSessionSummary,
@@ -24,6 +30,8 @@ __all__ = [
     "SourceMetadata",
     "SolarChatRequest",
     "SolarChatResponse",
+    "ThinkingStep",
+    "ThinkingTrace",
     "ChatMessage",
     "ChatSessionSummary",
     "ChatSessionDetail",

@@ -114,6 +114,38 @@ class SolarChatSettings(BaseSettings):
     rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
     history_backend: str = Field(default="databricks", alias="SOLAR_CHAT_HISTORY_BACKEND")
+    analytics_lookback_days: int = Field(
+        default=30,
+        alias="SOLAR_CHAT_ANALYTICS_LOOKBACK_DAYS",
+    )
+    intent_semantic_enabled: bool = Field(
+        default=True,
+        alias="SOLAR_CHAT_INTENT_SEMANTIC_ENABLED",
+    )
+    intent_semantic_min_confidence: float = Field(
+        default=0.70,
+        alias="SOLAR_CHAT_INTENT_SEMANTIC_MIN_CONFIDENCE",
+    )
+    intent_keyword_fastpath_score: int = Field(
+        default=1,
+        alias="SOLAR_CHAT_INTENT_KEYWORD_FASTPATH_SCORE",
+    )
+    websearch_api_key: str | None = Field(
+        default=None,
+        alias="SOLAR_CHAT_WEBSEARCH_API_KEY",
+    )
+    websearch_base_url: str = Field(
+        default="https://api.tavily.com/search",
+        alias="SOLAR_CHAT_WEBSEARCH_BASE_URL",
+    )
+    websearch_timeout_seconds: float = Field(
+        default=10.0,
+        alias="SOLAR_CHAT_WEBSEARCH_TIMEOUT_SECONDS",
+    )
+    websearch_max_results: int = Field(
+        default=5,
+        alias="SOLAR_CHAT_WEBSEARCH_MAX_RESULTS",
+    )
 
     @property
     def gemini_api_key(self) -> str | None:
