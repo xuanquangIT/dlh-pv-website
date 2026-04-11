@@ -11,13 +11,13 @@
         <div class="nav-sec">Overview</div>
         <a class="nav-item {% if current_page == 'dashboard' %}active{% endif %}" href="/dashboard">Dashboard</a>
 
-        {% if api_role in ["data_engineer"] %}
+        {% if api_role in ["admin", "data_engineer"] %}
         <div class="nav-sec">Pipeline</div>
         <a class="nav-item {% if current_page == 'pipeline' %}active{% endif %}" href="/pipeline">Data Pipeline</a>
         <a class="nav-item {% if current_page == 'quality' %}active{% endif %}" href="/quality">Data Quality</a>
         {% endif %}
 
-        {% if api_role in ["ml_engineer"] %}
+        {% if api_role in ["admin", "ml_engineer"] %}
         <div class="nav-sec">Machine Learning</div>
         <a class="nav-item {% if current_page == 'training' %}active{% endif %}" href="/training">ML Training</a>
         {% endif %}

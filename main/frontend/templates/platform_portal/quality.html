@@ -3,7 +3,6 @@
 {% block title %}PV Lakehouse - Data Quality{% endblock %}
 
 {% block content %}
-{% set qs = quality_summary | default({}) %}
 <section class="section-header">
     <div>
         <h1 class="page-title">Data Quality</h1>
@@ -18,18 +17,18 @@
 <section class="grid-3" style="margin-bottom:16px;">
     <article class="card">
         <h2 class="card-title">Valid Records</h2>
-        <div class="kpi-value">{{ qs.valid | default('3,268,121') }}</div>
-        <div class="page-subtitle">{{ qs.valid_ratio | default('82.1% of total') }}</div>
+        <div class="kpi-value" id="kpi-valid">--</div>
+        <div class="page-subtitle" id="kpi-valid-ratio">--</div>
     </article>
     <article class="card">
         <h2 class="card-title">Warning Records</h2>
-        <div class="kpi-value">{{ qs.warning | default('493,847') }}</div>
-        <div class="page-subtitle">{{ qs.warning_ratio | default('12.4% of total') }}</div>
+        <div class="kpi-value" id="kpi-warning">--</div>
+        <div class="page-subtitle" id="kpi-warning-ratio">--</div>
     </article>
     <article class="card">
         <h2 class="card-title">Invalid Records</h2>
-        <div class="kpi-value">{{ qs.invalid | default('218,253') }}</div>
-        <div class="page-subtitle">{{ qs.invalid_ratio | default('5.5% of total') }}</div>
+        <div class="kpi-value" id="kpi-invalid">--</div>
+        <div class="page-subtitle" id="kpi-invalid-ratio">--</div>
     </article>
 </section>
 
@@ -41,28 +40,36 @@
                 <thead>
                     <tr><th>Facility</th><th>Valid</th><th>Warning</th><th>Invalid</th><th>Score</th></tr>
                 </thead>
-                <tbody>
-                    {% for row in quality_rows | default([
-                        {'facility':'Riverside Solar A','valid':'96.2%','warning':'2.9%','invalid':'0.9%','score':'98'},
-                        {'facility':'Mesa Verde B','valid':'89.4%','warning':'8.1%','invalid':'2.5%','score':'95'}
-                    ]) %}
-                    <tr>
-                        <td>{{ row.facility }}</td>
-                        <td>{{ row.valid }}</td>
-                        <td>{{ row.warning }}</td>
-                        <td>{{ row.invalid }}</td>
-                        <td><span class="badge badge-success">{{ row.score }}</span></td>
-                    </tr>
-                    {% endfor %}
+                <tbody id="facility-quality-table">
+                    <!-- Javascript will populate this -->
+                    <tr><td colspan="5" style="text-align:center;">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
     </article>
 
     <article class="card">
-        <h2 class="card-title">Heatmap Placeholder</h2>
-        <p class="page-subtitle">Render a facility-date heatmap from backend data or a client script.</p>
-        <div style="height:300px;border:1px dashed #dde3ed;border-radius:8px;"></div>
+        <h2 class="card-title">Daily Facility Heatmap</h2>
+        <p class="page-subtitle">Quality score trends over the last 14 days.</p>
+        <div id="heatmap-container" style="min-height:300px; padding-top:16px;"></div>
+        <div style="display:flex; gap:16px; font-size:12px; margin-top:24px; color:var(--text-sec); flex-wrap:wrap; align-items:center; border-top:1px solid var(--border-color); padding-top:16px;">
+            <div style="display:flex; align-items:center; gap:6px;">
+                <div style="width:14px; height:14px; background-color:#10b981; border-radius:3px;"></div>
+                <span>&ge; 90% Valid</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <div style="width:14px; height:14px; background-color:#f59e0b; border-radius:3px;"></div>
+                <span>&ge; 70% Valid</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <div style="width:14px; height:14px; background-color:#ef4444; border-radius:3px;"></div>
+                <span>&lt; 70% Valid</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <div style="width:14px; height:14px; background-color:#e2e8f0; border-radius:3px; border: 1px solid var(--border-color);"></div>
+                <span>No Data</span>
+            </div>
+        </div>
     </article>
 </section>
 
@@ -73,24 +80,14 @@
             <thead>
                 <tr><th>Time</th><th>Facility</th><th>Sensor</th><th>Issue</th><th>Affected</th><th>Severity</th><th>Action</th></tr>
             </thead>
-            <tbody>
-                {% for issue in quality_issues | default([
-                    {'time':'06:54 UTC','facility':'Northgate F','sensor':'Irradiance-07','issue':'NaN values','affected':'3 slots','severity':'Warning','action':'Interpolated'},
-                    {'time':'05:22 UTC','facility':'Westfield G','sensor':'Temp-03','issue':'Out of range','affected':'147 records','severity':'Error','action':'Flagged'}
-                ]) %}
-                <tr>
-                    <td>{{ issue.time }}</td>
-                    <td>{{ issue.facility }}</td>
-                    <td>{{ issue.sensor }}</td>
-                    <td>{{ issue.issue }}</td>
-                    <td>{{ issue.affected }}</td>
-                    <td><span class="badge {% if issue.severity == 'Error' %}badge-danger{% else %}badge-warn{% endif %}">{{ issue.severity }}</span></td>
-                    <td>{{ issue.action }}</td>
-                </tr>
-                {% endfor %}
+            <tbody id="recent-issues-table">
+                <!-- Javascript will populate this -->
+                <tr><td colspan="7" style="text-align:center;">Loading...</td></tr>
             </tbody>
         </table>
     </div>
 </section>
+
+<script src="/static/js/platform_portal/data_quality.js"></script>
 {% endblock %}
 
