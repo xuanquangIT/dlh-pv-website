@@ -1,15 +1,7 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
-from app.api.dependencies import require_role
+from app.api.data_quality.routes import router as data_quality_router
 
 router = APIRouter(prefix="/data-quality", tags=["Data Quality"])
 
-
-@router.get("/score")
-def get_data_quality_score(
-    _: object = Depends(require_role(["data_engineer"])),
-) -> dict[str, str]:
-    return {
-        "module": "data_quality",
-        "message": "Data Quality API placeholder is ready.",
-    }
+router.include_router(data_quality_router)

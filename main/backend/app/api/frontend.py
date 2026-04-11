@@ -23,37 +23,37 @@ MODULE_CARDS = [
         "name": "Data Pipeline",
         "description": "Pipeline execution status, progress, and ETA.",
         "endpoint": "/data-pipeline/status",
-        "ui_path": None,
+        "ui_path": "/pipeline",
     },
     {
         "name": "Data Quality",
         "description": "Data quality score and issue summaries.",
         "endpoint": "/data-quality/score",
-        "ui_path": None,
+        "ui_path": "/quality",
     },
     {
         "name": "ML Training",
         "description": "Training experiments and model comparison.",
         "endpoint": "/ml-training/experiments",
-        "ui_path": None,
+        "ui_path": "/training",
     },
     {
         "name": "Model Registry",
         "description": "Model versions and release details.",
         "endpoint": "/model-registry/models",
-        "ui_path": None,
+        "ui_path": "/registry",
     },
     {
         "name": "Forecast",
         "description": "72-hour forecast outputs and confidence.",
         "endpoint": "/forecast/next-72h",
-        "ui_path": None,
+        "ui_path": "/forecast",
     },
     {
         "name": "Analytics",
         "description": "Analytical query history and insights.",
         "endpoint": "/analytics/query-history",
-        "ui_path": None,
+        "ui_path": "/analytics",
     },
     {
         "name": "Solar AI Chat",
@@ -185,7 +185,7 @@ def dashboard_page(
 @router.get("/pipeline", response_class=HTMLResponse)
 def pipeline_page(
     request: Request,
-    current_user: AuthUser = Depends(require_role(["data_engineer"])),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer"])),
 ) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
@@ -199,7 +199,7 @@ def pipeline_page(
 @router.get("/quality", response_class=HTMLResponse)
 def quality_page(
     request: Request,
-    current_user: AuthUser = Depends(require_role(["data_engineer"])),
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer"])),
 ) -> HTMLResponse:
     return _render_refactored_page(
         request=request,
@@ -213,7 +213,7 @@ def quality_page(
 @router.get("/training", response_class=HTMLResponse)
 def training_page(
     request: Request,
-    current_user: AuthUser = Depends(require_role(["ml_engineer"])),
+    current_user: AuthUser = Depends(require_role(["admin", "ml_engineer"])),
 ) -> HTMLResponse:
     return _render_refactored_page(
         request=request,

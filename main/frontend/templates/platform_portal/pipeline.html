@@ -2,67 +2,83 @@
 
 {% block title %}PV Lakehouse - Data Pipeline{% endblock %}
 
-{% block content %}
-<section class="section-header">
-    <div>
-        <h1 class="page-title">Data Pipeline</h1>
-        <div class="page-subtitle">Bronze to Silver to Gold serving architecture</div>
-    </div>
-    <div>
-        <button class="btn btn-pri" type="button" id="pipeline-run-now">Run Now</button>
-        <button class="btn btn-sec" type="button">Schedule</button>
-        <button class="btn btn-danger" type="button">PDF</button>
-    </div>
-</section>
-
-<section class="card" style="margin-bottom:16px;">
-    <h2 class="card-title">Pipeline Flow</h2>
-    <div class="grid-4">
-        {% for stage in pipeline_stages | default([
-            {'name':'Bronze Ingestion','records':'4,218,442','status':'Completed'},
-            {'name':'Silver Transform','records':'3,980,221','status':'Completed'},
-            {'name':'Gold Aggregation','records':'3,104,522','status':'Running'},
-            {'name':'Serving Layer','records':'0','status':'Pending'}
-        ]) %}
-        <article class="card" style="padding:12px;">
-            <h3 style="margin:0 0 6px; font-size:13px;">{{ stage.name }}</h3>
-            <div class="page-subtitle">Records: {{ stage.records }}</div>
-            <div style="margin-top:8px;"><span class="badge {% if stage.status == 'Running' %}badge-warn{% elif stage.status == 'Completed' %}badge-success{% else %}badge-info{% endif %}">{{ stage.status }}</span></div>
-        </article>
-        {% endfor %}
-    </div>
-</section>
-
-<section class="card" style="margin-bottom:16px;">
-    <h2 class="card-title">Overall Progress</h2>
-    <div style="height:9px;border-radius:5px;background:#dde3ed;overflow:hidden;">
-        <div style="height:100%;width:{{ pipeline_progress | default('78%') }};background:linear-gradient(90deg,#1a8a5a,#2db870);"></div>
-    </div>
-    <div class="page-subtitle" style="margin-top:6px;">{{ pipeline_progress | default('78%') }} complete</div>
-</section>
-
-<section class="card">
-    <h2 class="card-title">Run Logs</h2>
-    <div class="table-wrap" style="max-height:300px;">
-        <table>
-            <thead>
-                <tr><th>Time</th><th>Level</th><th>Message</th></tr>
-            </thead>
-            <tbody>
-                {% for log in pipeline_logs | default([
-                    {'time':'06:42:18','level':'INFO','message':'Bronze layer loaded records from SCADA endpoints'},
-                    {'time':'06:47:12','level':'WARN','message':'Silver layer rejected records with null irradiance'},
-                    {'time':'06:55:01','level':'INFO','message':'Gold layer is writing partitions'}
-                ]) %}
-                <tr>
-                    <td>{{ log.time }}</td>
-                    <td><span class="badge {% if log.level == 'WARN' %}badge-warn{% elif log.level == 'ERROR' %}badge-danger{% else %}badge-info{% endif %}">{{ log.level }}</span></td>
-                    <td>{{ log.message }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</section>
+{% block extra_head %}
+<!-- If the base layout supports injecting CSS in head -->
+<link rel="stylesheet" href="/static/css/data_pipeline.css">
 {% endblock %}
 
+{% block content %}
+<div class="pipeline-container">
+    <section class="section-header">
+        <div>
+            <h1 class="page-title">Data Pipeline</h1>
+            <!-- Replaced local static value with dynamically rendered element -->
+            <div class="page-subtitle">Schedule: <span id="job-cron">Loading...</span></div>
+        </div>
+        <div>
+            <div class="page-subtitle" style="margin-bottom: 8px; text-align: right;">Target: <span id="job-name">Loading...</span></div>
+            <button class="btn btn-pri" type="button" id="pipeline-run-now">Run Now</button>
+        </div>
+    </section>
+
+    <!-- Tabs Nav -->
+    <div class="pipeline-tabs">
+        <button class="tab-btn active" data-target="runs-tab">Runs</button>
+        <button class="tab-btn" data-target="tasks-tab">Tasks</button>
+    </div>
+
+    <!-- Tab 1: Recent Runs -->
+    <div id="runs-tab" class="tab-content active">
+        <section class="pipeline-card" style="overflow-x: auto;">
+            <h3>Recent Runs</h3>
+            <table class="recent-runs">
+                <thead>
+                    <tr>
+                        <th>Start Time</th>
+                        <th>Status</th>
+                        <th>Duration</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="recent-runs-body">
+                    <tr><td colspan="4">Loading recent runs...</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
+    <!-- Tab 2: Pipeline Lineage (Tasks) -->
+    <div id="tasks-tab" class="tab-content">
+        <section class="pipeline-card">
+            <h3>Pipeline Lineage</h3>
+            <div class="pipeline-dag">
+                <div class="dag-layer layer-bronze">
+                    <div style="font-weight: 600; min-width: 120px;">BRONZE</div>
+                    <div id="layer-bronze" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
+                </div>
+                
+                <div class="dag-layer layer-silver">
+                    <div style="font-weight: 600; min-width: 120px;">SILVER</div>
+                    <div id="layer-silver" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
+                </div>
+                
+                <div class="dag-layer layer-gold">
+                    <div style="font-weight: 600; min-width: 120px;">GOLD</div>
+                    <div id="layer-gold" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
+                </div>
+
+                <div class="dag-layer layer-ml">
+                    <div style="font-weight: 600; min-width: 120px;">ML & SERVING</div>
+                    <div id="layer-ml" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<!-- Fallbacks if base.html doesn't have an extra_head block -->
+<style>
+    @import url('/static/css/data_pipeline.css');
+</style>
+<script src="/static/js/platform_portal/data_pipeline.js"></script>
+{% endblock %}

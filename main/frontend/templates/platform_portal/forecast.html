@@ -6,7 +6,7 @@
 <section class="section-header">
     <div>
         <h1 class="page-title">Energy Forecast</h1>
-        <div class="page-subtitle">Model {{ forecast_model | default('GBT-v4.2') }} · Horizon {{ forecast_horizon | default('72h') }} · Confidence interval enabled</div>
+        <div class="page-subtitle">Model <span id="kpi-version">Loading...</span> · Horizon 7d · Confidence interval enabled</div>
     </div>
     <div>
         <button class="btn btn-pri" type="button">Refresh</button>
@@ -14,20 +14,12 @@
     </div>
 </section>
 
-<section class="grid-3" style="margin-bottom:16px;">
-    {% for metric in forecast_metrics | default([
-        {'name':'MAPE','value':'3.2%'},
-        {'name':'MAE','value':'0.031'},
-        {'name':'RMSE','value':'0.042'},
-        {'name':'R2','value':'0.9418'},
-        {'name':'CI 95%','value':'4.8%'},
-        {'name':'Horizon','value':'72h'}
-    ]) %}
+<section class="grid-3" id="forecast-kpis" style="margin-bottom:16px;">
+    <!-- Filled by JS -->
     <article class="card" style="padding:12px;">
-        <div class="kpi-label">{{ metric.name }}</div>
-        <div class="kpi-value">{{ metric.value }}</div>
+        <div class="kpi-label">Loading</div>
+        <div class="kpi-value">...</div>
     </article>
-    {% endfor %}
 </section>
 
 <section class="card" style="margin-bottom:16px;">
@@ -36,31 +28,20 @@
 </section>
 
 <section class="card">
-    <h2 class="card-title">Hourly Forecast (Next 24 Hours)</h2>
+    <h2 class="card-title">Daily Forecast (Next 7 Days)</h2>
     <div class="table-wrap">
         <table>
             <thead>
-                <tr><th>Hour</th><th>Actual</th><th>Predicted</th><th>Lower CI</th><th>Upper CI</th><th>Error</th><th>Confidence</th></tr>
+                <tr><th>Date</th><th>Actual (MWh)</th><th>Predicted (MWh)</th><th>Lower CI</th><th>Upper CI</th><th>Expected Error</th><th>Confidence</th></tr>
             </thead>
-            <tbody>
-                {% for row in forecast_rows | default([
-                    {'hour':'08:00','actual':'121.2','predicted':'118.4','lower':'112.5','upper':'124.3','error':'2.3%','confidence':'High'},
-                    {'hour':'09:00','actual':'146.5','predicted':'150.8','lower':'143.3','upper':'158.3','error':'2.9%','confidence':'High'}
-                ]) %}
-                <tr>
-                    <td>{{ row.hour }}</td>
-                    <td>{{ row.actual }}</td>
-                    <td>{{ row.predicted }}</td>
-                    <td>{{ row.lower }}</td>
-                    <td>{{ row.upper }}</td>
-                    <td>{{ row.error }}</td>
-                    <td><span class="badge {% if row.confidence == 'High' %}badge-success{% else %}badge-warn{% endif %}">{{ row.confidence }}</span></td>
-                </tr>
-                {% endfor %}
+            <tbody id="forecast-table-body">
+                <tr><td colspan="7" style="text-align:center; padding: 20px;">Loading forecast data...</td></tr>
             </tbody>
         </table>
     </div>
 </section>
+
+<script src="/static/js/platform_portal/forecast.js?v=3"></script>
 {% endblock %}
 
 

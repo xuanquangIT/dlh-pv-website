@@ -5,11 +5,11 @@
 {% block content %}
 <section class="section-header">
     <div>
-        <h1 class="page-title">ML Training</h1>
-        <div class="page-subtitle">Gradient Boosted Trees with experiment tracking</div>
+        <h1 class="page-title">Model Performance Monitoring</h1>
+        <div class="page-subtitle">Historical evaluation of production champion models</div>
     </div>
     <div>
-        <span class="badge badge-info">Run: {{ active_run | default('exp_20240108_003') }}</span>
+        <span class="badge badge-info" id="active-model-run">Run: Loading...</span>
         <button class="btn btn-sec" type="button">Import Config</button>
         <button class="btn btn-danger" type="button">PDF</button>
     </div>
@@ -18,42 +18,37 @@
 <section class="grid-2">
     <div>
         <article class="card" style="margin-bottom:14px;">
-            <h2 class="card-title">Hyperparameters</h2>
+            <h2 class="card-title">Champion Model Metrics</h2>
             <div class="table-wrap">
                 <table>
-                    <tbody>
-                        {% for hp in training_params | default([
-                            {'name':'Learning rate','value':'0.03'},
-                            {'name':'Max depth','value':'8'},
-                            {'name':'Estimators','value':'500'},
-                            {'name':'Subsample','value':'0.80'}
-                        ]) %}
-                        <tr><th>{{ hp.name }}</th><td>{{ hp.value }}</td></tr>
-                        {% endfor %}
+                    <tbody id="training-params-table">
+                        <tr><td colspan="2" style="text-align:center;">Loading data...</td></tr>
                     </tbody>
                 </table>
             </div>
         </article>
 
         <article class="card">
-            <h2 class="card-title">Training Progress</h2>
+            <h2 class="card-title">Model Reliability Score</h2>
             <div style="height:9px;border-radius:5px;background:#dde3ed;overflow:hidden;">
                 <div
                     id="training-progress-bar"
-                    data-progress="{{ training_progress | default('46%') }}"
-                    style="height:100%;width:46%;background:linear-gradient(90deg,#f4b942,#e07b39);"
+                    data-progress="0%"
+                    style="height:100%;width:0%;background:linear-gradient(90deg,#f4b942,#10b981);"
                 ></div>
             </div>
-            <div class="page-subtitle" style="margin-top:8px;">{{ training_progress | default('46%') }} complete</div>
-            <button class="btn btn-pri" type="button" style="margin-top:10px;">Start Training</button>
+            <div class="page-subtitle" style="margin-top:8px;" id="training-progress-text">0% Reliability (0 R2)</div>
+            <button class="btn btn-pri" type="button" style="margin-top:10px;">Retrain Champion</button>
         </article>
     </div>
 
     <article class="card">
-        <h2 class="card-title">Loss and RMSE over Iterations</h2>
+        <h2 class="card-title">RMSE & Skill Score Over Time</h2>
         <div class="chart-box" style="height:320px;"><canvas id="trainingChart"></canvas></div>
     </article>
 </section>
+
+<script src="/static/js/platform_portal/training.js?v=3"></script>
 {% endblock %}
 
 {% block scripts %}

@@ -5,6 +5,7 @@ databricks-sql-connector==3.3.0
 
 # Databricks setup scripts
 pyspark==3.5.1
+databricks-sdk>=0.70.0
 
 # HTTP
 httpx==0.28.1
