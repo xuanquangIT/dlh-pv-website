@@ -14,11 +14,22 @@ class VectorRepository:
     """PostgreSQL-backed vector store using pgvector for similarity search."""
 
     def __init__(self, settings: SolarChatSettings) -> None:
-        self._dsn = (
-            f"host={settings.pg_host} port={settings.pg_port} "
-            f"dbname={settings.pg_database} "
-            f"user={settings.pg_user} password={settings.pg_password}"
-        )
+        if settings.pg_database_url:
+            self._dsn = settings.pg_database_url.strip()
+            return
+
+        dsn_parts = [
+            f"host={settings.pg_host}",
+            f"port={settings.pg_port}",
+            f"dbname={settings.pg_database}",
+            f"user={settings.pg_user}",
+            f"password={settings.pg_password}",
+        ]
+        if settings.pg_sslmode:
+            dsn_parts.append(f"sslmode={settings.pg_sslmode}")
+        if settings.pg_channel_binding:
+            dsn_parts.append(f"channel_binding={settings.pg_channel_binding}")
+        self._dsn = " ".join(dsn_parts)
 
     def _connect(self) -> "psycopg2.extensions.connection":
         return psycopg2.connect(self._dsn)

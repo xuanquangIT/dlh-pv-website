@@ -246,11 +246,6 @@ function appendMessage(sender, content, sources) {
     div.className = "cb-msg cb-msg-" + sender;
 
     var html = escapeHtml(content);
-    if (sender === "assistant" && Array.isArray(sources) && sources.length > 0) {
-        var ds = sources[0].data_source || "unknown";
-        var cls = ds === "trino" ? "source-tag source-tag-trino" : "source-tag source-tag-csv";
-        html += ' <span class="' + cls + '">' + escapeHtml(ds.toUpperCase()) + '</span>';
-    }
     div.innerHTML = html;
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;

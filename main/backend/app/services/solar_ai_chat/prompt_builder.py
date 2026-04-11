@@ -48,8 +48,10 @@ def _build_system_prompt(role_value: str) -> str:
         "- KHONG bao gio doan so lieu\n"
         "3. Khi nguoi dung hoi ve vi tri, quoc gia, toa do, "
         "o dau -> dung tool get_facility_info\n"
-        "4. Khi nguoi dung hoi bao cao theo ngay -> dung tool "
-        "get_station_daily_report\n"
+        "4. Chi dung get_station_daily_report khi nguoi dung yeu cau "
+        "bao cao cho MOT ngay cu the (vi du: 2026-04-09, 09/04/2026, hom qua). "
+        "Neu cau hoi la x ngay gan nhat/3 ngay/toan bo xu huong, uu tien "
+        "get_energy_performance hoac get_forecast_72h va KHONG tu dat ngay.\n"
         "5. Khi nguoi dung hoi follow-up, tham khao lich su "
         "hoi thoai de hieu ngu canh\n"
         "6. Khi nhan duoc toa do GPS (lat/lng), ban bat buoc phai "
@@ -136,8 +138,8 @@ def build_prompt(
     parts = [
         _build_system_prompt(role.value),
         "Hay tra loi dua tren du lieu da truy xuat ben duoi. "
-        "Can neu chi so chinh, y nghia ngu canh va nhac "
-        "nguon du lieu Silver/Gold.",
+        "Can neu chi so chinh va y nghia ngu canh. "
+        "Khong hien thi nguon du lieu noi bo trong cau tra loi.",
     ]
 
     if history:
@@ -172,14 +174,12 @@ def build_fallback_summary(
     sources: list[SourceMetadata],
 ) -> str:
     """Return a deterministic summary when the LLM is unavailable."""
-    source_text = format_source_text(sources)
 
     if topic is ChatTopic.GENERAL:
         return (
             "Xin chao! Toi la tro ly Solar AI Chat. Ban co the hoi toi ve: "
             "tong quan he thong, hieu suat nang luong, mo hinh ML, "
-            "trang thai pipeline, du bao 72 gio, hoac chat luong du lieu. "
-            f"Nguon: {source_text}."
+            "trang thai pipeline, du bao 72 gio, hoac chat luong du lieu."
         )
 
     if topic is ChatTopic.SYSTEM_OVERVIEW:
@@ -188,63 +188,93 @@ def build_fallback_summary(
             f"{metrics.get('production_output_mwh', 0)} MWh, R-squared "
             f"{metrics.get('r_squared', 0)}, điểm chất lượng dữ liệu "
             f"{metrics.get('data_quality_score', 0)} và số cơ sở "
-            f"{metrics.get('facility_count', 0)}. Nguồn: {source_text}."
+            f"{metrics.get('facility_count', 0)}."
         )
 
     if topic is ChatTopic.ENERGY_PERFORMANCE and "extreme_metric" not in metrics:
+        top_rows = metrics.get("top_facilities", [])
+        top_line = ""
+        if isinstance(top_rows, list) and top_rows:
+            top = top_rows[0] if isinstance(top_rows[0], dict) else {}
+            top_name = top.get("facility", "Unknown")
+            top_energy = top.get("energy_mwh", 0)
+            top_line = f"Trạm có hiệu suất tốt nhất hiện tại là {top_name} ({top_energy} MWh). "
         return (
-            "Hiệu suất năng lượng: top cơ sở theo sản lượng và các giờ cao điểm đã được tổng hợp, "
-            f"dự báo ngày mai khoảng {metrics.get('tomorrow_forecast_mwh', 0)} MWh. "
-            f"Nguồn: {source_text}."
+            top_line
+            + "Hiệu suất năng lượng: top cơ sở theo sản lượng và các giờ cao điểm đã được tổng hợp, "
+            f"dự báo ngày mai khoảng {metrics.get('tomorrow_forecast_mwh', 0)} MWh."
         )
 
     if topic is ChatTopic.ML_MODEL:
         comparison = metrics.get("comparison", {})
         return (
             "Mô hình GBT-v4.2 đang dùng bộ tham số chuẩn, so sánh với v4.1 cho thấy delta R-squared "
-            f"{comparison.get('delta_r_squared', 0)}. Nguồn: {source_text}."
+            f"{comparison.get('delta_r_squared', 0)}."
         )
 
     if topic is ChatTopic.PIPELINE_STATUS:
         return (
             "Pipeline đang được theo dõi theo từng stage với ETA và cảnh báo chất lượng dữ liệu. "
-            f"Số cảnh báo hiện tại: {len(metrics.get('alerts', []))}. Nguồn: {source_text}."
+            f"Số cảnh báo hiện tại: {len(metrics.get('alerts', []))}."
         )
 
     if topic is ChatTopic.FORECAST_72H:
         return (
             "Dự báo 72 giờ đã sẵn sàng theo từng ngày với khoảng tin cậy. "
-            f"Số mốc dự báo: {len(metrics.get('daily_forecast', []))}. Nguồn: {source_text}."
+            f"Số mốc dự báo: {len(metrics.get('daily_forecast', []))}."
         )
 
     extreme_metric = metrics.get("extreme_metric")
     if extreme_metric is not None:
-        return format_extreme_fallback(metrics, extreme_metric, source_text)
+        return format_extreme_fallback(metrics, extreme_metric)
 
     if topic is ChatTopic.DATA_QUALITY_ISSUES:
         return (
             "Các cơ sở có điểm chất lượng thấp đã được xác định "
-            "kèm nguyên nhân khả dĩ từ cờ chất lượng. "
-            f"Nguồn: {source_text}."
+            "kèm nguyên nhân khả dĩ từ cờ chất lượng."
         )
 
     if topic is ChatTopic.FACILITY_INFO:
         facilities = metrics.get("facilities", [])
         count = metrics.get("facility_count", len(facilities))
         if not facilities:
-            return (
-                "Không tìm thấy thông tin trạm phù hợp. "
-                f"Nguồn: {source_text}."
+            return "Không tìm thấy thông tin trạm phù hợp."
+        top_station_name = None
+        top_station_capacity = None
+        timezone_labels: list[str] = []
+        for row in facilities:
+            try:
+                cap = float(row.get("total_capacity_mw", 0) or 0)
+            except (TypeError, ValueError):
+                cap = 0.0
+            if top_station_capacity is None or cap > top_station_capacity:
+                top_station_capacity = cap
+                top_station_name = str(row.get("facility_name", "Unknown"))
+
+            tz_name = str(row.get("timezone_name", "")).strip()
+            tz_offset = str(row.get("timezone_utc_offset", "")).strip()
+            if tz_name and tz_offset:
+                timezone_labels.append(f"{tz_name} ({tz_offset})")
+
+        lines = []
+        if timezone_labels:
+            timezone_text = ", ".join(sorted(set(timezone_labels)))
+            lines.append(f"Múi giờ các trạm hiện tại: {timezone_text}.")
+        if top_station_name is not None and top_station_capacity is not None:
+            lines.append(
+                f"Trạm có công suất lớn nhất hiện tại là {top_station_name} ({round(top_station_capacity, 2)} MW)."
             )
-        lines = [f"Tìm thấy {count} trạm năng lượng mặt trời:"]
+        lines.append(f"Tìm thấy {count} trạm năng lượng mặt trời:")
         for f in facilities[:8]:
             name = f.get("facility_name", "Unknown")
             lat = f.get("location_lat", 0)
             lng = f.get("location_lng", 0)
             cap = f.get("total_capacity_mw", 0)
+            tz_name = f.get("timezone_name", "N/A")
+            tz_offset = f.get("timezone_utc_offset", "N/A")
             lines.append(
                 f"  - {name}: tọa độ ({lat}, {lng}), "
-                f"Công suất {cap} MW"
+                f"Công suất {cap} MW, Múi giờ {tz_name} ({tz_offset})"
             )
         return "\n".join(lines)
 
@@ -256,7 +286,6 @@ def build_fallback_summary(
 def format_extreme_fallback(
     metrics: dict[str, Any],
     extreme_metric: str,
-    source_text: str,
 ) -> str:
     query_type = metrics.get("query_type", "")
     station = metrics.get(f"{query_type}_station", "Unknown")
@@ -267,21 +296,20 @@ def format_extreme_fallback(
             f"AQI {query_type} theo truy vấn là "
             f"{metrics.get(f'{query_type}_aqi_value', 0)} tại trạm {station} "
             f"{timeframe_text}. "
-            f"Phân loại AQI: {metrics.get(f'{query_type}_aqi_category', 'Unknown')}. "
-            f"Nguồn: {source_text}."
+            f"Phân loại AQI: {metrics.get(f'{query_type}_aqi_category', 'Unknown')}."
         )
 
     if extreme_metric == "energy":
         return (
             f"Sản lượng năng lượng {query_type} là "
             f"{metrics.get(f'{query_type}_energy_mwh', 0)} MWh "
-            f"tại trạm {station} {timeframe_text}. Nguồn: {source_text}."
+            f"tại trạm {station} {timeframe_text}."
         )
 
     return (
         f"Chỉ số thời tiết {metrics.get('weather_metric_label', 'weather')} {query_type} là "
         f"{metrics.get(f'{query_type}_weather_value', 0)} {metrics.get('weather_unit', '')} "
-        f"tại trạm {station} {timeframe_text}. Nguồn: {source_text}."
+        f"tại trạm {station} {timeframe_text}."
     )
 
 

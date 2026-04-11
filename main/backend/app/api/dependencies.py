@@ -2,11 +2,10 @@ import uuid
 
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError
-from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
 from app.core.settings import get_auth_settings
-from app.db.database import AuthUser, get_db
+from app.db.database import AuthUser
 from app.repositories.auth.user_repository import UserRepository
 
 
@@ -15,7 +14,7 @@ def get_token_from_cookie(request: Request) -> str | None:
     return request.cookies.get(settings.cookie_name)
 
 
-def get_current_user(request: Request, db: Session = Depends(get_db)) -> AuthUser:
+def get_current_user(request: Request) -> AuthUser:
     token = get_token_from_cookie(request)
     if not token:
         raise HTTPException(
@@ -35,7 +34,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> AuthUse
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token"
         ) from exc
 
-    repo = UserRepository(db)
+    repo = UserRepository()
     user = repo.get_by_id(user_id)
     if not user:
         raise HTTPException(

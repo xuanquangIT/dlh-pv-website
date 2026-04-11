@@ -182,18 +182,17 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_station_daily_report",
         "description": (
-            "Lay bao cao tong hop theo ngay cua tat ca tram: "
+            "Lay bao cao tong hop cho 1 ngay cu the cua tat ca tram: "
             "nang luong (MWh), buc xa mat troi (W/m2), AQI, "
-            "nhiet do, gio. Dung khi nguoi dung yeu cau bao cao, "
-            "tong hop so lieu tat ca cac tram theo mot ngay cu the, "
-            "hoac muon so sanh hieu suat cac tram trong mot ngay."
+            "nhiet do, gio. Dung khi nguoi dung yeu cau bao cao theo mot ngay cu the. "
+            "KHONG dung tool nay cho yeu cau x ngay gan nhat/3 ngay/toan bo xu huong."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "anchor_date": {
                     "type": "string",
-                    "description": "Ngay can bao cao (YYYY-MM-DD).",
+                    "description": "Ngay can bao cao (YYYY-MM-DD). Bo trong de dung ngay du lieu moi nhat.",
                 },
                 "metrics": {
                     "type": "array",
@@ -214,7 +213,7 @@ TOOL_DECLARATIONS: list[dict] = [
                     ),
                 },
             },
-            "required": ["anchor_date"],
+            "required": [],
         },
     },
     {
@@ -222,8 +221,10 @@ TOOL_DECLARATIONS: list[dict] = [
         "description": (
             "Lay thong tin chi tiet ve cac tram nang luong mat troi: "
             "ten tram, ma tram, vi tri dia ly (latitude, longitude), "
+            "mui gio va do lech UTC cua tram, "
             "quoc gia, bang/tinh, cong suat lap dat (MW). "
             "Dung khi nguoi dung hoi ve vi tri tram, tram nam o dau, "
+            "mui gio cua tram, UTC cua tram, "
             "quoc gia nao, toa do GPS, thong tin co so, "
             "hoac cong suat cua tram/nha may."
         ),

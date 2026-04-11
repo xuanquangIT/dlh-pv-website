@@ -1,5 +1,5 @@
-"""Topic metrics repository: system overview, energy, ML model, pipeline,
-forecast 72h, and data quality handlers with Trino-first, CSV-fallback."""
+﻿"""Topic metrics repository: system overview, energy, ML model, pipeline,
+forecast 72h, and data quality handlers with Databricks SQL only."""
 from __future__ import annotations
 
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class TopicRepository(BaseRepository):
-    """Handles fetch_topic_metrics dispatch and all per-topic Trino/CSV methods."""
+    """Handles fetch_topic_metrics dispatch and all per-topic Databricks methods."""
 
     def _general_greeting(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
         from app.schemas.solar_ai_chat.enums import ChatTopic
@@ -24,35 +24,35 @@ class TopicRepository(BaseRepository):
     # ------ System Overview -----------------------------------------------
 
     def _system_overview(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "system_overview",
-            self._system_overview_trino,
+            self._system_overview_databricks,
             self._system_overview_csv,
             [
-                {"layer": "Gold", "dataset": "lh_gold_fact_solar_environmental"},
-                {"layer": "Gold", "dataset": "lh_gold_dim_facility"},
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"},
+                {"layer": "Gold", "dataset": "gold.fact_energy"},
+                {"layer": "Gold", "dataset": "gold.dim_facility"},
+                {"layer": "Silver", "dataset": "silver.energy_readings"},
             ],
         )
 
-    def _system_overview_trino(self) -> dict[str, Any]:
+    def _system_overview_databricks(self) -> dict[str, Any]:
         agg = self._execute_query(
             "SELECT COALESCE(SUM(energy_mwh), 0) AS total_mwh,"
             "       COALESCE(AVG(completeness_pct), 0) AS avg_quality"
-            " FROM lh_gold_fact_solar_environmental"
+            " FROM gold.fact_energy"
         )
         total_mwh = float(agg[0]["total_mwh"]) if agg else 0.0
         avg_quality = float(agg[0]["avg_quality"]) if agg else 0.0
         r_rows = self._execute_query(
-            "SELECT energy_mwh, yr_weighted_kwh"
-            " FROM lh_gold_fact_solar_environmental"
-            " WHERE energy_mwh IS NOT NULL AND yr_weighted_kwh IS NOT NULL"
+            "SELECT energy_mwh, energy_kwh"
+            " FROM gold.fact_energy"
+            " WHERE energy_mwh IS NOT NULL AND energy_kwh IS NOT NULL"
         )
         r_squared = self._calculate_r_squared(
             [float(r["energy_mwh"]) for r in r_rows],
-            [float(r["yr_weighted_kwh"]) for r in r_rows],
+            [float(r["energy_kwh"]) for r in r_rows],
         )
-        fac = self._execute_query("SELECT COUNT(*) AS cnt FROM lh_gold_dim_facility")
+        fac = self._execute_query("SELECT COUNT(*) AS cnt FROM gold.dim_facility")
         facility_count = int(fac[0]["cnt"]) if fac else 0
         return {
             "production_output_mwh": round(total_mwh, 2),
@@ -68,7 +68,10 @@ class TopicRepository(BaseRepository):
         total_mwh = sum(self._to_float(r.get("energy_mwh")) for r in gold_fact)
         r_squared = self._calculate_r_squared(
             [self._to_float(r.get("energy_mwh")) for r in gold_fact],
-            [self._to_float(r.get("yr_weighted_kwh")) for r in gold_fact],
+            [
+                self._to_float(r.get("energy_kwh") or r.get("yr_weighted_kwh"))
+                for r in gold_fact
+            ],
         )
         comp = [self._to_float(r.get("completeness_pct")) for r in silver_energy if r.get("completeness_pct")]
         quality = mean(comp) if comp else 0.0
@@ -82,33 +85,33 @@ class TopicRepository(BaseRepository):
     # ------ Energy Performance --------------------------------------------
 
     def _energy_performance(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "energy_performance",
-            self._energy_performance_trino,
+            self._energy_performance_databricks,
             self._energy_performance_csv,
-            [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"}],
+            [{"layer": "Silver", "dataset": "silver.energy_readings"}],
         )
 
-    def _energy_performance_trino(self) -> dict[str, Any]:
+    def _energy_performance_databricks(self) -> dict[str, Any]:
         top_fac = self._execute_query(
-            "SELECT COALESCE(facility_name, facility_code) AS facility,"
-            "       SUM(energy_mwh) AS total_mwh"
-            " FROM lh_silver_clean_hourly_energy"
-            " GROUP BY COALESCE(facility_name, facility_code)"
+            "SELECT COALESCE(facility_name, facility_id) AS facility,"
+            "       SUM(energy_kwh) / 1000.0 AS total_mwh"
+            " FROM silver.energy_readings"
+            " GROUP BY COALESCE(facility_name, facility_id)"
             " ORDER BY total_mwh DESC LIMIT 3"
         )
         peak = self._execute_query(
             "SELECT EXTRACT(HOUR FROM date_hour) AS hr,"
-            "       SUM(energy_mwh) AS total_mwh"
-            " FROM lh_silver_clean_hourly_energy"
+            "       SUM(energy_kwh) / 1000.0 AS total_mwh"
+            " FROM silver.energy_readings"
             " WHERE date_hour IS NOT NULL"
             " GROUP BY EXTRACT(HOUR FROM date_hour)"
             " ORDER BY total_mwh DESC LIMIT 3"
         )
         forecast_rows = self._execute_query(
             "SELECT CAST(date_hour AS DATE) AS day,"
-            "       SUM(energy_mwh) AS daily_mwh"
-            " FROM lh_silver_clean_hourly_energy"
+            "       SUM(energy_kwh) / 1000.0 AS daily_mwh"
+            " FROM silver.energy_readings"
             " WHERE date_hour IS NOT NULL"
             " GROUP BY CAST(date_hour AS DATE)"
             " ORDER BY day DESC LIMIT 7"
@@ -150,29 +153,29 @@ class TopicRepository(BaseRepository):
     # ------ ML Model ------------------------------------------------------
 
     def _ml_model(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "ml_model",
-            self._ml_model_trino,
+            self._ml_model_databricks,
             self._ml_model_csv,
             [
-                {"layer": "Gold", "dataset": "lh_gold_fact_solar_environmental"},
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"},
+                {"layer": "Gold", "dataset": "gold.fact_energy"},
+                {"layer": "Silver", "dataset": "silver.energy_readings"},
             ],
         )
 
-    def _ml_model_trino(self) -> dict[str, Any]:
+    def _ml_model_databricks(self) -> dict[str, Any]:
         r_rows = self._execute_query(
-            "SELECT energy_mwh, yr_weighted_kwh"
-            " FROM lh_gold_fact_solar_environmental"
-            " WHERE energy_mwh IS NOT NULL AND yr_weighted_kwh IS NOT NULL"
+            "SELECT energy_mwh, energy_kwh"
+            " FROM gold.fact_energy"
+            " WHERE energy_mwh IS NOT NULL AND energy_kwh IS NOT NULL"
         )
         current_r2 = self._calculate_r_squared(
             [float(r["energy_mwh"]) for r in r_rows],
-            [float(r["yr_weighted_kwh"]) for r in r_rows],
+            [float(r["energy_kwh"]) for r in r_rows],
         )
         stab = self._execute_query(
             "SELECT AVG(completeness_pct) AS avg_comp"
-            " FROM lh_silver_clean_hourly_energy"
+            " FROM silver.energy_readings"
             " WHERE completeness_pct IS NOT NULL"
         )
         stability = (float(stab[0]["avg_comp"]) / 100.0) if stab and stab[0]["avg_comp"] else 0.0
@@ -183,7 +186,10 @@ class TopicRepository(BaseRepository):
         silver_energy = self._load_csv(self._dataset_path("lh_silver_clean_hourly_energy.csv"))
         current_r2 = self._calculate_r_squared(
             [self._to_float(r.get("energy_mwh")) for r in gold_fact],
-            [self._to_float(r.get("yr_weighted_kwh")) for r in gold_fact],
+            [
+                self._to_float(r.get("energy_kwh") or r.get("yr_weighted_kwh"))
+                for r in gold_fact
+            ],
         )
         comp = [self._to_float(r.get("completeness_pct")) for r in silver_energy if r.get("completeness_pct")]
         stability = (mean(comp) / 100.0) if comp else 0.0
@@ -209,31 +215,31 @@ class TopicRepository(BaseRepository):
     # ------ Pipeline Status -----------------------------------------------
 
     def _pipeline_status(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "pipeline_status",
-            self._pipeline_status_trino,
+            self._pipeline_status_databricks,
             self._pipeline_status_csv,
             [
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"},
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather"},
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality"},
-                {"layer": "Gold", "dataset": "lh_gold_fact_solar_environmental"},
+                {"layer": "Silver", "dataset": "silver.energy_readings"},
+                {"layer": "Silver", "dataset": "silver.weather"},
+                {"layer": "Silver", "dataset": "silver.air_quality"},
+                {"layer": "Gold", "dataset": "gold.fact_energy"},
             ],
         )
 
-    def _pipeline_status_trino(self) -> dict[str, Any]:
+    def _pipeline_status_databricks(self) -> dict[str, Any]:
         counts = self._execute_query(
             "SELECT"
-            " (SELECT COUNT(*) FROM lh_silver_clean_hourly_energy) AS silver_energy,"
-            " (SELECT COUNT(*) FROM lh_gold_fact_solar_environmental) AS gold_fact"
+            " (SELECT COUNT(*) FROM silver.energy_readings) AS silver_energy,"
+            " (SELECT COUNT(*) FROM gold.fact_energy) AS gold_fact"
         )
         silver_count = int(counts[0]["silver_energy"]) if counts else 0
         gold_count = int(counts[0]["gold_fact"]) if counts else 0
         gold_progress = min(100.0, (gold_count / silver_count) * 100.0) if silver_count > 0 else 0.0
         alert_rows = self._execute_query(
-            "SELECT COALESCE(facility_name, facility_code) AS facility,"
+            "SELECT COALESCE(facility_name, facility_id) AS facility,"
             "       quality_flag, quality_issues"
-            " FROM lh_silver_clean_hourly_energy"
+            " FROM silver.energy_readings"
             " WHERE quality_flag != 'GOOD'"
             "    OR (quality_issues IS NOT NULL AND quality_issues != '' AND quality_issues != '|||||')"
             " LIMIT 5"
@@ -299,18 +305,18 @@ class TopicRepository(BaseRepository):
     # ------ Forecast 72h --------------------------------------------------
 
     def _forecast_72h(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "forecast_72h",
-            self._forecast_72h_trino,
+            self._forecast_72h_databricks,
             self._forecast_72h_csv,
-            [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"}],
+            [{"layer": "Silver", "dataset": "silver.energy_readings"}],
         )
 
-    def _forecast_72h_trino(self) -> dict[str, Any]:
+    def _forecast_72h_databricks(self) -> dict[str, Any]:
         rows = self._execute_query(
             "SELECT CAST(date_hour AS DATE) AS day,"
-            "       SUM(energy_mwh) AS daily_mwh"
-            " FROM lh_silver_clean_hourly_energy"
+            "       SUM(energy_kwh) / 1000.0 AS daily_mwh"
+            " FROM silver.energy_readings"
             " WHERE date_hour IS NOT NULL"
             " GROUP BY CAST(date_hour AS DATE)"
             " ORDER BY day DESC LIMIT 14"
@@ -358,38 +364,38 @@ class TopicRepository(BaseRepository):
     # ------ Data Quality --------------------------------------------------
 
     def _data_quality_issues(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "data_quality_issues",
-            self._data_quality_trino,
+            self._data_quality_databricks,
             self._data_quality_csv,
             [
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy"},
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather"},
-                {"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality"},
+                {"layer": "Silver", "dataset": "silver.energy_readings"},
+                {"layer": "Silver", "dataset": "silver.weather"},
+                {"layer": "Silver", "dataset": "silver.air_quality"},
             ],
         )
 
-    def _data_quality_trino(self) -> dict[str, Any]:
+    def _data_quality_databricks(self) -> dict[str, Any]:
         rows = self._execute_query(
-            "SELECT COALESCE(facility_name, facility_code) AS facility,"
+            "SELECT COALESCE(facility_name, facility_id) AS facility,"
             "       AVG(completeness_pct) AS avg_score"
-            " FROM lh_silver_clean_hourly_energy"
-            " GROUP BY COALESCE(facility_name, facility_code)"
+            " FROM silver.energy_readings"
+            " GROUP BY COALESCE(facility_name, facility_id)"
             " HAVING AVG(completeness_pct) < 95"
             " ORDER BY avg_score ASC LIMIT 5"
         )
         if not rows:
             return {"low_score_facilities": [], "summary": "All facilities have quality score >= 95%. No issues detected."}
         issue_rows = self._execute_query(
-            "SELECT COALESCE(facility_name, facility_code) AS facility, quality_issues"
-            " FROM lh_silver_clean_hourly_energy"
+            "SELECT COALESCE(facility_name, facility_id) AS facility, quality_issues"
+            " FROM silver.energy_readings"
             " WHERE quality_issues IS NOT NULL AND quality_issues != '' AND quality_issues != '|||||'"
             " UNION ALL"
-            " SELECT COALESCE(facility_name, facility_code) AS facility, quality_issues"
-            " FROM lh_silver_clean_hourly_weather WHERE quality_flag != 'GOOD'"
+            " SELECT COALESCE(facility_name, location_id) AS facility, quality_issues"
+            " FROM silver.weather WHERE quality_flag != 'GOOD'"
             " UNION ALL"
-            " SELECT COALESCE(facility_name, facility_code) AS facility, quality_issues"
-            " FROM lh_silver_clean_hourly_air_quality WHERE quality_flag != 'GOOD'"
+            " SELECT COALESCE(facility_name, location_id) AS facility, quality_issues"
+            " FROM silver.air_quality WHERE quality_flag != 'GOOD'"
         )
         from collections import defaultdict
         facility_issues: dict[str, set[str]] = defaultdict(set)
@@ -443,24 +449,24 @@ class TopicRepository(BaseRepository):
         self, facility_name: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         """Return facility details including location and capacity."""
-        return self._with_trino_fallback(
+        return self._with_databricks_query(
             "facility_info",
-            lambda: self._facility_info_trino(facility_name),
+            lambda: self._facility_info_databricks(facility_name),
             lambda: self._facility_info_csv(facility_name),
-            [{"layer": "Gold", "dataset": "lh_gold_dim_facility"}],
+            [{"layer": "Gold", "dataset": "gold.dim_facility"}],
         )
 
-    def _facility_info_trino(
+    def _facility_info_databricks(
         self, facility_name: str | None = None,
     ) -> dict[str, Any]:
-        """Query dim_facility via Trino."""
+        """Query dim_facility via Databricks SQL."""
         sql = (
             "SELECT facility_code, facility_name,"
             " location_lat, location_lng,"
             " total_capacity_mw,"
             " total_capacity_registered_mw,"
             " total_capacity_maximum_mw"
-            " FROM lh_gold_dim_facility"
+            " FROM gold.dim_facility"
         )
         if facility_name:
             safe_name = facility_name.replace("'", "''")
@@ -526,11 +532,14 @@ class TopicRepository(BaseRepository):
             lng = self._to_float(
                 str(r.get("location_lng", "")), default=0.0,
             )
+            timezone_name, timezone_offset = self._derive_timezone_from_coordinates(lat, lng)
             facilities.append({
                 "facility_code": r.get("facility_code", ""),
                 "facility_name": r.get("facility_name", ""),
                 "location_lat": round(lat, 6),
                 "location_lng": round(lng, 6),
+                "timezone_name": timezone_name,
+                "timezone_utc_offset": timezone_offset,
                 "total_capacity_mw": round(
                     self._to_float(
                         str(r.get("total_capacity_mw", "")),
@@ -541,4 +550,33 @@ class TopicRepository(BaseRepository):
             "facility_count": len(facilities),
             "facilities": facilities,
         }
+
+    @staticmethod
+    def _format_utc_offset(total_hours: float) -> str:
+        sign = "+" if total_hours >= 0 else "-"
+        abs_hours = abs(total_hours)
+        whole_hours = int(abs_hours)
+        minutes = int(round((abs_hours - whole_hours) * 60))
+        return f"UTC{sign}{whole_hours:02d}:{minutes:02d}"
+
+    @classmethod
+    def _derive_timezone_from_coordinates(
+        cls,
+        latitude: float,
+        longitude: float,
+    ) -> tuple[str, str]:
+        # Project stations are in Australia. Keep this deterministic and dependency-free.
+        if -45.0 <= latitude <= -10.0 and 112.0 <= longitude <= 154.5:
+            if longitude < 129.0:
+                return "Australia/Western", "UTC+08:00"
+            if longitude < 141.0:
+                return "Australia/Central", "UTC+09:30"
+            return "Australia/Eastern", "UTC+10:00"
+
+        # Fallback for out-of-scope coordinates: approximate by longitude.
+        approx_hours = float(round(longitude / 15.0))
+        return "UTC (approx)", cls._format_utc_offset(approx_hours)
+
+
+
 

@@ -1,232 +1,173 @@
-# PV Lakehouse - Local Setup Guide
+# PV Lakehouse Web - Local Run Guide
 
-This guide explains how to set up a local Python virtual environment, install required libraries, initialize local PostgreSQL tables, and run Docker services (PostgreSQL and Trino).
+This guide is for the local web app runtime in this folder.
 
-## Prerequisites
+Runtime architecture:
+
+- Neon PostgreSQL stores web app metadata (auth, chat history, RAG documents).
+- Databricks SQL Warehouse provides analytics data for the chatbot (catalog `pv`, schemas `silver` and `gold`).
+- Local default flow does not require Docker or Trino.
+
+## 1) Prerequisites
 
 - Python 3.11+
-- Docker Desktop (with Docker Compose)
 - PowerShell (Windows) or Bash (Linux/WSL)
+- Neon PostgreSQL connection string
+- Databricks workspace, SQL Warehouse, and PAT token
 
-## 1) Create and activate a virtual environment
+## 2) Create a virtual environment
 
-From repository root:
+Run from this folder:
 
 ```powershell
+cd dlh-pv-web
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-Linux / WSL:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-If PowerShell blocks activation, run:
+If PowerShell blocks activation scripts:
 
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-Then activate again:
+## 3) Configure environment
+
+Main runtime file: [.env](.env)
+
+Required variables:
+
+- `DATABASE_URL=postgresql://...`
+- `POSTGRES_SSLMODE=require`
+- `POSTGRES_CHANNEL_BINDING=require`
+- `SOLAR_CHAT_HISTORY_BACKEND=postgres`
+- `DATABRICKS_HOST=https://...`
+- `DATABRICKS_TOKEN=...`
+- `DATABRICKS_SQL_HTTP_PATH=/sql/1.0/warehouses/...`
+- `UC_CATALOG=pv`
+- `UC_SILVER_SCHEMA=silver`
+- `UC_GOLD_SCHEMA=gold`
+
+Important:
+
+- Any plain text line in `.env` must start with `#` if it is a section title.
+- Example: use `# Solar AI Chat`, not `Solar AI Chat`.
+
+## 4) Bootstrap metadata tables in Neon
+
+Bootstrap SQL: [main/002-create-lakehouse-tables.sql](main/002-create-lakehouse-tables.sql)
+
+Quick run (without `psql` CLI):
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
+cd dlh-pv-web
+.\.venv\Scripts\python.exe -c "import os; from pathlib import Path; import psycopg2; from dotenv import load_dotenv; load_dotenv('.env'); dsn=os.getenv('DATABASE_URL'); sql=Path('main/002-create-lakehouse-tables.sql').read_text(encoding='utf-8'); conn=psycopg2.connect(dsn); conn.autocommit=True; cur=conn.cursor(); cur.execute(sql); cur.close(); conn.close(); print('bootstrap_ok')"
 ```
 
-## 2) Install Python dependencies
-
-From repository root (with virtual environment activated):
-
-```powershell
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-## 3) Prepare Docker environment variables
-
-Docker env files are located in [main/docker](main/docker).
-
-Create env file from template if needed:
-
-```powershell
-Copy-Item main/docker/.env.example main/docker/.env -Force
-```
-
-Update values in [main/docker/.env](main/docker/.env) if required.
-
-## 4) Start Docker services
-
-Run from repository root:
-
-```powershell
-docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env up -d
-```
-
-Current stack includes:
-
-- PostgreSQL container: `dlhpv_fresh_postgres`
-- Trino container: `dlhpv_fresh_trino`
-
-## 5) Initialize local PostgreSQL tables (auth + RAG + chat history)
-
-Run from repository root after Docker services are up.
-
-The migration scripts below create only local operational tables:
-
-- main/002-create-lakehouse-tables.sql
-- main/003-create-chat-history-tables.sql
-
-Created tables include:
+Main tables created:
 
 - `auth_roles`
-- `auth_users` (contains default admin/demo accounts)
-- `rag_documents` (vector storage)
+- `auth_users`
 - `chat_sessions`
 - `chat_messages`
+- `rag_documents`
 
-Silver and Gold analytical datasets are queried directly from Iceberg via Trino.
-You do not need to create local PostgreSQL copies of `lh_silver_*` or
-`lh_gold_*` tables.
+## 5) Run backend API (correct command usage)
 
-**PowerShell Component:**
-```powershell
-docker cp dlh-pv-dashboard/main/002-create-lakehouse-tables.sql dlhpv_fresh_postgres:/tmp/002-create-lakehouse-tables.sql
-docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/002-create-lakehouse-tables.sql
-docker cp dlh-pv-dashboard/main/003-create-chat-history-tables.sql dlhpv_fresh_postgres:/tmp/003-create-chat-history-tables.sql
-docker exec dlhpv_fresh_postgres psql -U pvlakehouse -d pvlakehouse -f /tmp/003-create-chat-history-tables.sql
-```
-
-**WSL / Linux Component:**
-If your container is simply named `postgres` and you encounter a missing database error, you can fix it and initialize the schema directly:
-```bash
-# Provide template collation fix and create the database if missing
-docker exec -i postgres psql -U pvlakehouse -d postgres -c "ALTER DATABASE template1 REFRESH COLLATION VERSION; CREATE DATABASE pvlakehouse;"
-# Inject the schema scripts including authentication, RAG, and chat history tables
-docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/002-create-lakehouse-tables.sql
-docker exec -i postgres psql -U pvlakehouse -d pvlakehouse < dlh-pv-dashboard/main/003-create-chat-history-tables.sql
-```
-
-No CSV-to-PostgreSQL loading step is required in the default runtime path.
-Silver and Gold data should be consumed from Iceberg through Trino.
-
-## 6) Verify services
+Option A: from repo root
 
 ```powershell
-docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env ps
+Set-Location dlh-pv-web
+d:/University/HK8/databrick-dlh-pv/.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir main/backend
 ```
 
-Optional health checks:
+Option B: when you are already in `dlh-pv-web`
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File main/docker/scripts/stack-health.ps1
+d:/University/HK8/databrick-dlh-pv/.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir main/backend
 ```
 
-## 7) Run the backend API (local)
+Do not run `Set-Location dlh-pv-web` again if your current directory is already `dlh-pv-web`.
 
-From repository root:
+## 6) Open the web app
 
-```bash
-source .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
-```
+After the server starts:
 
-## 8) Stop services
+- Login page: `http://127.0.0.1:8001/login`
+- Solar chat page: `http://127.0.0.1:8001/solar-chat`
+
+## 7) Quick smoke tests
+
+1. Login behavior:
+
+- `GET /` returns `303` to `/login` when unauthenticated.
+- `POST /auth/login` returns `303` on successful login redirect.
+
+2. Verify chat sessions are written to Neon:
 
 ```powershell
-docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env down
+cd dlh-pv-web
+.\.venv\Scripts\python.exe -c "import os, psycopg2; from dotenv import load_dotenv; load_dotenv('.env'); conn=psycopg2.connect(os.getenv('DATABASE_URL')); cur=conn.cursor(); cur.execute('select count(*) from chat_sessions'); print('chat_sessions', cur.fetchone()[0]); cur.close(); conn.close()"
 ```
 
-To also remove volumes (delete local database data):
+## 8) Troubleshooting
+
+### A) `ModuleNotFoundError: No module named app`
+
+Cause: wrong working directory or missing `--app-dir`.
+
+Fix: use one of the commands in section 5 exactly.
+
+### B) `Set-Location` path not found (`...\dlh-pv-web\dlh-pv-web`)
+
+Cause: running `Set-Location dlh-pv-web` while already in `dlh-pv-web`.
+
+Fix: skip `Set-Location` and run only the `python -m uvicorn ...` command.
+
+### C) `Python-dotenv could not parse statement ...`
+
+Cause: invalid `.env` syntax (usually a non-comment plain text line).
+
+Fix: convert section headers to comments (prefix with `#`) and keep lines in `KEY=VALUE` format.
+
+### D) Tool-calling model errors (for example `tool_use_failed`)
+
+Some OpenAI-compatible local models do not support function calling reliably.
+
+Recommended actions:
+
+- Switch to a model with reliable tool-calling support.
+- Keep fallback behavior enabled so the app still returns data-backed summaries.
+
+## 9) Benchmark chatbot latency from CLI
+
+Script: [main/backend/scripts/solar_chat_perf_cli.py](main/backend/scripts/solar_chat_perf_cli.py)
+
+Full pipeline benchmark:
 
 ```powershell
-docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env down -v
+cd dlh-pv-web
+d:/University/HK8/databrick-dlh-pv/.venv/Scripts/python.exe main/backend/scripts/solar_chat_perf_cli.py --base-url http://127.0.0.1:8001 --username admin --password admin123 --role data_engineer --message "Give me a quick PV Lakehouse overview" --repeat 1 --print-answer
 ```
 
-## 9) Common commands
-
-Rebuild and restart services:
+Model-only benchmark (no tools / no RAG):
 
 ```powershell
-docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env up -d --force-recreate
+cd dlh-pv-web
+d:/University/HK8/databrick-dlh-pv/.venv/Scripts/python.exe main/backend/scripts/solar_chat_perf_cli.py --base-url http://127.0.0.1:8001 --mode model-only --username admin --password admin123 --role data_engineer --message "Summarize the current system status" --repeat 1 --print-answer
 ```
 
-View logs:
+Key metrics in output:
 
-```powershell
-docker compose -f main/docker/docker-compose.yml --env-file main/docker/.env logs -f
-```
+- `roundtrip_ms`: client-side total latency
+- `server_elapsed_ms`: endpoint processing time
+- `service_latency_ms`: `SolarAIChatService` time (full mode)
+- `model_generation_ms`: model generation time (model-only mode)
+- `route_overhead_ms`: endpoint overhead above service/model time
 
-Deactivate virtual environment:
+## 10) Security notes
 
-```powershell
-deactivate
-```
-
-## Notes
-
-- Keep real secrets only in `.env` files that are ignored by Git.
-- Keep templates and documentation tracked in Git (`.env_example`, `.env.requirements.md`).
-
-## Solar AI Chat (Vietnamese Natural Language)
-
-Solar AI Chat endpoint is available at:
-
-- `POST /solar-ai-chat/query`
-
-### Request body
-
-```json
-{
-	"message": "Cho toi tong quan he thong va san luong",
-	"role": "data_engineer"
-}
-```
-
-Supported role values:
-
-- `data_engineer`
-- `ml_engineer`
-- `data_analyst`
-- `admin`
-
-### Model routing
-
-- Primary model: `gemini-2.5-flash-lite`
-- Fallback model: `gemini-2.5-flash`
-
-If the primary model is unavailable, the service automatically retries with the fallback model.
-If both models are unavailable, the service returns a safe data-backed summary with warning metadata.
-
-### Development environment variables
-
-Solar AI Chat environment templates are in `dev/config`:
-
-- `dev/config/.env_example`
-- `dev/config/.env.requirements.md`
-
-Create local runtime values with:
-
-```powershell
-Copy-Item dev/config/.env_example dev/config/.env -Force
-```
-
-## Basic Frontend Pages
-
-FastAPI now serves a basic web UI for module navigation and chatbot testing:
-
-- Home page with 8 module cards: `GET /`
-- Solar AI Chat page: `GET /solar-ai-chat`
-
-Run locally:
-
-```powershell
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
-```
-
-Then open:
-
-- `http://127.0.0.1:8000/`
-- `http://127.0.0.1:8000/solar-ai-chat`
+- Never commit real secrets.
+- Rotate tokens and API keys if they were exposed in logs or chat history.

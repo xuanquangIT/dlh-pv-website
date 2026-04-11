@@ -1,14 +1,15 @@
 from pathlib import Path
 from functools import lru_cache
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import require_role
-from app.db.database import AuthUser, SessionLocal
+from app.db.database import AuthUser
 from app.core.settings import get_solar_chat_settings
-from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
-from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
+from app.repositories.solar_ai_chat.databricks_history_repository import DatabricksChatHistoryRepository
 from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
+from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
     ChatRole,
@@ -24,7 +25,7 @@ from app.schemas.solar_ai_chat import (
     UpdateSessionTitleRequest,
 )
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
-from app.services.solar_ai_chat.gemini_client import GeminiModelRouter
+from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailableError
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
 from app.services.solar_ai_chat.intent_service import VietnameseIntentService
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
@@ -49,20 +50,18 @@ def _resolve_user_chat_role(current_user: AuthUser) -> ChatRole:
 # ------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
-def _get_history_repository() -> ChatHistoryRepository | PostgresChatHistoryRepository:
+def _get_history_repository() -> DatabricksChatHistoryRepository | PostgresChatHistoryRepository:
     settings = get_solar_chat_settings()
-    backend = settings.history_backend.strip().lower()
-
-    if backend == "postgres":
-        return PostgresChatHistoryRepository(session_factory=SessionLocal)
-
-    storage_dir = settings.resolved_data_root.parent / "chat_history"
-    return ChatHistoryRepository(storage_dir=storage_dir)
+    if settings.history_backend.strip().lower() == "postgres":
+        return PostgresChatHistoryRepository()
+    return DatabricksChatHistoryRepository(settings=settings)
 
 
 @lru_cache(maxsize=1)
 def _get_vector_repository() -> VectorRepository | None:
     settings = get_solar_chat_settings()
+    if settings.history_backend.strip().lower() != "postgres":
+        return None
     if not settings.pg_host:
         return None
     return VectorRepository(settings=settings)
@@ -71,11 +70,11 @@ def _get_vector_repository() -> VectorRepository | None:
 @lru_cache(maxsize=1)
 def _get_embedding_client() -> GeminiEmbeddingClient | None:
     settings = get_solar_chat_settings()
-    if not settings.gemini_api_key:
+    if not settings.embedding_api_key:
         return None
     return GeminiEmbeddingClient(
-        api_key=settings.gemini_api_key,
-        base_url=settings.gemini_base_url,
+        api_key=settings.embedding_api_key,
+        base_url=settings.embedding_base_url,
         model=settings.embedding_model,
         dimensions=settings.embedding_dimensions,
     )
@@ -85,9 +84,9 @@ def _get_embedding_client() -> GeminiEmbeddingClient | None:
 def get_solar_ai_chat_service() -> SolarAIChatService:
     settings = get_solar_chat_settings()
 
-    model_router: GeminiModelRouter | None = None
-    if settings.gemini_api_key:
-        model_router = GeminiModelRouter(settings=settings)
+    model_router: LLMModelRouter | None = None
+    if settings.llm_api_key:
+        model_router = LLMModelRouter(settings=settings)
 
     embedding_client = _get_embedding_client()
     intent_svc = VietnameseIntentService(embedding_client=embedding_client)
@@ -122,15 +121,15 @@ def query_solar_ai_chat(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     service: SolarAIChatService = Depends(get_solar_ai_chat_service),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> SolarChatResponse:
     effective_role = _resolve_user_chat_role(current_user)
     if request.session_id:
-        owned_session = history.get_session(
+        owned_session = history.session_exists(
             session_id=request.session_id,
             owner_user_id=str(current_user.id),
         )
-        if owned_session is None:
+        if not owned_session:
             raise HTTPException(status_code=404, detail="Session not found.")
     scoped_request = request.model_copy(update={"role": effective_role})
     try:
@@ -152,6 +151,108 @@ def query_solar_ai_chat(
         ) from unexpected_error
 
 
+@router.post("/query/benchmark")
+def benchmark_solar_ai_chat_query(
+    request: SolarChatRequest,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+    service: SolarAIChatService = Depends(get_solar_ai_chat_service),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+) -> dict[str, object]:
+    endpoint_started = time.perf_counter()
+    effective_role = _resolve_user_chat_role(current_user)
+    if request.session_id:
+        owned_session = history.session_exists(
+            session_id=request.session_id,
+            owner_user_id=str(current_user.id),
+        )
+        if not owned_session:
+            raise HTTPException(status_code=404, detail="Session not found.")
+
+    scoped_request = request.model_copy(update={"role": effective_role})
+    try:
+        response = service.handle_query(scoped_request)
+    except PermissionError as permission_error:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(permission_error),
+        ) from permission_error
+    except ValueError as value_error:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(value_error),
+        ) from value_error
+    except Exception as unexpected_error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Solar AI Chat is temporarily unavailable. Please retry shortly.",
+        ) from unexpected_error
+
+    endpoint_elapsed_ms = int((time.perf_counter() - endpoint_started) * 1000)
+    service_latency_ms = int(response.latency_ms)
+    return {
+        "benchmark_type": "full_pipeline",
+        "server_elapsed_ms": endpoint_elapsed_ms,
+        "service_latency_ms": service_latency_ms,
+        "route_overhead_ms": max(0, endpoint_elapsed_ms - service_latency_ms),
+        "response": response.model_dump(),
+    }
+
+
+@router.post("/query/benchmark/model-only")
+def benchmark_solar_ai_chat_model_only(
+    request: SolarChatRequest,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+) -> dict[str, object]:
+    endpoint_started = time.perf_counter()
+    effective_role = _resolve_user_chat_role(current_user)
+
+    settings = get_solar_chat_settings()
+    if not settings.llm_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LLM API key is not configured.",
+        )
+
+    model_router = LLMModelRouter(settings=settings)
+    prompt = (
+        "Ban la Solar AI. Tra loi bang tieng Viet ngan gon, ro rang, toi da 8 cau.\n"
+        f"Vai tro nguoi dung: {effective_role.value}\n"
+        f"Cau hoi: {request.message}\n"
+        "Khong goi tool, khong truy xuat du lieu bo sung."
+    )
+
+    model_started = time.perf_counter()
+    try:
+        model_result = model_router.generate(prompt)
+    except ModelUnavailableError as model_error:
+        model_elapsed_ms = int((time.perf_counter() - model_started) * 1000)
+        endpoint_elapsed_ms = int((time.perf_counter() - endpoint_started) * 1000)
+        return {
+            "benchmark_type": "model_only",
+            "server_elapsed_ms": endpoint_elapsed_ms,
+            "model_generation_ms": model_elapsed_ms,
+            "route_overhead_ms": max(0, endpoint_elapsed_ms - model_elapsed_ms),
+            "error": str(model_error),
+            "response": None,
+        }
+
+    model_elapsed_ms = int((time.perf_counter() - model_started) * 1000)
+    endpoint_elapsed_ms = int((time.perf_counter() - endpoint_started) * 1000)
+
+    return {
+        "benchmark_type": "model_only",
+        "server_elapsed_ms": endpoint_elapsed_ms,
+        "model_generation_ms": model_elapsed_ms,
+        "route_overhead_ms": max(0, endpoint_elapsed_ms - model_elapsed_ms),
+        "response": {
+            "answer": model_result.text,
+            "model_used": model_result.model_used,
+            "fallback_used": model_result.fallback_used,
+            "role": effective_role.value,
+        },
+    }
+
+
 # ------------------------------------------------------------------
 # Session management
 # ------------------------------------------------------------------
@@ -160,7 +261,7 @@ def query_solar_ai_chat(
 def create_session(
     request: CreateSessionRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     effective_role = _resolve_user_chat_role(current_user)
     return history.create_session(
@@ -173,7 +274,7 @@ def create_session(
 @router.get("/sessions", response_model=list[ChatSessionSummary])
 def list_sessions(
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> list[ChatSessionSummary]:
     return history.list_sessions(owner_user_id=str(current_user.id))
 
@@ -182,7 +283,7 @@ def list_sessions(
 def get_session(
     session_id: str,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionDetail:
     session = history.get_session(session_id=session_id, owner_user_id=str(current_user.id))
     if session is None:
@@ -194,7 +295,7 @@ def get_session(
 def delete_session(
     session_id: str,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> None:
     if not history.delete_session(session_id=session_id, owner_user_id=str(current_user.id)):
         raise HTTPException(status_code=404, detail="Session not found.")
@@ -205,7 +306,7 @@ def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     updated = history.update_session_title(
         session_id=session_id,
@@ -222,7 +323,7 @@ def rename_session(
     session_id: str,
     request: UpdateSessionTitleRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     updated = history.update_session_title(
         session_id=session_id,
@@ -243,7 +344,7 @@ def fork_session(
     session_id: str,
     request: ForkSessionRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: ChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     effective_role = _resolve_user_chat_role(current_user)
     result = history.fork_session(
@@ -271,7 +372,7 @@ def ingest_document(
     _: AuthUser = Depends(require_role(["admin"])),
 ) -> IngestDocumentResponse:
     settings = get_solar_chat_settings()
-    if not settings.gemini_api_key:
+    if not settings.embedding_api_key:
         raise HTTPException(
             status_code=503,
             detail="Embedding API key is not configured.",

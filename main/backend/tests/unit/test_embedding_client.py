@@ -1,6 +1,8 @@
+import io
 import json
 import unittest
 from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 
 from app.services.solar_ai_chat.embedding_client import (
     DEFAULT_EMBEDDING_DIMENSIONS,
@@ -91,7 +93,29 @@ class EmbedTextTests(unittest.TestCase):
         call_args = mock_urlopen.call_args
         request_obj = call_args[0][0]
         self.assertIn("text-embedding-004:embedContent", request_obj.full_url)
-        self.assertIn("key=test-key", request_obj.full_url)
+        self.assertEqual(request_obj.headers.get("X-goog-api-key"), "test-key")
+
+    @patch("app.services.solar_ai_chat.embedding_client.urlopen")
+    def test_embed_batch_falls_back_to_sequential_embed_text(self, mock_urlopen: MagicMock) -> None:
+        vector = [0.2] * DEFAULT_EMBEDDING_DIMENSIONS
+        batch_error = HTTPError(
+            url="https://example.com/v1beta/models/text-embedding-004:batchEmbedContents",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error": {"message": "batch not supported"}}'),
+        )
+        mock_urlopen.side_effect = [
+            batch_error,
+            self._mock_response({"embedding": {"values": vector}}),
+            self._mock_response({"embedding": {"values": vector}}),
+        ]
+
+        client = self._make_client()
+        result = client.embed_batch(["a", "b"])
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(len(result[0]), DEFAULT_EMBEDDING_DIMENSIONS)
 
 
 if __name__ == "__main__":

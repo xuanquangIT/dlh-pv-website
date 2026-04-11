@@ -1,4 +1,4 @@
-"""Extreme metric repository: highest/lowest AQI, energy, and weather queries."""
+﻿"""Extreme metric repository: highest/lowest AQI, energy, and weather queries."""
 from __future__ import annotations
 
 import logging
@@ -11,7 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 class ExtremeRepository(BaseRepository):
-    """Handles fetch_extreme_* queries with Trino-first, CSV-fallback."""
+    """Handles fetch_extreme_* queries using Databricks SQL only."""
+
+    _WEATHER_COLUMN_MAP: dict[str, str] = {
+        "temperature_2m": "temperature_c",
+        "wind_speed_10m": "wind_speed_ms",
+        "wind_gusts_10m": "wind_gust_ms",
+        "cloud_cover": "cloud_cover_pct",
+    }
 
     def fetch_extreme_aqi(
         self,
@@ -21,8 +28,7 @@ class ExtremeRepository(BaseRepository):
         specific_hour: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         base, qt, station_rows, data_source = self._fetch_extreme_base(
-            table="lh_silver_clean_hourly_air_quality",
-            csv_filename="lh_silver_clean_hourly_air_quality.csv",
+            table="silver.air_quality",
             value_column="aqi_value",
             metric_label="AQI",
             query_type=query_type,
@@ -30,7 +36,6 @@ class ExtremeRepository(BaseRepository):
             anchor_date=anchor_date,
             specific_hour=specific_hour,
             extra_columns=("aqi_category",),
-            csv_extra_keys=("aqi_category",),
         )
         selected = station_rows[0]
         metrics = {
@@ -49,7 +54,7 @@ class ExtremeRepository(BaseRepository):
                 for s in station_rows[:5]
             ],
         }
-        return metrics, [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality", "data_source": data_source}]
+        return metrics, [{"layer": "Silver", "dataset": "silver.air_quality", "data_source": data_source}]
 
     def fetch_extreme_energy(
         self,
@@ -59,9 +64,8 @@ class ExtremeRepository(BaseRepository):
         specific_hour: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         base, qt, station_rows, data_source = self._fetch_extreme_base(
-            table="lh_silver_clean_hourly_energy",
-            csv_filename="lh_silver_clean_hourly_energy.csv",
-            value_column="energy_mwh",
+            table="silver.energy_readings",
+            value_column="energy_kwh",
             metric_label="Energy",
             query_type=query_type,
             timeframe=timeframe,
@@ -73,13 +77,13 @@ class ExtremeRepository(BaseRepository):
             **base,
             "extreme_metric": "energy",
             f"{qt}_station": selected["facility"],
-            f"{qt}_energy_mwh": round(float(selected["metric_value"]), 2),
+            f"{qt}_energy_mwh": round(float(selected["metric_value"]) / 1000.0, 2),
             f"top_{qt}_stations": [
-                {"facility": s["facility"], "energy_mwh": round(float(s["metric_value"]), 2)}
+                {"facility": s["facility"], "energy_mwh": round(float(s["metric_value"]) / 1000.0, 2)}
                 for s in station_rows[:5]
             ],
         }
-        return metrics, [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy", "data_source": data_source}]
+        return metrics, [{"layer": "Silver", "dataset": "silver.energy_readings", "data_source": data_source}]
 
     def fetch_extreme_weather(
         self,
@@ -91,10 +95,10 @@ class ExtremeRepository(BaseRepository):
         weather_unit: str,
         specific_hour: int | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        resolved_weather_metric = self._WEATHER_COLUMN_MAP.get(weather_metric, weather_metric)
         base, qt, station_rows, data_source = self._fetch_extreme_base(
-            table="lh_silver_clean_hourly_weather",
-            csv_filename="lh_silver_clean_hourly_weather.csv",
-            value_column=weather_metric,
+            table="silver.weather",
+            value_column=resolved_weather_metric,
             metric_label="Weather",
             query_type=query_type,
             timeframe=timeframe,
@@ -105,7 +109,7 @@ class ExtremeRepository(BaseRepository):
         metrics = {
             **base,
             "extreme_metric": "weather",
-            "weather_metric": weather_metric,
+            "weather_metric": resolved_weather_metric,
             "weather_metric_label": weather_metric_label,
             "weather_unit": weather_unit,
             f"{qt}_station": selected["facility"],
@@ -115,12 +119,11 @@ class ExtremeRepository(BaseRepository):
                 for s in station_rows[:5]
             ],
         }
-        return metrics, [{"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather", "data_source": data_source}]
+        return metrics, [{"layer": "Silver", "dataset": "silver.weather", "data_source": data_source}]
 
     def _fetch_extreme_base(
         self,
         table: str,
-        csv_filename: str,
         value_column: str,
         metric_label: str,
         query_type: str,
@@ -128,7 +131,6 @@ class ExtremeRepository(BaseRepository):
         anchor_date: date | None,
         specific_hour: int | None = None,
         extra_columns: tuple[str, ...] = (),
-        csv_extra_keys: tuple[str, ...] = (),
     ) -> tuple[dict[str, Any], str, list[dict[str, Any]], str]:
         """Shared setup for all fetch_extreme_* methods.
 
@@ -137,7 +139,7 @@ class ExtremeRepository(BaseRepository):
         """
         highest = query_type == "highest"
         qt = "highest" if highest else "lowest"
-        resolved_date = anchor_date or self._resolve_latest_date(table, csv_filename)
+        resolved_date = anchor_date or self._resolve_latest_date(table)
         window_start, window_end, period_label = self._resolve_period_window(
             timeframe, resolved_date, specific_hour,
         )
@@ -148,10 +150,6 @@ class ExtremeRepository(BaseRepository):
             window_start=window_start,
             window_end=window_end,
             extra_columns=extra_columns,
-            csv_filename=csv_filename,
-            csv_value_key=value_column,
-            highest=highest,
-            csv_extra_keys=csv_extra_keys,
         )
         if not rows:
             raise ValueError(
@@ -175,32 +173,38 @@ class ExtremeRepository(BaseRepository):
         order: str,
         window_start: datetime,
         window_end: datetime,
-        csv_filename: str,
-        csv_value_key: str,
-        highest: bool,
         extra_columns: tuple[str, ...] = (),
-        csv_extra_keys: tuple[str, ...] = (),
     ) -> tuple[list[dict[str, Any]], str]:
         self._validate_sql_identifier(table, self._ALLOWED_TABLES)
+        value_column = self._WEATHER_COLUMN_MAP.get(value_column, value_column)
         self._validate_sql_identifier(value_column, self._ALLOWED_COLUMNS)
         for col in extra_columns:
             self._validate_sql_identifier(col, self._ALLOWED_COLUMNS)
+
+        if table == "silver.energy_readings":
+            facility_expr = "COALESCE(facility_name, facility_id)"
+            timestamp_column = "date_hour"
+        elif table == "silver.weather":
+            facility_expr = "COALESCE(facility_name, location_id)"
+            timestamp_column = "weather_timestamp"
+        elif table == "silver.air_quality":
+            facility_expr = "COALESCE(facility_name, location_id)"
+            timestamp_column = "aqi_timestamp"
+        else:
+            facility_expr = "COALESCE(facility_name, facility_code)"
+            timestamp_column = "date_hour"
+
         extra_select = "".join(f", {col}" for col in extra_columns)
         sql = (
-            f"SELECT COALESCE(facility_name, facility_code) AS facility,"
+            f"SELECT {facility_expr} AS facility,"
             f"       {value_column} AS metric_value,"
-            f"       date_hour AS observed_at"
+            f"       {timestamp_column} AS observed_at"
             f"       {extra_select}"
             f" FROM {table}"
-            f" WHERE date_hour >= TIMESTAMP '{window_start.strftime('%Y-%m-%d %H:%M:%S')}'"
-            f"   AND date_hour <  TIMESTAMP '{window_end.strftime('%Y-%m-%d %H:%M:%S')}'"
+            f" WHERE {timestamp_column} >= TIMESTAMP '{window_start.strftime('%Y-%m-%d %H:%M:%S')}'"
+            f"   AND {timestamp_column} <  TIMESTAMP '{window_end.strftime('%Y-%m-%d %H:%M:%S')}'"
             f"   AND {value_column} IS NOT NULL"
             f" ORDER BY {value_column} {order}"
         )
-        try:
-            return self._execute_query(sql), "trino"
-        except Exception as exc:
-            logger.warning("Trino unavailable for %s (%s), falling back to CSV.", table, exc)
-            return self._csv_extreme_fallback(
-                csv_filename, csv_value_key, highest, window_start, window_end, csv_extra_keys,
-            ), "csv"
+        return self._execute_query(sql), "databricks"
+

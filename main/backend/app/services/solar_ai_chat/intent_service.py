@@ -28,7 +28,6 @@ class VietnameseIntentService:
             "chi so aqi",
             "aqi",
             "aqi thap nhat",
-            "tram nao",
             "low score",
             "co so diem thap",
             "nguyen nhan",
@@ -61,6 +60,9 @@ class VietnameseIntentService:
         ),
         ChatTopic.ENERGY_PERFORMANCE: (
             "hieu suat",
+            "performance",
+            "best performance",
+            "tot nhat",
             "top nha may",
             "top facility",
             "gio cao diem",
@@ -92,6 +94,11 @@ class VietnameseIntentService:
             "vi tri",
             "o dau",
             "toa do",
+            "mui gio",
+            "timezone",
+            "time zone",
+            "utc",
+            "gio dia phuong",
             "quoc gia",
             "nuoc nao",
             "bang nao",
@@ -146,6 +153,7 @@ class VietnameseIntentService:
             "Trạm năng lượng này nằm ở tọa độ nào",
             "Vị trí địa lý quốc gia nào thành phố nào",
             "Thông tin địa chỉ của cơ sở là gì",
+            "Múi giờ hiện tại của các trạm là gì",
         ],
     }
 
@@ -174,7 +182,9 @@ class VietnameseIntentService:
                 self._topic_embeddings[topic].append(embeddings[i])
             logger.info("Semantic router loaded %d canonical vectors.", len(flat_phrases))
         except Exception as e:
-            logger.error("Failed to init semantic router semantics: %s", e)
+            logger.warning("Semantic router disabled: %s", e)
+            self._topic_embeddings = {}
+            self._embedding_client = None
 
     def _cosine_similarity(self, vec_a: list[float], vec_b: list[float]) -> float:
         dot = sum(a * b for a, b in zip(vec_a, vec_b))
@@ -209,6 +219,8 @@ class VietnameseIntentService:
                     )
             except Exception as e:
                 __import__("logging").getLogger(__name__).warning("Semantic routing failed, fallback to keyword: %s", e)
+                self._embedding_client = None
+                self._topic_embeddings = {}
 
         matched_topic: ChatTopic | None = None
         matched_score = 0

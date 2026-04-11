@@ -55,7 +55,13 @@ class GeminiEmbeddingClient:
             for t in texts
         ]
         payload = {"requests": requests_body}
-        result = self._post(endpoint, payload)
+        try:
+            result = self._post(endpoint, payload)
+        except EmbeddingUnavailableError as exc:
+            if "location is not supported" in str(exc).lower():
+                raise
+            # Some embedding endpoints reject batch mode. Fall back to sequential calls.
+            return [self.embed_text(text) for text in texts]
 
         embeddings_list = result.get("embeddings", [])
         if not isinstance(embeddings_list, list) or len(embeddings_list) != len(texts):
@@ -89,7 +95,25 @@ class GeminiEmbeddingClient:
                     raise EmbeddingUnavailableError("Unexpected response format.")
                 return body
         except HTTPError as exc:
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8", errors="replace")
+            except Exception:  # pragma: no cover - defensive read for non-standard HTTPError objects
+                error_body = ""
+
+            if "User location is not supported for the API use" in error_body:
+                logger.warning("Embedding API location is not supported for this key/project.")
+                raise EmbeddingUnavailableError(
+                    "Embedding API location is not supported for this key/project."
+                ) from exc
+
             logger.error("Embedding API HTTP error: %s %s", exc.code, exc.reason)
+
+            if error_body:
+                raise EmbeddingUnavailableError(
+                    f"Embedding API error: {exc.code} {exc.reason} | body: {error_body[:300]}"
+                ) from exc
+
             raise EmbeddingUnavailableError(
                 f"Embedding API error: {exc.code} {exc.reason}"
             ) from exc

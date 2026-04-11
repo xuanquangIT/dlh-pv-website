@@ -1,7 +1,7 @@
 import uuid
+from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
 
 from app.core.security import create_access_token, verify_password
 from app.db.database import AuthUser
@@ -10,7 +10,7 @@ from app.schemas.auth import AdminUserCreate, LoginRequest, Token, UserCreate, U
 
 
 class AuthService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Any = None):
         self.repo = UserRepository(db)
 
     def authenticate_user(self, login_request: LoginRequest) -> Token:

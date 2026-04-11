@@ -35,9 +35,17 @@ class VietnameseIntentServiceTests(unittest.TestCase):
         result = self.service.detect_intent("San luong energy cao nhat cac tram vao ngay 2/1/2026")
         self.assertEqual(result.topic, ChatTopic.ENERGY_PERFORMANCE)
 
+    def test_detects_energy_performance_for_best_performance_question(self) -> None:
+        result = self.service.detect_intent("Tram co performance tot nhat la tram nao")
+        self.assertEqual(result.topic, ChatTopic.ENERGY_PERFORMANCE)
+
     def test_detects_weather_extreme_question(self) -> None:
         result = self.service.detect_intent("Nhiet do weather thap nhat cac tram vao ngay 2/1/2026")
         self.assertEqual(result.topic, ChatTopic.ENERGY_PERFORMANCE)
+
+    def test_detects_facility_info_for_timezone_question(self) -> None:
+        result = self.service.detect_intent("Mui gio cua cac tram hien tai")
+        self.assertEqual(result.topic, ChatTopic.FACILITY_INFO)
 
     def test_returns_general_for_unsupported_intent(self) -> None:
         result = self.service.detect_intent("Ke cho toi mot cau chuyen vui")

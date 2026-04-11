@@ -1,4 +1,4 @@
-"""Station daily report repository: per-facility aggregation for a given date."""
+﻿"""Station daily report repository: per-facility aggregation for a given date."""
 from __future__ import annotations
 
 import logging
@@ -16,9 +16,22 @@ _ALL_REPORT_METRICS: frozenset[str] = frozenset({
     "temperature_2m", "wind_speed_10m", "cloud_cover",
 })
 
+_WEATHER_METRIC_COLUMN_MAP: dict[str, str] = {
+    "shortwave_radiation": "shortwave_radiation",
+    "temperature_2m": "temperature_c",
+    "wind_speed_10m": "wind_speed_ms",
+    "cloud_cover": "cloud_cover_pct",
+}
+
+_TABLE_TIMESTAMP_COLUMN: dict[str, str] = {
+    "silver.energy_readings": "date_hour",
+    "silver.weather": "weather_timestamp",
+    "silver.air_quality": "aqi_timestamp",
+}
+
 
 class ReportRepository(BaseRepository):
-    """Handles fetch_station_daily_report with Trino-first, CSV-fallback."""
+    """Handles fetch_station_daily_report using Databricks SQL only."""
 
     def fetch_station_daily_report(
         self,
@@ -29,20 +42,14 @@ class ReportRepository(BaseRepository):
         if not requested:
             requested = _ALL_REPORT_METRICS
 
-        data_source = "trino"
-        try:
-            stations = self._station_daily_report_trino(anchor_date, requested)
-            available_date_min, available_date_max = self._station_report_date_range_trino(requested)
-        except Exception as exc:
-            logger.warning("Trino unavailable for station_daily_report (%s), falling back to CSV.", exc)
-            stations = self._station_daily_report_csv(anchor_date, requested)
-            available_date_min, available_date_max = self._station_report_date_range_csv(requested)
-            data_source = "csv"
+        data_source = "databricks"
+        stations = self._station_daily_report_databricks(anchor_date, requested)
+        available_date_min, available_date_max = self._station_report_date_range_databricks(requested)
 
         has_data = bool(stations)
         no_data_reason: str | None = None
         if not has_data:
-            no_data_reason = f"không có dữ liệu cho ngày {anchor_date.isoformat()}"
+            no_data_reason = f"khong co du lieu cho ngay {anchor_date.isoformat()}"
             logger.info(
                 "station_daily_report_no_data date=%s available_date_min=%s available_date_max=%s source=%s",
                 anchor_date.isoformat(),
@@ -53,11 +60,11 @@ class ReportRepository(BaseRepository):
 
         sources: list[dict[str, str]] = []
         if requested & {"energy_mwh"}:
-            sources.append({"layer": "Silver", "dataset": "lh_silver_clean_hourly_energy", "data_source": data_source})
+            sources.append({"layer": "Silver", "dataset": "silver.energy_readings", "data_source": data_source})
         if requested & {"shortwave_radiation", "temperature_2m", "wind_speed_10m", "cloud_cover"}:
-            sources.append({"layer": "Silver", "dataset": "lh_silver_clean_hourly_weather", "data_source": data_source})
+            sources.append({"layer": "Silver", "dataset": "silver.weather", "data_source": data_source})
         if requested & {"aqi_value"}:
-            sources.append({"layer": "Silver", "dataset": "lh_silver_clean_hourly_air_quality", "data_source": data_source})
+            sources.append({"layer": "Silver", "dataset": "silver.air_quality", "data_source": data_source})
 
         return {
             "report_date": anchor_date.isoformat(),
@@ -99,24 +106,25 @@ class ReportRepository(BaseRepository):
     def _report_sources_for_metrics(requested: set[str]) -> list[tuple[str, str]]:
         sources: list[tuple[str, str]] = []
         if requested & {"energy_mwh"}:
-            sources.append(("lh_silver_clean_hourly_energy", "lh_silver_clean_hourly_energy.csv"))
+            sources.append(("silver.energy_readings", "lh_silver_clean_hourly_energy.csv"))
         if requested & {"shortwave_radiation", "temperature_2m", "wind_speed_10m", "cloud_cover"}:
-            sources.append(("lh_silver_clean_hourly_weather", "lh_silver_clean_hourly_weather.csv"))
+            sources.append(("silver.weather", "lh_silver_clean_hourly_weather.csv"))
         if requested & {"aqi_value"}:
-            sources.append(("lh_silver_clean_hourly_air_quality", "lh_silver_clean_hourly_air_quality.csv"))
+            sources.append(("silver.air_quality", "lh_silver_clean_hourly_air_quality.csv"))
         return sources
 
-    def _station_report_date_range_trino(self, requested: set[str]) -> tuple[str | None, str | None]:
+    def _station_report_date_range_databricks(self, requested: set[str]) -> tuple[str | None, str | None]:
         min_date: str | None = None
         max_date: str | None = None
 
         for table_name, _ in self._report_sources_for_metrics(requested):
+            timestamp_column = _TABLE_TIMESTAMP_COLUMN.get(table_name, "date_hour")
             rows = self._execute_query(
                 "SELECT"
-                " MIN(CAST(date_hour AS DATE)) AS min_date,"
-                " MAX(CAST(date_hour AS DATE)) AS max_date"
+                f" MIN(CAST({timestamp_column} AS DATE)) AS min_date,"
+                f" MAX(CAST({timestamp_column} AS DATE)) AS max_date"
                 f" FROM {table_name}"
-                " WHERE date_hour IS NOT NULL"
+                f" WHERE {timestamp_column} IS NOT NULL"
             )
             if not rows:
                 continue
@@ -142,31 +150,34 @@ class ReportRepository(BaseRepository):
 
         return min_date, max_date
 
-    def _station_daily_report_trino(self, anchor_date: date, requested: set[str]) -> list[dict[str, Any]]:
+    def _station_daily_report_databricks(self, anchor_date: date, requested: set[str]) -> list[dict[str, Any]]:
         date_str = anchor_date.isoformat()
         facility_data: dict[str, dict[str, Any]] = {}
 
         if "energy_mwh" in requested:
             rows = self._execute_query(
-                f"SELECT COALESCE(facility_name, facility_code) AS facility,"
-                f"       SUM(energy_mwh) AS total_energy_mwh"
-                f" FROM lh_silver_clean_hourly_energy"
+                f"SELECT COALESCE(facility_name, facility_id) AS facility,"
+                f"       SUM(energy_kwh) AS total_energy_kwh"
+                f" FROM silver.energy_readings"
                 f" WHERE CAST(date_hour AS DATE) = DATE '{date_str}'"
-                f" GROUP BY COALESCE(facility_name, facility_code)"
+                f" GROUP BY COALESCE(facility_name, facility_id)"
             )
             for r in rows:
                 name = r["facility"]
                 facility_data.setdefault(name, {"facility": name})
-                facility_data[name]["energy_mwh"] = round(float(r["total_energy_mwh"]), 4)
+                facility_data[name]["energy_mwh"] = round(float(r["total_energy_kwh"]) / 1000.0, 4)
 
         weather_cols = requested & {"shortwave_radiation", "temperature_2m", "wind_speed_10m", "cloud_cover"}
         if weather_cols:
-            agg_parts = ", ".join(f"AVG({col}) AS avg_{col}" for col in sorted(weather_cols))
+            agg_parts = ", ".join(
+                f"AVG({_WEATHER_METRIC_COLUMN_MAP[col]}) AS avg_{col}"
+                for col in sorted(weather_cols)
+            )
             rows = self._execute_query(
-                f"SELECT COALESCE(facility_name, facility_code) AS facility, {agg_parts}"
-                f" FROM lh_silver_clean_hourly_weather"
-                f" WHERE CAST(date_hour AS DATE) = DATE '{date_str}'"
-                f" GROUP BY COALESCE(facility_name, facility_code)"
+                f"SELECT COALESCE(facility_name, location_id) AS facility, {agg_parts}"
+                f" FROM silver.weather"
+                f" WHERE CAST(weather_timestamp AS DATE) = DATE '{date_str}'"
+                f" GROUP BY COALESCE(facility_name, location_id)"
             )
             for r in rows:
                 name = r["facility"]
@@ -178,11 +189,11 @@ class ReportRepository(BaseRepository):
 
         if "aqi_value" in requested:
             rows = self._execute_query(
-                f"SELECT COALESCE(facility_name, facility_code) AS facility,"
+                f"SELECT COALESCE(facility_name, location_id) AS facility,"
                 f"       AVG(aqi_value) AS avg_aqi"
-                f" FROM lh_silver_clean_hourly_air_quality"
-                f" WHERE CAST(date_hour AS DATE) = DATE '{date_str}'"
-                f" GROUP BY COALESCE(facility_name, facility_code)"
+                f" FROM silver.air_quality"
+                f" WHERE CAST(aqi_timestamp AS DATE) = DATE '{date_str}'"
+                f" GROUP BY COALESCE(facility_name, location_id)"
             )
             for r in rows:
                 name = r["facility"]
@@ -241,3 +252,6 @@ class ReportRepository(BaseRepository):
                 facility_data[name]["aqi_value"] = round(mean(vals), 2) if vals else 0.0
 
         return sorted(facility_data.values(), key=lambda x: x["facility"])
+
+
+

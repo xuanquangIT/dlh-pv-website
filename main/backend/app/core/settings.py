@@ -2,41 +2,83 @@ import threading
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
+DEFAULT_ENV_FILES = (
+    str(PROJECT_ROOT / ".env"),
+    str(PROJECT_ROOT / "main" / "docker" / ".env"),
+)
 
 
 class SolarChatSettings(BaseSettings):
     """Runtime settings for Solar AI Chat module."""
 
     model_config = SettingsConfigDict(
-        env_file=(
-            ".env",
-            "main/docker/.env",
-        ),
+        env_file=DEFAULT_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
-    gemini_api_key: str | None = Field(default=None, alias="SOLAR_CHAT_GEMINI_API_KEY")
-    gemini_base_url: str = Field(
-        default="https://generativelanguage.googleapis.com/v1beta",
-        alias="SOLAR_CHAT_GEMINI_BASE_URL",
+    llm_api_format: str = Field(
+        default="gemini",
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_API_FORMAT",
+            "SOLAR_CHAT_LLM_PROVIDER",
+            "llm_api_format",
+            "llm_provider",
+        ),
+    )
+    llm_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_API_KEY",
+            "SOLAR_CHAT_GEMINI_API_KEY",
+            "llm_api_key",
+            "gemini_api_key",
+        ),
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_BASE_URL",
+            "SOLAR_CHAT_GEMINI_BASE_URL",
+            "llm_base_url",
+            "gemini_base_url",
+        ),
     )
     primary_model: str = Field(
         default="gemini-2.5-flash-lite",
-        alias="SOLAR_CHAT_PRIMARY_MODEL",
+        validation_alias=AliasChoices("SOLAR_CHAT_PRIMARY_MODEL", "primary_model"),
     )
     fallback_model: str = Field(
         default="gemini-2.5-flash",
-        alias="SOLAR_CHAT_FALLBACK_MODEL",
+        validation_alias=AliasChoices("SOLAR_CHAT_FALLBACK_MODEL", "fallback_model"),
     )
     request_timeout_seconds: float = Field(
         default=15.0,
-        alias="SOLAR_CHAT_REQUEST_TIMEOUT_SECONDS",
+        validation_alias=AliasChoices("SOLAR_CHAT_REQUEST_TIMEOUT_SECONDS", "request_timeout_seconds"),
+    )
+    llm_anthropic_version: str = Field(
+        default="2023-06-01",
+        alias="SOLAR_CHAT_ANTHROPIC_VERSION",
     )
     data_root: str | None = Field(default=None, alias="SOLAR_CHAT_DATA_ROOT")
 
+    databricks_host: str | None = Field(default=None, alias="DATABRICKS_HOST")
+    databricks_token: str | None = Field(default=None, alias="DATABRICKS_TOKEN")
+    databricks_sql_http_path: str | None = Field(default=None, alias="DATABRICKS_SQL_HTTP_PATH")
+    databricks_warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
+    uc_catalog: str = Field(default="pv", alias="UC_CATALOG")
+    uc_app_catalog: str = Field(default="dlh-web", alias="UC_APP_CATALOG")
+    uc_silver_schema: str = Field(default="silver", alias="UC_SILVER_SCHEMA")
+    uc_gold_schema: str = Field(default="gold", alias="UC_GOLD_SCHEMA")
+    uc_app_schema: str = Field(default="app", alias="UC_APP_SCHEMA")
+
+    # Backward compatibility for existing env files that still include TRINO_* keys.
     trino_host: str = Field(default="localhost", alias="TRINO_HOST")
     trino_port: int = Field(default=8081, alias="TRINO_PORT")
     trino_user: str = Field(default="trino", alias="TRINO_USER")
@@ -48,7 +90,18 @@ class SolarChatSettings(BaseSettings):
     pg_database: str = Field(default="pvlakehouse", alias="POSTGRES_DB")
     pg_user: str = Field(default="pvlakehouse", alias="POSTGRES_USER")
     pg_password: str = Field(default="pvlakehouse", alias="POSTGRES_PASSWORD")
+    pg_database_url: str | None = Field(default=None, alias="DATABASE_URL")
+    pg_sslmode: str | None = Field(default=None, alias="POSTGRES_SSLMODE")
+    pg_channel_binding: str | None = Field(default=None, alias="POSTGRES_CHANNEL_BINDING")
 
+    embedding_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SOLAR_CHAT_EMBEDDING_API_KEY", "SOLAR_CHAT_GEMINI_API_KEY"),
+    )
+    embedding_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        validation_alias=AliasChoices("SOLAR_CHAT_EMBEDDING_BASE_URL", "SOLAR_CHAT_GEMINI_BASE_URL"),
+    )
     embedding_model: str = Field(
         default="gemini-embedding-001",
         alias="SOLAR_CHAT_EMBEDDING_MODEL",
@@ -60,7 +113,82 @@ class SolarChatSettings(BaseSettings):
     rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
-    history_backend: str = Field(default="file", alias="SOLAR_CHAT_HISTORY_BACKEND")
+    history_backend: str = Field(default="databricks", alias="SOLAR_CHAT_HISTORY_BACKEND")
+
+    @property
+    def gemini_api_key(self) -> str | None:
+        """Backward-compatible alias for legacy callsites/tests."""
+        return self.llm_api_key
+
+    @gemini_api_key.setter
+    def gemini_api_key(self, value: str | None) -> None:
+        self.llm_api_key = value
+
+    @property
+    def gemini_base_url(self) -> str | None:
+        """Backward-compatible alias for legacy callsites/tests."""
+        return self.llm_base_url
+
+    @gemini_base_url.setter
+    def gemini_base_url(self, value: str | None) -> None:
+        self.llm_base_url = value
+
+    @property
+    def resolved_databricks_http_path(self) -> str | None:
+        if self.databricks_sql_http_path:
+            return self.databricks_sql_http_path.strip()
+
+        if self.databricks_warehouse_id:
+            warehouse_id = self.databricks_warehouse_id.strip()
+            if warehouse_id:
+                return f"/sql/1.0/warehouses/{warehouse_id}"
+
+        return None
+
+    @property
+    def resolved_llm_base_url(self) -> str:
+        if self.llm_base_url and self.llm_base_url.strip():
+            return self.llm_base_url.strip()
+
+        api_format = self.resolved_llm_api_format
+        if api_format == "gemini":
+            return "https://generativelanguage.googleapis.com/v1beta"
+
+        if api_format == "anthropic":
+            return "https://api.anthropic.com/v1"
+
+        return "https://api.openai.com/v1"
+
+    @property
+    def resolved_llm_api_format(self) -> str:
+        normalized = self.llm_api_format.strip().lower()
+        if normalized in {"local", "openai-compatible", "openai_compatible"}:
+            return "openai"
+
+        if normalized in {"openai", "chatgpt", "groq"}:
+            inferred = "openai"
+        elif normalized in {"anthropic", "claude"}:
+            inferred = "anthropic"
+        elif normalized == "gemini":
+            inferred = "gemini"
+        else:
+            inferred = "openai"
+
+        base_url = (self.llm_base_url or "").strip().lower()
+        if "generativelanguage.googleapis.com" in base_url:
+            return "gemini"
+        if "api.anthropic.com" in base_url:
+            return "anthropic"
+        if "api.openai.com" in base_url or "api.groq.com" in base_url or "/openai" in base_url:
+            return "openai"
+
+        primary_model = self.primary_model.strip().lower()
+        if primary_model.startswith("gemini"):
+            return "gemini"
+        if primary_model.startswith("claude"):
+            return "anthropic"
+
+        return inferred
 
     @property
     def resolved_data_root(self) -> Path:
@@ -80,11 +208,10 @@ class PowerBISettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=(
-            ".env",
-            "dev/config/.env",
-            "stg/config/.env",
-            "prod/config/.env",
-            "main/docker/.env",
+            *DEFAULT_ENV_FILES,
+            str(PROJECT_ROOT / "dev" / "config" / ".env"),
+            str(PROJECT_ROOT / "stg" / "config" / ".env"),
+            str(PROJECT_ROOT / "prod" / "config" / ".env"),
         ),
         env_file_encoding="utf-8",
         extra="ignore",
@@ -105,7 +232,7 @@ class DatabaseSettings(BaseSettings):
     """Runtime settings for Database module."""
 
     model_config = SettingsConfigDict(
-        env_file=(".env", "main/docker/.env"),
+        env_file=DEFAULT_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -115,17 +242,31 @@ class DatabaseSettings(BaseSettings):
     pg_database: str = Field(default="pvlakehouse", alias="POSTGRES_DB")
     pg_user: str = Field(default="pvlakehouse", alias="POSTGRES_USER")
     pg_password: str = Field(default="pvlakehouse", alias="POSTGRES_PASSWORD")
+    pg_database_url: str | None = Field(default=None, alias="DATABASE_URL")
+    pg_sslmode: str | None = Field(default=None, alias="POSTGRES_SSLMODE")
+    pg_channel_binding: str | None = Field(default=None, alias="POSTGRES_CHANNEL_BINDING")
 
     @property
     def database_url(self) -> str:
-        return f"postgresql://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+        if self.pg_database_url:
+            return self.pg_database_url.strip()
+
+        url = f"postgresql://{self.pg_user}:{self.pg_password}@{self.pg_host}:{self.pg_port}/{self.pg_database}"
+        query_params: list[str] = []
+        if self.pg_sslmode:
+            query_params.append(f"sslmode={self.pg_sslmode.strip()}")
+        if self.pg_channel_binding:
+            query_params.append(f"channel_binding={self.pg_channel_binding.strip()}")
+        if query_params:
+            return f"{url}?{'&'.join(query_params)}"
+        return url
 
 
 class AuthSettings(BaseSettings):
     """Runtime settings for Authentication module."""
 
     model_config = SettingsConfigDict(
-        env_file=(".env", "main/docker/.env"),
+        env_file=DEFAULT_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
     )

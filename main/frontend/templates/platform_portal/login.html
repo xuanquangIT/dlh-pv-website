@@ -21,39 +21,15 @@
             </div>
 
             <div class="hero-block">
-                <div class="hero-tag">
-                    <span class="hero-tag-dot" aria-hidden="true"></span>
-                    <span>System Live · {{ active_facilities | default(24) }} Facilities Online</span>
-                </div>
                 <h1>Intelligent solar data, <em>unified</em>.</h1>
                 <p>
                     Real-time pipeline monitoring, ML forecasting, and AI-powered insights for your
                     entire photovoltaic infrastructure.
                 </p>
             </div>
-
-            <div class="hero-stats" aria-label="Platform highlights">
-                <article class="hero-stat">
-                    <h2>{{ total_energy_gwh | default('2.46') }}<span>GWh</span></h2>
-                    <p>Total Energy</p>
-                </article>
-                <article class="hero-stat">
-                    <h2>{{ data_quality_pct | default('96.2') }}<span>%</span></h2>
-                    <p>Data Quality</p>
-                </article>
-                <article class="hero-stat">
-                    <h2>{{ model_score | default('0.94') }}<span>R2</span></h2>
-                    <p>Model Score</p>
-                </article>
-            </div>
         </section>
 
         <section class="login-form-panel" aria-label="Sign in form">
-            <div class="form-top-note">
-                Need access?
-                <a href="mailto:platform-admin@pvlakehouse.io">Request invite</a>
-            </div>
-
             <div class="form-wrap">
                 <h2>Welcome back</h2>
                 <p class="form-subtitle">

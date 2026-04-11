@@ -1,12 +1,11 @@
-import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func
-from sqlalchemy.orm import Session, sessionmaker
-
 from app.db.database import ChatMessage as ChatMessageModel
 from app.db.database import ChatSession as ChatSessionModel
+from app.db.database import AuthUser as AuthUserModel
+from app.db.database import SessionLocal
+from app.repositories.auth.user_repository import UserRepository
 from app.schemas.solar_ai_chat import (
     ChatMessage,
     ChatRole,
@@ -16,32 +15,96 @@ from app.schemas.solar_ai_chat import (
     SourceMetadata,
 )
 
-logger = logging.getLogger(__name__)
-
 
 class PostgresChatHistoryRepository:
     """PostgreSQL-backed persistence for chat sessions and messages."""
 
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
-        self._session_factory = session_factory
-        self._invalid_role_log_keys: set[str] = set()
+    @staticmethod
+    def _to_uuid(value: str) -> uuid.UUID:
+        return uuid.UUID(value)
+
+    @staticmethod
+    def _now_utc() -> datetime:
+        return datetime.now(tz=timezone.utc)
+
+    @staticmethod
+    def _to_message(model: ChatMessageModel) -> ChatMessage:
+        topic = ChatTopic(model.topic) if model.topic else None
+        sources = None
+        if model.sources:
+            sources = [SourceMetadata.model_validate(row) for row in model.sources]
+        return ChatMessage(
+            id=model.id,
+            session_id=model.session_id,
+            sender=model.sender,
+            content=model.content,
+            timestamp=model.timestamp,
+            topic=topic,
+            sources=sources,
+        )
+
+    def _ensure_local_auth_user(self, owner_uuid: uuid.UUID) -> None:
+        with SessionLocal() as db:
+            local_user = db.query(AuthUserModel).filter(AuthUserModel.id == owner_uuid).first()
+            if local_user is not None:
+                return
+
+            remote_user = UserRepository().get_by_id(owner_uuid)
+            if remote_user is None:
+                raise ValueError(f"Owner user id '{owner_uuid}' does not exist in auth source.")
+
+            # Neon bootstrap may have pre-seeded users with random UUIDs.
+            # Reconcile by username/email so the authenticated Databricks UUID can satisfy FK constraints.
+            local_conflict = (
+                db.query(AuthUserModel)
+                .filter(
+                    (AuthUserModel.username == remote_user.username)
+                    | (AuthUserModel.email == remote_user.email)
+                )
+                .first()
+            )
+            if local_conflict is not None:
+                local_conflict.id = owner_uuid
+                local_conflict.username = remote_user.username
+                local_conflict.email = remote_user.email
+                local_conflict.hashed_password = remote_user.hashed_password
+                local_conflict.full_name = remote_user.full_name
+                local_conflict.is_active = bool(remote_user.is_active)
+                local_conflict.role_id = remote_user.role_id
+                local_conflict.created_at = remote_user.created_at
+                db.commit()
+                return
+
+            db.add(
+                AuthUserModel(
+                    id=owner_uuid,
+                    username=remote_user.username,
+                    email=remote_user.email,
+                    hashed_password=remote_user.hashed_password,
+                    full_name=remote_user.full_name,
+                    is_active=bool(remote_user.is_active),
+                    role_id=remote_user.role_id,
+                    created_at=remote_user.created_at,
+                )
+            )
+            db.commit()
 
     def create_session(self, role: ChatRole, title: str, owner_user_id: str) -> ChatSessionSummary:
+        now = self._now_utc()
         session_id = uuid.uuid4().hex[:12]
-        now = datetime.now(tz=timezone.utc)
-
-        with self._session_factory() as db:
-            db_session = ChatSessionModel(
+        owner_uuid = self._to_uuid(owner_user_id)
+        self._ensure_local_auth_user(owner_uuid)
+        with SessionLocal() as db:
+            session = ChatSessionModel(
                 session_id=session_id,
                 title=title,
                 role=role.value,
-                owner_user_id=owner_user_id,
+                owner_user_id=owner_uuid,
                 created_at=now,
                 updated_at=now,
             )
-            db.add(db_session)
+            db.add(session)
             db.commit()
-
         return ChatSessionSummary(
             session_id=session_id,
             title=title,
@@ -52,143 +115,122 @@ class PostgresChatHistoryRepository:
         )
 
     def list_sessions(self, owner_user_id: str) -> list[ChatSessionSummary]:
-        with self._session_factory() as db:
-            rows = (
-                db.query(
-                    ChatSessionModel.session_id,
-                    ChatSessionModel.title,
-                    ChatSessionModel.role,
-                    ChatSessionModel.created_at,
-                    ChatSessionModel.updated_at,
-                    func.count(ChatMessageModel.id).label("message_count"),
-                )
-                .filter(ChatSessionModel.owner_user_id == owner_user_id)
-                .outerjoin(ChatMessageModel, ChatMessageModel.session_id == ChatSessionModel.session_id)
-                .group_by(
-                    ChatSessionModel.session_id,
-                    ChatSessionModel.title,
-                    ChatSessionModel.role,
-                    ChatSessionModel.created_at,
-                    ChatSessionModel.updated_at,
-                )
+        owner_uuid = self._to_uuid(owner_user_id)
+        with SessionLocal() as db:
+            sessions = (
+                db.query(ChatSessionModel)
+                .filter(ChatSessionModel.owner_user_id == owner_uuid)
                 .order_by(ChatSessionModel.updated_at.desc())
                 .all()
             )
-
-        sessions: list[ChatSessionSummary] = []
-        for row in rows:
-            try:
-                role = self._parse_role(row.role)
-            except ValueError:
-                self._warn_invalid_role_once(f"session:{row.session_id}", session_id=row.session_id)
-                continue
-
-            sessions.append(
-                ChatSessionSummary(
-                    session_id=row.session_id,
-                    title=row.title,
-                    role=role,
-                    created_at=row.created_at,
-                    updated_at=row.updated_at,
-                    message_count=int(row.message_count or 0),
+            results: list[ChatSessionSummary] = []
+            for session in sessions:
+                message_count = (
+                    db.query(ChatMessageModel)
+                    .filter(ChatMessageModel.session_id == session.session_id)
+                    .count()
                 )
-            )
+                results.append(
+                    ChatSessionSummary(
+                        session_id=session.session_id,
+                        title=session.title,
+                        role=ChatRole(session.role),
+                        created_at=session.created_at,
+                        updated_at=session.updated_at,
+                        message_count=message_count,
+                    )
+                )
+            return results
 
-        return sessions
+    def session_exists(self, session_id: str, owner_user_id: str) -> bool:
+        owner_uuid = self._to_uuid(owner_user_id)
+        with SessionLocal() as db:
+            row = (
+                db.query(ChatSessionModel.session_id)
+                .filter(
+                    ChatSessionModel.session_id == session_id,
+                    ChatSessionModel.owner_user_id == owner_uuid,
+                )
+                .first()
+            )
+        return row is not None
 
     def get_session(self, session_id: str, owner_user_id: str) -> ChatSessionDetail | None:
-        with self._session_factory() as db:
-            db_session = (
+        owner_uuid = self._to_uuid(owner_user_id)
+        with SessionLocal() as db:
+            session = (
                 db.query(ChatSessionModel)
                 .filter(
                     ChatSessionModel.session_id == session_id,
-                    ChatSessionModel.owner_user_id == owner_user_id,
+                    ChatSessionModel.owner_user_id == owner_uuid,
                 )
-                .one_or_none()
+                .first()
             )
-            if db_session is None:
+            if session is None:
                 return None
 
-            try:
-                role = self._parse_role(db_session.role)
-            except ValueError:
-                self._warn_invalid_role_once(f"session:{session_id}", session_id=session_id)
-                return None
-
-            rows = (
+            messages = (
                 db.query(ChatMessageModel)
                 .filter(ChatMessageModel.session_id == session_id)
                 .order_by(ChatMessageModel.timestamp.asc())
                 .all()
             )
 
-        return ChatSessionDetail(
-            session_id=db_session.session_id,
-            title=db_session.title,
-            role=role,
-            created_at=db_session.created_at,
-            updated_at=db_session.updated_at,
-            messages=[self._deserialize_message(row) for row in rows],
-        )
+            return ChatSessionDetail(
+                session_id=session.session_id,
+                title=session.title,
+                role=ChatRole(session.role),
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+                messages=[self._to_message(row) for row in messages],
+            )
 
     def delete_session(self, session_id: str, owner_user_id: str) -> bool:
-        with self._session_factory() as db:
-            deleted_count = (
+        owner_uuid = self._to_uuid(owner_user_id)
+        with SessionLocal() as db:
+            session = (
                 db.query(ChatSessionModel)
                 .filter(
                     ChatSessionModel.session_id == session_id,
-                    ChatSessionModel.owner_user_id == owner_user_id,
+                    ChatSessionModel.owner_user_id == owner_uuid,
                 )
-                .delete(synchronize_session=False)
+                .first()
             )
-            if deleted_count == 0:
-                db.rollback()
+            if session is None:
                 return False
+            db.delete(session)
             db.commit()
             return True
 
-    def update_session_title(
-        self,
-        session_id: str,
-        title: str,
-        owner_user_id: str,
-    ) -> ChatSessionSummary | None:
-        now = datetime.now(tz=timezone.utc)
-        with self._session_factory() as db:
-            db_session = (
+    def update_session_title(self, session_id: str, title: str, owner_user_id: str) -> ChatSessionSummary | None:
+        owner_uuid = self._to_uuid(owner_user_id)
+        now = self._now_utc()
+        with SessionLocal() as db:
+            session = (
                 db.query(ChatSessionModel)
                 .filter(
                     ChatSessionModel.session_id == session_id,
-                    ChatSessionModel.owner_user_id == owner_user_id,
+                    ChatSessionModel.owner_user_id == owner_uuid,
                 )
-                .one_or_none()
+                .first()
             )
-            if db_session is None:
+            if session is None:
                 return None
-
-            db_session.title = title
-            db_session.updated_at = now
+            session.title = title
+            session.updated_at = now
             db.commit()
-
             message_count = (
-                db.query(func.count(ChatMessageModel.id))
+                db.query(ChatMessageModel)
                 .filter(ChatMessageModel.session_id == session_id)
-                .scalar()
+                .count()
             )
-
-            try:
-                role = self._parse_role(db_session.role)
-            except ValueError:
-                self._warn_invalid_role_once(f"session:{session_id}", session_id=session_id)
-                return None
-
             return ChatSessionSummary(
-                session_id=db_session.session_id,
-                title=db_session.title,
-                role=role,
-                created_at=db_session.created_at,
-                updated_at=db_session.updated_at,
-                message_count=int(message_count or 0),
+                session_id=session.session_id,
+                title=session.title,
+                role=ChatRole(session.role),
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+                message_count=message_count,
             )
 
     def add_message(
@@ -199,43 +241,33 @@ class PostgresChatHistoryRepository:
         topic: ChatTopic | None = None,
         sources: list[SourceMetadata] | None = None,
     ) -> ChatMessage | None:
-        message_id = uuid.uuid4().hex[:12]
-        now = datetime.now(tz=timezone.utc)
-
-        with self._session_factory() as db:
-            db_session = (
+        with SessionLocal() as db:
+            session = (
                 db.query(ChatSessionModel)
                 .filter(ChatSessionModel.session_id == session_id)
-                .one_or_none()
+                .first()
             )
-            if db_session is None:
+            if session is None:
                 return None
 
-            db_message = ChatMessageModel(
-                id=message_id,
+            now = self._now_utc()
+            message = ChatMessageModel(
+                id=uuid.uuid4().hex[:12],
                 session_id=session_id,
                 sender=sender,
                 content=content,
                 timestamp=now,
                 topic=topic.value if topic else None,
-                sources=[s.model_dump() for s in sources] if sources else None,
+                sources=[row.model_dump() for row in sources] if sources else None,
             )
-            db_session.updated_at = now
-            db.add(db_message)
+            session.updated_at = now
+            db.add(message)
             db.commit()
-
-        return ChatMessage(
-            id=message_id,
-            session_id=session_id,
-            sender=sender,
-            content=content,
-            timestamp=now,
-            topic=topic,
-            sources=sources,
-        )
+            db.refresh(message)
+            return self._to_message(message)
 
     def get_recent_messages(self, session_id: str, limit: int = 10) -> list[ChatMessage]:
-        with self._session_factory() as db:
+        with SessionLocal() as db:
             rows = (
                 db.query(ChatMessageModel)
                 .filter(ChatMessageModel.session_id == session_id)
@@ -243,51 +275,42 @@ class PostgresChatHistoryRepository:
                 .limit(limit)
                 .all()
             )
-
         rows.reverse()
-        return [self._deserialize_message(row) for row in rows]
+        return [self._to_message(row) for row in rows]
 
     def fork_session(
         self,
         source_session_id: str,
         new_title: str,
+        new_role: ChatRole,
         owner_user_id: str,
-        new_role: ChatRole | None = None,
     ) -> ChatSessionSummary | None:
-        with self._session_factory() as db:
-            source_session = (
+        owner_uuid = self._to_uuid(owner_user_id)
+        with SessionLocal() as db:
+            source = (
                 db.query(ChatSessionModel)
                 .filter(
                     ChatSessionModel.session_id == source_session_id,
-                    ChatSessionModel.owner_user_id == owner_user_id,
+                    ChatSessionModel.owner_user_id == owner_uuid,
                 )
-                .one_or_none()
+                .first()
             )
-            if source_session is None:
+            if source is None:
                 return None
 
-            try:
-                role = new_role if new_role else self._parse_role(source_session.role)
-            except ValueError:
-                self._warn_invalid_role_once(
-                    f"fork_source_session:{source_session_id}",
-                    session_id=source_session_id,
-                )
-                return None
-
-            title = new_title or f"Fork of {source_session.title}"
             new_session_id = uuid.uuid4().hex[:12]
-            now = datetime.now(tz=timezone.utc)
+            now = self._now_utc()
+            title = new_title.strip() if new_title.strip() else f"Fork of {source.title}"
 
-            fork_session = ChatSessionModel(
+            cloned_session = ChatSessionModel(
                 session_id=new_session_id,
                 title=title,
-                role=role.value,
-                owner_user_id=owner_user_id,
+                role=new_role.value,
+                owner_user_id=owner_uuid,
                 created_at=now,
                 updated_at=now,
             )
-            db.add(fork_session)
+            db.add(cloned_session)
 
             source_messages = (
                 db.query(ChatMessageModel)
@@ -295,60 +318,25 @@ class PostgresChatHistoryRepository:
                 .order_by(ChatMessageModel.timestamp.asc())
                 .all()
             )
-
-            copied_count = 0
-            for source_message in source_messages:
+            for message in source_messages:
                 db.add(
                     ChatMessageModel(
                         id=uuid.uuid4().hex[:12],
                         session_id=new_session_id,
-                        sender=source_message.sender,
-                        content=source_message.content,
-                        timestamp=source_message.timestamp,
-                        topic=source_message.topic,
-                        sources=source_message.sources,
+                        sender=message.sender,
+                        content=message.content,
+                        timestamp=message.timestamp,
+                        topic=message.topic,
+                        sources=message.sources,
                     )
                 )
-                copied_count += 1
-
-            if copied_count > 0:
-                fork_session.updated_at = datetime.now(tz=timezone.utc)
 
             db.commit()
-
             return ChatSessionSummary(
                 session_id=new_session_id,
                 title=title,
-                role=role,
-                created_at=fork_session.created_at,
-                updated_at=fork_session.updated_at,
-                message_count=copied_count,
+                role=new_role,
+                created_at=now,
+                updated_at=now,
+                message_count=len(source_messages),
             )
-
-    def _warn_invalid_role_once(self, key: str, **context: str) -> None:
-        if key in self._invalid_role_log_keys:
-            return
-        self._invalid_role_log_keys.add(key)
-        logger.warning("invalid_session_role key=%s context=%s", key, context)
-
-    @staticmethod
-    def _parse_role(role_value: str) -> ChatRole:
-        normalized_value = str(role_value).strip().lower().replace(" ", "_")
-        return ChatRole(normalized_value)
-
-    @staticmethod
-    def _deserialize_message(row: ChatMessageModel) -> ChatMessage:
-        topic = ChatTopic(row.topic) if row.topic else None
-        sources = None
-        if row.sources:
-            sources = [SourceMetadata(**source) for source in row.sources]
-
-        return ChatMessage(
-            id=row.id,
-            session_id=row.session_id,
-            sender=row.sender,
-            content=row.content,
-            timestamp=row.timestamp,
-            topic=topic,
-            sources=sources,
-        )

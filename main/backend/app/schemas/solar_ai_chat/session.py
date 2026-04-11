@@ -35,7 +35,7 @@ class ChatSessionDetail(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
-    role: ChatRole
+    role: ChatRole | None = None
     title: str = Field(default="New conversation", min_length=1, max_length=200)
 
 

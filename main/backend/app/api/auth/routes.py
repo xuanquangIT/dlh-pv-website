@@ -3,11 +3,10 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_user, require_role
 from app.core.settings import get_auth_settings
-from app.db.database import AuthUser, get_db
+from app.db.database import AuthUser
 from app.schemas.auth import (
     AdminUserCreate,
     LoginRequest,
@@ -43,9 +42,8 @@ def login(
     username: str = Form(...),
     password: str = Form(...),
     next_path: str | None = Form(default="/dashboard", alias="next"),
-    db: Session = Depends(get_db),
 ):
-    service = AuthService(db)
+    service = AuthService()
     login_req = LoginRequest(username=username, password=password)
     redirect_target = _sanitize_next_path(next_path)
     try:
@@ -91,18 +89,16 @@ def get_me(current_user: AuthUser = Depends(get_current_user)):
 def register_user(
     user_in: UserCreate,
     current_user: AuthUser = Depends(require_role(["admin"])),
-    db: Session = Depends(get_db),
 ):
-    service = AuthService(db)
+    service = AuthService()
     return service.create_user(user_in)
 
 
 @router.get("/users", response_model=list[UserRead])
 def list_users(
     _current_user: AuthUser = Depends(require_role(["admin"])),
-    db: Session = Depends(get_db),
 ):
-    service = AuthService(db)
+    service = AuthService()
     return service.list_users()
 
 
@@ -110,9 +106,8 @@ def list_users(
 def create_user_by_admin(
     user_in: AdminUserCreate,
     _current_user: AuthUser = Depends(require_role(["admin"])),
-    db: Session = Depends(get_db),
 ):
-    service = AuthService(db)
+    service = AuthService()
     return service.create_user_by_admin(user_in)
 
 
@@ -121,9 +116,8 @@ def update_user_status(
     user_id: uuid.UUID,
     payload: UserStatusUpdate,
     current_user: AuthUser = Depends(require_role(["admin"])),
-    db: Session = Depends(get_db),
 ):
-    service = AuthService(db)
+    service = AuthService()
     return service.update_user_status(
         user_id=user_id,
         is_active=payload.is_active,
@@ -136,7 +130,6 @@ def reset_user_password(
     user_id: uuid.UUID,
     payload: UserPasswordUpdate,
     _current_user: AuthUser = Depends(require_role(["admin"])),
-    db: Session = Depends(get_db),
 ):
-    service = AuthService(db)
+    service = AuthService()
     service.reset_user_password(user_id=user_id, new_password=payload.new_password)

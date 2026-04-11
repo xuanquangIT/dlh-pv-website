@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+from datetime import date
 
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
@@ -11,6 +12,7 @@ from app.services.solar_ai_chat.tool_executor import ToolExecutor
 @pytest.fixture()
 def mock_repository() -> MagicMock:
     repo = MagicMock(spec=SolarChatRepository)
+    repo._resolve_latest_date.return_value = date(2025, 5, 5)
     repo.fetch_topic_metrics.return_value = (
         {"facility_count": 8},
         [{"layer": "Gold", "dataset": "lh_gold_dim_facility", "data_source": "trino"}],
@@ -140,11 +142,12 @@ class TestStationDailyReport:
         assert metrics["station_count"] == 2
         assert len(sources) == 3
 
-    def test_dispatch_without_anchor_date_uses_today(self, executor: ToolExecutor, mock_repository: MagicMock) -> None:
-        from datetime import date
+    def test_dispatch_without_anchor_date_uses_latest_available_date(
+        self, executor: ToolExecutor, mock_repository: MagicMock,
+    ) -> None:
         executor.execute("get_station_daily_report", {}, ChatRole.ADMIN)
         call_kwargs = mock_repository.fetch_station_daily_report.call_args[1]
-        assert call_kwargs["anchor_date"] == date.today()
+        assert call_kwargs["anchor_date"] == date(2025, 5, 5)
 
     def test_all_roles_can_access(self, executor: ToolExecutor) -> None:
         args = {"anchor_date": "2025-05-05"}

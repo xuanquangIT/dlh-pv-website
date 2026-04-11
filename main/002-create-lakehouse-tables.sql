@@ -2,6 +2,7 @@
 -- Silver and Gold datasets are queried from Iceberg via Trino and are not created here.
 -- RAG: pgvector extension and document chunks
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS rag_documents (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -9,13 +10,13 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     source_file  VARCHAR(500) NOT NULL,
     chunk_index  INTEGER      NOT NULL,
     content      TEXT         NOT NULL,
-    embedding    vector(1536),
+    embedding    vector(3072),
     created_at   TIMESTAMPTZ  DEFAULT now(),
     UNIQUE(source_file, chunk_index)
 );
 
-CREATE INDEX IF NOT EXISTS idx_rag_embedding
-    ON rag_documents USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50);
+-- NOTE: Neon pgvector currently does not allow ANN index creation for 3072 dimensions.
+-- Keep table functional without ANN index; similarity search will use sequential scan.
 
 -- Authentication Roles
 CREATE TABLE IF NOT EXISTS auth_roles (
@@ -53,3 +54,29 @@ INSERT INTO auth_users (id, username, email, hashed_password, full_name, role_id
     (gen_random_uuid(), 'analyst1', 'analyst@pvlakehouse.local', '$2b$12$wEg.VLiJ8wJINLWXogZSIuC.Q56IhGQ1i7cj87vBuDbnTsYx.wTz2', 'Data Analyst', 'analyst'),
     (gen_random_uuid(), 'system_bot', 'system@pvlakehouse.local', '$2b$12$wEg.VLiJ8wJINLWXogZSIuC.Q56IhGQ1i7cj87vBuDbnTsYx.wTz2', 'Auto Scheduler', 'system')
 ON CONFLICT (username) DO NOTHING;
+
+-- Solar AI Chat history
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    session_id     VARCHAR(12) PRIMARY KEY,
+    title          VARCHAR(200) NOT NULL,
+    role           VARCHAR(50) NOT NULL,
+    owner_user_id  UUID NOT NULL REFERENCES auth_users(id),
+    created_at     TIMESTAMPTZ DEFAULT now() NOT NULL,
+    updated_at     TIMESTAMPTZ DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_owner_user_id
+    ON chat_sessions (owner_user_id);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         VARCHAR(12) PRIMARY KEY,
+    session_id VARCHAR(12) NOT NULL REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+    sender     VARCHAR(20) NOT NULL,
+    content    TEXT NOT NULL,
+    "timestamp" TIMESTAMPTZ DEFAULT now() NOT NULL,
+    topic      VARCHAR(50),
+    sources    JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
+    ON chat_messages (session_id);

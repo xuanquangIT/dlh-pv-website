@@ -1,19 +1,14 @@
-"""Base repository: Trino connection, CSV loading, and shared scalar helpers.
+"""Base repository: Databricks SQL connection and shared scalar helpers.
 
 All Silver/Gold repositories inherit from this base.
 """
-import csv
 import logging
-import re
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from functools import lru_cache
-from pathlib import Path
 from statistics import mean
 from typing import Any
-
-from trino.dbapi import connect as trino_connect
+from urllib.parse import urlparse
 
 from app.core.settings import SolarChatSettings
 
@@ -21,43 +16,36 @@ logger = logging.getLogger(__name__)
 
 
 class BaseRepository:
-    """Shared infrastructure: connection management, CSV loader, scalar helpers."""
+    """Shared infrastructure: connection management and scalar helpers."""
 
-    _LEGACY_TRINO_CATALOG: str = "postgresql"
-    _LAKEHOUSE_TRINO_CATALOG: str = "iceberg"
-    _LEGACY_TRINO_SCHEMA: str = "public"
-    _DEFAULT_ICEBERG_SCHEMA: str = "silver"
-    _ICEBERG_TABLE_MAP: dict[str, str] = {
-        "lh_silver_clean_facility_master": "silver.clean_facility_master",
-        "lh_silver_clean_hourly_energy": "silver.clean_hourly_energy",
-        "lh_silver_clean_hourly_weather": "silver.clean_hourly_weather",
-        "lh_silver_clean_hourly_air_quality": "silver.clean_hourly_air_quality",
-        "lh_gold_dim_date": "gold.dim_date",
-        "lh_gold_dim_time": "gold.dim_time",
-        "lh_gold_dim_aqi_category": "gold.dim_aqi_category",
-        "lh_gold_fact_solar_environmental": "gold.fact_solar_environmental",
-        "lh_gold_dim_facility": "gold.dim_facility",
-    }
+    _DEFAULT_UC_CATALOG: str = "pv"
+    _DEFAULT_UC_SCHEMA: str = "silver"
 
     # C1: Allowlists for SQL identifiers used in dynamic query building.
     _ALLOWED_TABLES: frozenset[str] = frozenset({
-        "lh_silver_clean_facility_master",
-        "lh_silver_clean_hourly_energy",
-        "lh_silver_clean_hourly_weather",
-        "lh_silver_clean_hourly_air_quality",
-        "lh_gold_dim_date",
-        "lh_gold_dim_time",
-        "lh_gold_dim_aqi_category",
-        "lh_gold_fact_solar_environmental",
-        "lh_gold_dim_facility",
+        "silver.facility_status",
+        "silver.energy_readings",
+        "silver.weather",
+        "silver.air_quality",
+        "gold.dim_date",
+        "gold.dim_time",
+        "gold.dim_aqi_category",
+        "gold.dim_weather_condition",
+        "gold.fact_energy",
+        "gold.dim_facility",
+        "gold.forecast_hourly",
+        "gold.forecast_daily",
+        "gold.model_monitoring_daily",
     })
     _ALLOWED_COLUMNS: frozenset[str] = frozenset({
         "aqi_value", "aqi_category",
-        "energy_mwh", "completeness_pct",
-        "temperature_2m", "wind_speed_10m", "wind_gusts_10m",
-        "shortwave_radiation", "cloud_cover",
+        "energy_mwh", "energy_kwh", "completeness_pct",
+        "temperature_2m", "temperature_c",
+        "wind_speed_10m", "wind_speed_ms",
+        "wind_gusts_10m", "wind_gust_ms",
+        "shortwave_radiation", "cloud_cover", "cloud_cover_pct",
         "quality_issues", "quality_flag",
-        "facility_name", "facility_code",
+        "facility_name", "facility_code", "facility_id", "location_id",
         "location_lat", "location_lng",
         "total_capacity_mw", "total_capacity_registered_mw",
         "total_capacity_maximum_mw",
@@ -65,34 +53,23 @@ class BaseRepository:
 
     def __init__(self, settings: SolarChatSettings) -> None:
         self._settings = settings
-        self._data_root = settings.resolved_data_root
-        self._trino_catalog = self._resolve_trino_catalog(settings.trino_catalog)
-        self._trino_schema = self._resolve_trino_schema(self._trino_catalog, settings.trino_schema)
+        self._catalog = self._resolve_catalog(settings.uc_catalog)
+        self._silver_schema = self._resolve_schema(settings.uc_silver_schema)
+        self._gold_schema = settings.uc_gold_schema.strip().lower() or "gold"
 
     @classmethod
-    def _resolve_trino_schema(cls, catalog: str, schema: str) -> str:
-        normalized_catalog = catalog.strip().lower()
-        normalized_schema = schema.strip().lower()
-        if normalized_catalog == cls._LAKEHOUSE_TRINO_CATALOG and normalized_schema == cls._LEGACY_TRINO_SCHEMA:
-            return cls._DEFAULT_ICEBERG_SCHEMA
-        return schema
-
-    def _rewrite_sql_for_iceberg(self, sql: str) -> str:
-        if self._trino_catalog != self._LAKEHOUSE_TRINO_CATALOG:
-            return sql
-
-        rewritten = sql
-        for legacy_name, iceberg_name in sorted(self._ICEBERG_TABLE_MAP.items(), key=lambda x: len(x[0]), reverse=True):
-            qualified_name = f"{self._trino_catalog}.{iceberg_name}"
-            rewritten = re.sub(rf"\b{re.escape(legacy_name)}\b", qualified_name, rewritten)
-        return rewritten
+    def _resolve_schema(cls, uc_schema: str) -> str:
+        normalized_uc_schema = uc_schema.strip().lower()
+        if normalized_uc_schema:
+            return normalized_uc_schema
+        return cls._DEFAULT_UC_SCHEMA
 
     @classmethod
-    def _resolve_trino_catalog(cls, catalog: str) -> str:
-        normalized = catalog.strip().lower()
-        if normalized == cls._LEGACY_TRINO_CATALOG:
-            return cls._LAKEHOUSE_TRINO_CATALOG
-        return catalog
+    def _resolve_catalog(cls, uc_catalog: str) -> str:
+        normalized_uc_catalog = uc_catalog.strip().lower()
+        if normalized_uc_catalog:
+            return normalized_uc_catalog
+        return cls._DEFAULT_UC_CATALOG
 
     @classmethod
     def _validate_sql_identifier(cls, value: str, allowed: frozenset[str]) -> str:
@@ -101,14 +78,32 @@ class BaseRepository:
         return value
 
     @contextmanager
-    def _trino_connection(self):
-        """Context manager ensuring Trino connections are always closed."""
-        conn = trino_connect(
-            host=self._settings.trino_host,
-            port=self._settings.trino_port,
-            user=self._settings.trino_user,
-            catalog=self._trino_catalog,
-            schema=self._trino_schema,
+    def _databricks_connection(self):
+        """Context manager ensuring Databricks SQL connections are always closed."""
+        from databricks import sql as databricks_sql
+
+        host = (self._settings.databricks_host or "").strip()
+        token = (self._settings.databricks_token or "").strip()
+        http_path = (self._settings.resolved_databricks_http_path or "").strip()
+
+        if not host or not token or not http_path:
+            raise ValueError(
+                "Missing Databricks connection settings. "
+                "Required: DATABRICKS_HOST, DATABRICKS_TOKEN, and DATABRICKS_SQL_HTTP_PATH "
+                "(or DATABRICKS_WAREHOUSE_ID)."
+            )
+
+        parsed = urlparse(host)
+        server_hostname = parsed.netloc if parsed.scheme else host
+        if not server_hostname:
+            raise ValueError("Invalid DATABRICKS_HOST value.")
+
+        conn = databricks_sql.connect(
+            server_hostname=server_hostname,
+            http_path=http_path,
+            access_token=token,
+            catalog=self._catalog,
+            schema=self._silver_schema,
         )
         try:
             yield conn
@@ -116,63 +111,64 @@ class BaseRepository:
             conn.close()
 
     def _execute_query(self, sql: str) -> list[dict[str, Any]]:
-        sql = self._rewrite_sql_for_iceberg(sql)
-        with self._trino_connection() as conn:
+        with self._databricks_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(sql)
             columns = [desc[0] for desc in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-    def _resolve_latest_date(self, table: str, csv_filename: str) -> date:
+    def _resolve_latest_date(self, table: str) -> date:
+        timestamp_column = {
+            "silver.weather": "weather_timestamp",
+            "silver.air_quality": "aqi_timestamp",
+        }.get(table, "date_hour")
         try:
             rows = self._execute_query(
-                f"SELECT MAX(CAST(date_hour AS DATE)) AS latest FROM {table}"
+                f"SELECT MAX(CAST({timestamp_column} AS DATE)) AS latest FROM {table}"
             )
             if rows and rows[0]["latest"]:
                 val = rows[0]["latest"]
                 return date.fromisoformat(str(val)) if isinstance(val, str) else val
-        except Exception:
-            pass
-        csv_rows = self._load_csv(self._dataset_path(csv_filename))
-        latest_dt = None
-        for row in csv_rows:
-            dt = self._parse_datetime(row.get("date_hour") or row.get("timestamp"))
-            if dt is not None and (latest_dt is None or dt > latest_dt):
-                latest_dt = dt
-        return latest_dt.date() if latest_dt else date.today()
+        except Exception as exc:
+            logger.warning("Cannot resolve latest date from %s (%s). Using current date.", table, exc)
+        return date.today()
 
-    def _with_trino_fallback(
+    def _with_databricks_query(
         self,
         topic_label: str,
-        trino_fn,
-        csv_fn,
-        sources_template: list[dict[str, str]],
+        query_fn,
+        fallback_or_sources,
+        sources_template: list[dict[str, str]] | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        """Run trino_fn; on any failure log and run csv_fn instead."""
-        data_source = "trino"
+        """Run Databricks query path and tag sources consistently.
+
+        Supports both signatures:
+        - (topic_label, query_fn, sources_template)
+        - (topic_label, query_fn, fallback_fn, sources_template)
+        """
+        if sources_template is None:
+            resolved_sources_template = fallback_or_sources
+        else:
+            resolved_sources_template = sources_template
+
+        data_source = "databricks"
         try:
-            metrics = trino_fn()
+            metrics = query_fn()
         except Exception as exc:
-            logger.warning("Trino unavailable for %s (%s), falling back to CSV.", topic_label, exc)
-            metrics = csv_fn()
-            data_source = "csv"
-        sources = [{**s, "data_source": data_source} for s in sources_template]
+            logger.error("Databricks query failed for %s (%s).", topic_label, exc)
+            raise
+        sources = [{**s, "data_source": data_source} for s in resolved_sources_template]
         return metrics, sources
-
-    def _dataset_path(self, filename: str) -> Path:
-        return (self._data_root / filename).resolve()
-
-    @staticmethod
-    @lru_cache(maxsize=16)
-    def _load_csv(path: Path) -> list[dict[str, str]]:
-        if not path.exists():
-            return []
-        with path.open(mode="r", encoding="utf-8", newline="") as csv_file:
-            return list(csv.DictReader(csv_file))
 
     @staticmethod
     def _resolve_facility(row: dict[str, Any]) -> str:
-        return row.get("facility_name") or row.get("facility_code") or "Unknown"
+        return (
+            row.get("facility_name")
+            or row.get("facility_code")
+            or row.get("facility_id")
+            or row.get("location_id")
+            or "Unknown"
+        )
 
     @staticmethod
     def _to_float(value: str | None, default: float = 0.0) -> float:
@@ -270,31 +266,3 @@ class BaseRepository:
         result.sort(key=lambda r: float(r.get("metric_value", 0)), reverse=highest)
         return result
 
-    def _csv_extreme_fallback(
-        self,
-        csv_filename: str,
-        value_key: str,
-        highest: bool,
-        window_start: datetime,
-        window_end: datetime,
-        extra_keys: tuple[str, ...] = (),
-    ) -> list[dict[str, Any]]:
-        all_rows = self._load_csv(self._dataset_path(csv_filename))
-        filtered: list[dict[str, Any]] = []
-        for row in all_rows:
-            dt = self._parse_datetime(row.get("date_hour") or row.get("timestamp"))
-            if dt is None or not (window_start <= dt < window_end):
-                continue
-            val = self._to_float(row.get(value_key), default=float("nan"))
-            if val != val:
-                continue
-            entry: dict[str, Any] = {
-                "facility": self._resolve_facility(row),
-                "metric_value": val,
-                "observed_at": row.get("date_hour") or row.get("timestamp") or "",
-            }
-            for ek in extra_keys:
-                entry[ek] = row.get(ek) or "Unknown"
-            filtered.append(entry)
-        filtered.sort(key=lambda r: float(r.get("metric_value", 0)), reverse=highest)
-        return filtered

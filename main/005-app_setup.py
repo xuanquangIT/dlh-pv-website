@@ -4,19 +4,8 @@ Owner: Data Engineer
 """
 
 # COMMAND ----------
-# MAGIC %md
-# MAGIC ### App Metadata Setup
-# MAGIC Initializes Databricks catalog/schema and app operational tables.
-# MAGIC
-# MAGIC **Creates**
-# MAGIC - `dlh_web.app.auth_roles`
-# MAGIC - `dlh_web.app.auth_users`
-# MAGIC - `dlh_web.app.chat_sessions`
-# MAGIC - `dlh_web.app.chat_messages`
-# MAGIC - `dlh_web.app.rag_documents`
-# MAGIC
-# MAGIC This notebook is idempotent and safe to rerun.
 
+# DBTITLE 1,Cell 2
 from __future__ import annotations
 
 from pyspark.sql import SparkSession
@@ -28,7 +17,7 @@ TABLE_DDLS = [
       id STRING NOT NULL,
       name STRING NOT NULL,
       description STRING,
-      created_at TIMESTAMP NOT NULL DEFAULT current_timestamp()
+      created_at TIMESTAMP NOT NULL
     )
     USING DELTA
     COMMENT 'Application role dictionary for auth and RBAC'
@@ -40,9 +29,9 @@ TABLE_DDLS = [
       email STRING NOT NULL,
       hashed_password STRING NOT NULL,
       full_name STRING,
-      is_active BOOLEAN NOT NULL DEFAULT TRUE,
+      is_active BOOLEAN NOT NULL,
       role_id STRING NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT current_timestamp()
+      created_at TIMESTAMP NOT NULL
     )
     USING DELTA
     COMMENT 'Application users for portal authentication'
@@ -53,8 +42,8 @@ TABLE_DDLS = [
       title STRING NOT NULL,
       role STRING NOT NULL,
       owner_user_id STRING NOT NULL,
-      created_at TIMESTAMP NOT NULL DEFAULT current_timestamp(),
-      updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp()
+      created_at TIMESTAMP NOT NULL,
+      updated_at TIMESTAMP NOT NULL
     )
     USING DELTA
     COMMENT 'Solar AI Chat conversation sessions'
@@ -65,14 +54,14 @@ TABLE_DDLS = [
       session_id STRING NOT NULL,
       sender STRING NOT NULL,
       content STRING NOT NULL,
-      timestamp TIMESTAMP NOT NULL DEFAULT current_timestamp(),
+      timestamp TIMESTAMP NOT NULL,
       topic STRING,
       sources ARRAY<STRUCT<
         layer: STRING,
         dataset: STRING,
         data_source: STRING
       >>,
-      created_at TIMESTAMP NOT NULL DEFAULT current_timestamp()
+      created_at TIMESTAMP NOT NULL
     )
     USING DELTA
     COMMENT 'Solar AI Chat message history'
@@ -85,7 +74,7 @@ TABLE_DDLS = [
       chunk_index INT NOT NULL,
       content STRING NOT NULL,
       embedding ARRAY<FLOAT>,
-      created_at TIMESTAMP NOT NULL DEFAULT current_timestamp()
+      created_at TIMESTAMP NOT NULL
     )
     USING DELTA
     COMMENT 'RAG document chunks and embeddings for Solar AI Chat'
@@ -95,25 +84,33 @@ TABLE_DDLS = [
 SEED_ROLES_SQL = """
 MERGE INTO dlh_web.app.auth_roles AS t
 USING (
-  SELECT * FROM VALUES
+  SELECT col1 as id, col2 as name, col3 as description, current_timestamp() as created_at FROM VALUES
     ('admin', 'Manager', 'Manager / Approver'),
     ('data_engineer', 'Data Engineer', 'Pipeline Owner'),
     ('ml_engineer', 'ML Engineer', 'Model Developer'),
     ('analyst', 'Analyst', 'Data Consumer'),
     ('system', 'System', 'Auto Scheduler')
-) AS s(id, name, description)
+) AS s
 ON t.id = s.id
 WHEN MATCHED THEN UPDATE SET
   t.name = s.name,
   t.description = s.description
-WHEN NOT MATCHED THEN INSERT (id, name, description)
-VALUES (s.id, s.name, s.description)
+WHEN NOT MATCHED THEN INSERT *
 """
 
 SEED_USERS_SQL = """
 MERGE INTO dlh_web.app.auth_users AS t
 USING (
-  SELECT * FROM VALUES
+  SELECT 
+    col1 as id,
+    col2 as username,
+    col3 as email,
+    col4 as hashed_password,
+    col5 as full_name,
+    col6 as is_active,
+    col7 as role_id,
+    current_timestamp() as created_at
+  FROM VALUES
     (
       '00000000-0000-0000-0000-000000000001',
       'admin',
@@ -159,7 +156,7 @@ USING (
       TRUE,
       'system'
     )
-) AS s(id, username, email, hashed_password, full_name, is_active, role_id)
+) AS s
 ON t.username = s.username
 WHEN MATCHED THEN UPDATE SET
   t.email = s.email,
@@ -167,24 +164,7 @@ WHEN MATCHED THEN UPDATE SET
   t.full_name = s.full_name,
   t.is_active = s.is_active,
   t.role_id = s.role_id
-WHEN NOT MATCHED THEN INSERT (
-  id,
-  username,
-  email,
-  hashed_password,
-  full_name,
-  is_active,
-  role_id
-)
-VALUES (
-  s.id,
-  s.username,
-  s.email,
-  s.hashed_password,
-  s.full_name,
-  s.is_active,
-  s.role_id
-)
+WHEN NOT MATCHED THEN INSERT *
 """
 
 
@@ -207,7 +187,7 @@ def main() -> None:
     spark_session.sql(SEED_USERS_SQL)
     print("App metadata tables created successfully")
 
-
 # COMMAND ----------
+
 if __name__ == "__main__":
     main()

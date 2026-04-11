@@ -113,7 +113,10 @@ class ToolExecutor:
     def _get_station_daily_report(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
         anchor = self._parse_date(arguments.get("anchor_date"))
         if not anchor:
-            anchor = date.today()
+            try:
+                anchor = self._repository._resolve_latest_date("silver.energy_readings")
+            except Exception:
+                anchor = date.today()
         metrics = arguments.get("metrics")
         return self._repository.fetch_station_daily_report(
             anchor_date=anchor,

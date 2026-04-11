@@ -10,8 +10,6 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
-from app.repositories.solar_ai_chat.history_repository import ChatHistoryRepository
-from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.schemas.solar_ai_chat import (
     ChatMessage,
@@ -22,7 +20,11 @@ from app.schemas.solar_ai_chat import (
     SourceMetadata,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
-from app.services.solar_ai_chat.gemini_client import GeminiModelRouter, ModelUnavailableError
+from app.services.solar_ai_chat.llm_client import (
+    LLMModelRouter,
+    ModelUnavailableError,
+    ToolCallNotSupportedError,
+)
 from app.services.solar_ai_chat.intent_service import VietnameseIntentService
 from app.services.solar_ai_chat.nlp_parser import (
     ExtremeMetricQuery,
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 TOOL_PATH_CONFIDENCE = 0.95
 TEXT_ONLY_CONFIDENCE = 0.85
 REGEX_EXTREME_CONFIDENCE = 0.92
+MAX_TOOL_STEPS = 3
 
 
 class SolarAIChatService:
@@ -59,8 +62,8 @@ class SolarAIChatService:
         self,
         repository: SolarChatRepository,
         intent_service: VietnameseIntentService,
-        model_router: GeminiModelRouter | None,
-        history_repository: ChatHistoryRepository | PostgresChatHistoryRepository | None = None,
+        model_router: LLMModelRouter | None,
+        history_repository: Any | None = None,
         vector_repo: "VectorRepository | None" = None,
         embedding_client: "GeminiEmbeddingClient | None" = None,
     ) -> None:
@@ -81,10 +84,35 @@ class SolarAIChatService:
         if self._model_router is not None:
             try:
                 return self._handle_with_tools(request, started, history_messages)
+            except ToolCallNotSupportedError as tool_error:
+                logger.warning(
+                    "solar_chat_tool_path_tooling_unsupported error=%s, falling back to regex intent",
+                    tool_error,
+                )
+                return self._handle_with_regex_fallback(
+                    request,
+                    started,
+                    history_messages,
+                    skip_model_generation=True,
+                    warning_message=(
+                        "Current model does not support reliable tool-calling. "
+                        "Returned a deterministic data-backed summary."
+                    ),
+                )
             except ModelUnavailableError as model_error:
                 logger.warning(
                     "solar_chat_tool_path_unavailable error=%s, falling back to regex intent",
                     model_error,
+                )
+                return self._handle_with_regex_fallback(
+                    request,
+                    started,
+                    history_messages,
+                    skip_model_generation=True,
+                    warning_message=(
+                        "LLM service is temporarily unavailable (429/503). "
+                        "Returned a data-backed summary."
+                    ),
                 )
             except Exception as tool_err:
                 logger.warning(
@@ -113,14 +141,30 @@ class SolarAIChatService:
         last_model_used = ""
         last_fallback_used = False
 
-        for _ in range(5):
+        for _ in range(MAX_TOOL_STEPS):
             tool_result = self._model_router.generate_with_tools(messages, TOOL_DECLARATIONS)
             last_model_used = tool_result.model_used
             last_fallback_used = tool_result.fallback_used
 
             if tool_result.text is not None:
                 if not all_metrics:
-                    topic = self._detect_topic_from_text(request.message)
+                    inferred_topic = self._detect_topic_from_text(request.message)
+                    if inferred_topic is not ChatTopic.GENERAL:
+                        logger.warning(
+                            "solar_chat_tool_path_text_without_data topic=%s model=%s; forcing deterministic regex fallback",
+                            inferred_topic.value,
+                            last_model_used,
+                        )
+                        return self._handle_with_regex_fallback(
+                            request=request,
+                            started=started,
+                            history_messages=history_messages,
+                            skip_model_generation=True,
+                            warning_message=(
+                                "Model skipped data tools. Returned deterministic data-backed summary."
+                            ),
+                        )
+                    topic = inferred_topic
                 return self._finalize_response(
                     request=request,
                     answer=tool_result.text,
@@ -176,6 +220,19 @@ class SolarAIChatService:
                     "parts": [{"functionResponse": {"name": fc.name, "response": {"error": str(e)}}}],
                 })
 
+        if not all_metrics:
+            logger.warning(
+                "solar_chat_tool_path_no_metrics model=%s; forcing deterministic regex fallback",
+                last_model_used,
+            )
+            return self._handle_with_regex_fallback(
+                request=request,
+                started=started,
+                history_messages=history_messages,
+                skip_model_generation=True,
+                warning_message="Model did not provide tool-backed data. Returned deterministic summary.",
+            )
+
         answer = build_fallback_summary(topic, all_metrics, all_sources)
         return self._finalize_response(
             request=request,
@@ -194,6 +251,8 @@ class SolarAIChatService:
         request: SolarChatRequest,
         started: float,
         history_messages: list[ChatMessage],
+        skip_model_generation: bool = False,
+        warning_message: str | None = None,
     ) -> SolarChatResponse:
         extreme_query = extract_extreme_metric_query(request.message)
         if extreme_query is not None:
@@ -215,9 +274,8 @@ class SolarAIChatService:
 
         sources = [SourceMetadata(**row) for row in source_rows]
 
-        warning_message: str | None = None
         model_used = "deterministic-summary"
-        fallback_used = False
+        fallback_used = skip_model_generation
 
         prompt = build_prompt(
             user_message=request.message,
@@ -228,7 +286,9 @@ class SolarAIChatService:
             history=history_messages,
         )
 
-        if self._model_router is not None:
+        if skip_model_generation:
+            answer = build_fallback_summary(response_topic, metrics, sources)
+        elif self._model_router is not None:
             try:
                 model_result = self._model_router.generate(prompt)
                 answer = model_result.text
@@ -237,6 +297,15 @@ class SolarAIChatService:
             except ModelUnavailableError:
                 answer = build_fallback_summary(response_topic, metrics, sources)
                 warning_message = "The AI model is temporarily unavailable. Returned a data-backed summary instead."
+                fallback_used = True
+            except Exception as model_error:
+                logger.warning(
+                    "solar_chat_generation_failed error_type=%s error=%s",
+                    type(model_error).__name__,
+                    model_error,
+                )
+                answer = build_fallback_summary(response_topic, metrics, sources)
+                warning_message = "The AI model request failed. Returned a data-backed summary instead."
                 fallback_used = True
         else:
             answer = build_fallback_summary(response_topic, metrics, sources)
@@ -293,13 +362,21 @@ class SolarAIChatService:
         warning_message: str | None = None,
     ) -> SolarChatResponse:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        self._persist_exchange(
-            session_id=request.session_id,
-            user_message=request.message,
-            answer=answer,
-            topic=topic,
-            sources=sources,
-        )
+        try:
+            self._persist_exchange(
+                session_id=request.session_id,
+                user_message=request.message,
+                answer=answer,
+                topic=topic,
+                sources=sources,
+            )
+        except Exception as persist_error:
+            logger.warning(
+                "solar_chat_history_persist_failed session_id=%s error_type=%s error=%s",
+                request.session_id,
+                type(persist_error).__name__,
+                persist_error,
+            )
         logger.info(
             "solar_chat_request_completed",
             extra={

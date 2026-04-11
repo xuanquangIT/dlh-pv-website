@@ -1,0 +1,36 @@
+# Databases / drivers
+psycopg2-binary==2.9.7; python_version < "3.12"
+psycopg2-binary==2.9.9; python_version >= "3.12"
+databricks-sql-connector==3.3.0
+
+# Databricks setup scripts
+pyspark==3.5.1
+
+# HTTP
+httpx==0.28.1
+msal==1.31.1
+
+# Configuration Management
+pydantic==2.5.3
+pydantic-settings==2.1.0
+PyYAML==6.0.1
+email-validator>=2.0.0
+
+# Code quality
+ruff==0.6.9
+mypy==1.11.2
+
+# Testing
+pytest==7.4.0
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+
+# Dashboard backend
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+jinja2==3.1.6
+python-dotenv==1.0.1
+sqlalchemy==2.0.35
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+python-multipart==0.0.9

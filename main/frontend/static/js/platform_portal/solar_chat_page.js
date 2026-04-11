@@ -9,10 +9,20 @@
   const NO_PROJECT_LABEL = "No Project";
 
   function normalizeChatRole(role) {
-    if (role === "analyst") {
+    const normalized = String(role || "").trim().toLowerCase();
+    if (normalized === "analyst") {
       return "data_analyst";
     }
-    return role || "data_engineer";
+    if (normalized === "data engineer") {
+      return "data_engineer";
+    }
+    if (normalized === "ml engineer") {
+      return "ml_engineer";
+    }
+    if (normalized === "data_engineer" || normalized === "ml_engineer" || normalized === "data_analyst" || normalized === "admin") {
+      return normalized;
+    }
+    return "data_engineer";
   }
 
   function getActiveRole() {
@@ -24,10 +34,10 @@
   }
 
   const SolarChatApi = {
-    async createSession(role, title) {
+    async createSession(title) {
       return requestJson("/solar-ai-chat/sessions", {
         method: "POST",
-        body: JSON.stringify({ role: role, title: title })
+        body: JSON.stringify({ title: title })
       });
     },
 
@@ -152,6 +162,33 @@
     return NO_PROJECT_KEY;
   }
 
+  function normalizeApiErrorDetail(detail) {
+    if (!detail) {
+      return "Request failed";
+    }
+    if (typeof detail === "string") {
+      return detail;
+    }
+    if (Array.isArray(detail)) {
+      const parts = detail.map(function (item) {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object") {
+          const msg = item.msg || item.message || "Validation error";
+          const loc = Array.isArray(item.loc) ? item.loc.join(".") : "";
+          return loc ? msg + " (" + loc + ")" : msg;
+        }
+        return String(item);
+      }).filter(Boolean);
+      return parts.length ? parts.join("; ") : "Request failed";
+    }
+    if (typeof detail === "object") {
+      return detail.message || JSON.stringify(detail);
+    }
+    return String(detail);
+  }
+
   function saveStoredActiveProject(projectName) {
     try {
       localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, projectName);
@@ -172,7 +209,7 @@
       let detailMessage = "Request failed";
       try {
         const errorData = await response.json();
-        detailMessage = (errorData && errorData.detail) || detailMessage;
+        detailMessage = normalizeApiErrorDetail(errorData && errorData.detail);
       } catch (e) {
         detailMessage = response.statusText || detailMessage;
       }
@@ -816,7 +853,7 @@
       if (state.sessionId) {
         return state.sessionId;
       }
-      const created = await SolarChatApi.createSession(state.role, sanitizeSessionTitle(titleHint));
+      const created = await SolarChatApi.createSession(sanitizeSessionTitle(titleHint));
       state.sessionId = created.session_id;
       state.projectSessionMap[state.sessionId] = state.activeProject;
       saveStoredProjectSessionMap(state.projectSessionMap);
@@ -900,29 +937,45 @@
         return;
       }
 
+      const userMessage = {
+        role: "user",
+        content: text,
+        timestamp: new Date().toISOString()
+      };
+
+      state.messages.push(userMessage);
+      messageList.render(state.messages);
+      messageInput.clear();
+      updateContext();
+
       try {
         setError("");
         setLoading(true, "Sending message to assistant...");
         setStatus("Processing");
 
         const sessionId = await ensureSession(text);
-        state.messages.push({ role: "user", content: text });
-        messageList.render(state.messages);
-        messageInput.clear();
-        updateContext();
 
         const response = await SolarChatApi.query({
           message: text,
-          role: state.role,
           session_id: sessionId
         });
 
         state.modelUsed = response.model_used || state.modelUsed;
+        state.messages.push({
+          role: "assistant",
+          content: response.answer || "",
+          timestamp: new Date().toISOString()
+        });
+        messageList.render(state.messages);
         updateContext();
 
-        setLoading(true, "Loading full session history...");
-        await loadSessionMessages(sessionId);
-        await refreshSessionList();
+        if (response.warning_message) {
+          setError(response.warning_message);
+        }
+
+        refreshSessionList().catch(function () {
+          // Keep UI responsive even if sidebar refresh fails.
+        });
         setStatus("Ready");
       } catch (error) {
         setStatus("Error");
