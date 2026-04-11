@@ -1,6 +1,8 @@
 from databricks.sdk import WorkspaceClient
 from app.core.settings import get_solar_chat_settings
+from functools import lru_cache
 
+@lru_cache(maxsize=1)
 def get_databricks_client() -> WorkspaceClient:
     """
     Initializes and returns the Databricks WorkspaceClient.

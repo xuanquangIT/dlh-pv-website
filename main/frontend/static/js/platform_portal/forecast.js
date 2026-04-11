@@ -18,13 +18,16 @@
       const container = document.getElementById('forecast-kpis');
       if (!container) return;
 
+      const formatKpi = (val, dec, suffix = '') => 
+        (val !== 'N/A' && val !== null && val !== undefined) ? (parseFloat(val).toFixed(dec) + suffix) : 'N/A';
+
       const kpis = [
-        { name: 'MAPE', value: data.mape !== 'N/A' && data.mape !== null ? parseFloat(data.mape).toFixed(2) + '%' : 'N/A' },
-        { name: 'MAE (MWh)', value: data.mae !== 'N/A' && data.mae !== null ? parseFloat(data.mae).toFixed(3) : 'N/A' },
-        { name: 'RMSE (MWh)', value: data.rmse !== 'N/A' && data.rmse !== null ? parseFloat(data.rmse).toFixed(3) : 'N/A' },
-        { name: 'R2 Score', value: data.r2 !== 'N/A' && data.r2 !== null ? parseFloat(data.r2).toFixed(4) : 'N/A' },
-        { name: 'Skill Score', value: data.skill_score !== 'N/A' && data.skill_score !== null ? parseFloat(data.skill_score).toFixed(3) : 'N/A' },
-        { name: 'Eval Date', value: data.date }
+        { name: 'MAPE', value: formatKpi(data.mape, 2, '%') },
+        { name: 'MAE (MWh)', value: formatKpi(data.mae, 3) },
+        { name: 'RMSE (MWh)', value: formatKpi(data.rmse, 3) },
+        { name: 'R2 Score', value: formatKpi(data.r2, 4) },
+        { name: 'Skill Score', value: formatKpi(data.skill_score, 3) },
+        { name: 'Eval Date', value: data.date || 'N/A' }
       ];
 
       container.innerHTML = kpis.map(function(kpi) {
