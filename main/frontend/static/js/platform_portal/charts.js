@@ -141,17 +141,8 @@
       case "dashboard":
         initDashboardCharts();
         break;
-      case "training":
-        initTrainingChart();
-        break;
-      case "forecast":
-        initForecastChart();
-        break;
       case "analytics":
         initAnalyticsChart();
-        break;
-      case "registry":
-        initCompareChart();
         break;
       default:
         break;

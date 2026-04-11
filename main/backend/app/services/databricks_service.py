@@ -203,3 +203,60 @@ def get_facility_heatmap_data() -> list[dict]:
     results = execute_sql(query)
     return results
 
+def get_daily_forecast() -> list[dict]:
+    query = """
+    SELECT * FROM (
+        SELECT 
+          forecast_date as date,
+          SUM(actual_energy_mwh_daily) as actual,
+          SUM(predicted_energy_mwh_daily) as predicted,
+          SUM(predicted_energy_mwh_daily) * 0.95 as lower,
+          SUM(predicted_energy_mwh_daily) * 1.05 as upper
+        FROM pv.gold.forecast_daily
+        GROUP BY forecast_date
+        ORDER BY forecast_date DESC
+        LIMIT 7
+    )
+    ORDER BY date ASC
+    """
+    return execute_sql(query)
+
+def get_model_monitoring_metrics() -> list[dict]:
+    query = """
+    SELECT * FROM (
+        SELECT 
+          eval_date as date,
+          model_version,
+          rmse_mwh as rmse,
+          mae_mwh as mae,
+          r2,
+          mape_day_pct as mape,
+          skill_score
+        FROM pv.gold.model_monitoring_daily
+        WHERE facility_id = 'ALL'
+        ORDER BY eval_date DESC
+        LIMIT 30
+    )
+    ORDER BY date ASC
+    """
+    return execute_sql(query)
+
+def get_registry_models() -> list[dict]:
+    query = """
+    SELECT 
+      model_version as version,
+      MAX(approach) as algorithm,
+      ROUND(AVG(rmse_mwh), 3) as rmse,
+      ROUND(AVG(mae_mwh), 3) as mae,
+      ROUND(AVG(r2), 4) as r2,
+      ROUND(AVG(mape_day_pct), 2) as mape,
+      MIN(eval_date) as created,
+      CASE 
+        WHEN MAX(model_name) LIKE '%champion%' THEN 'Production'
+        ELSE 'Staging'
+      END as status
+    FROM pv.gold.model_monitoring_daily
+    GROUP BY model_version
+    ORDER BY created DESC
+    """
+    return execute_sql(query)

@@ -22,22 +22,8 @@
             <thead>
                 <tr><th>Version</th><th>Algorithm</th><th>RMSE</th><th>MAE</th><th>R2</th><th>MAPE</th><th>Created</th><th>Status</th></tr>
             </thead>
-            <tbody>
-                {% for model in registry_models | default([
-                    {'version':'GBT-v4.2','algorithm':'Gradient Boosted Trees','rmse':'0.042','mae':'0.031','r2':'0.9418','mape':'3.2%','created':'2024-01-07 14:22','status':'Production'},
-                    {'version':'GBT-v4.1','algorithm':'Gradient Boosted Trees','rmse':'0.051','mae':'0.038','r2':'0.9302','mape':'4.1%','created':'2024-01-05 09:14','status':'Staging'}
-                ]) %}
-                <tr>
-                    <td>{{ model.version }}</td>
-                    <td>{{ model.algorithm }}</td>
-                    <td>{{ model.rmse }}</td>
-                    <td>{{ model.mae }}</td>
-                    <td>{{ model.r2 }}</td>
-                    <td>{{ model.mape }}</td>
-                    <td>{{ model.created }}</td>
-                    <td><span class="badge {% if model.status == 'Production' %}badge-success{% else %}badge-info{% endif %}">{{ model.status }}</span></td>
-                </tr>
-                {% endfor %}
+            <tbody id="registry-table-body">
+                <tr><td colspan="8" style="text-align:center; padding: 20px;">Loading registry data...</td></tr>
             </tbody>
         </table>
     </div>
@@ -47,6 +33,8 @@
     <h2 class="card-title">Model Comparison</h2>
     <div class="chart-box"><canvas id="compareChart"></canvas></div>
 </section>
+
+<script src="/static/js/platform_portal/registry.js?v=3"></script>
 {% endblock %}
 
 
