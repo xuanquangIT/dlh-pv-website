@@ -7,7 +7,7 @@ from app.services.databricks_service import get_registry_models
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(prefix="/model-registry", tags=["Model Registry"])
 
 @router.get("/models-list", response_model=List[Dict[str, Any]])
 def get_models_list(_: object = Depends(require_role(["admin", "ml_engineer", "data_engineer"]))):

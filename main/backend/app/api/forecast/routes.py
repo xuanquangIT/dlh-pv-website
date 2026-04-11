@@ -7,7 +7,7 @@ from app.services.databricks_service import get_daily_forecast, get_model_monito
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(prefix="/forecast", tags=["Forecast"])
 
 @router.get("/summary-kpi", response_model=Dict[str, Any])
 def get_forecast_summary_kpi(_: object = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"]))):

@@ -18,23 +18,20 @@ function updateFacilityScoresDom(data) {
         return;
     }
     
-    data.forEach(item => {
-        const tr = document.createElement('tr');
-        
+    tbody.innerHTML = data.map(item => {
         let scoreBadgeClass = 'badge-success';
         const scoreVal = parseInt(item.score);
         if (scoreVal < 90) scoreBadgeClass = 'badge-warn';
         if (scoreVal < 80) scoreBadgeClass = 'badge-danger';
 
-        tr.innerHTML = `
+        return `<tr>
             <td>${item.facility}</td>
             <td>${item.valid}</td>
             <td>${item.warning}</td>
             <td>${item.invalid}</td>
             <td><span class="badge ${scoreBadgeClass}">${item.score}</span></td>
-        `;
-        tbody.appendChild(tr);
-    });
+        </tr>`;
+    }).join('');
 }
 
 function updateRecentIssuesDom(data) {
@@ -46,11 +43,9 @@ function updateRecentIssuesDom(data) {
         return;
     }
     
-    data.forEach(item => {
-        const tr = document.createElement('tr');
+    tbody.innerHTML = data.map(item => {
         const severityClass = item.severity === 'Error' ? 'badge-danger' : 'badge-warn';
-        
-        tr.innerHTML = `
+        return `<tr>
             <td>${item.time}</td>
             <td>${item.facility}</td>
             <td>${item.sensor}</td>
@@ -58,9 +53,8 @@ function updateRecentIssuesDom(data) {
             <td>${item.affected}</td>
             <td><span class="badge ${severityClass}">${item.severity}</span></td>
             <td>${item.action}</td>
-        `;
-        tbody.appendChild(tr);
-    });
+        </tr>`;
+    }).join('');
 }
 
 function updateHeatmapDom(data) {
