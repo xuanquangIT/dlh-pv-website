@@ -7,7 +7,7 @@ from app.services.databricks_service import get_model_monitoring_metrics
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(prefix="/ml-training", tags=["ML Training"])
 
 @router.get("/monitoring", response_model=List[Dict[str, Any]])
 def get_ml_monitoring(_: object = Depends(require_role(["admin", "ml_engineer", "data_engineer"]))):

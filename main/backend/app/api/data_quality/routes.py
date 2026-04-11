@@ -12,7 +12,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(prefix="/data-quality", tags=["Data Quality"])
 
 @router.get("/summary", response_model=Dict[str, Any])
 def get_summary(_: object = Depends(require_role(["admin", "data_engineer"]))):
