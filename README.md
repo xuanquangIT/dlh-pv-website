@@ -1,23 +1,173 @@
-# PV Lakehouse Web - Local Run Guide
+# PV Lakehouse Dashboard
 
-This guide is for the local web app runtime in this folder.
+A full-stack analytics dashboard for solar photovoltaic (PV) energy monitoring, built on a **Medallion Architecture** (Bronze → Silver → Gold) powered by **Databricks**.
 
-Runtime architecture:
+## Architecture Overview
 
-- Neon PostgreSQL stores web app metadata (auth, chat history, RAG documents).
-- Databricks SQL Warehouse provides analytics data for the chatbot (catalog `pv`, schemas `silver` and `gold`).
-- Local default flow does not require Docker or Trino.
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Frontend (Jinja2)                     │
+│  Dashboard · Solar Chat · Quality · Forecast · Pipeline │
+│  Training · Registry · Analytics · Accounts             │
+├─────────────────────────────────────────────────────────┤
+│                FastAPI Backend (Python)                  │
+│  Auth (JWT) · REST API · Solar AI Chat Service          │
+├──────────┬──────────────────────────┬───────────────────┤
+│  Neon    │  Databricks SQL          │  LLM Provider     │
+│  Postgres│  Warehouse               │  (GPT-4o/Gemini)  │
+│  (Auth,  │  (Silver/Gold layers)    │  (Tool-calling)   │
+│  Chat)   │                          │                   │
+└──────────┴──────────────────────────┴───────────────────┘
+```
 
-## 1) Prerequisites
+**Key components:**
+
+- **Neon PostgreSQL** — User auth, chat sessions/messages, RAG documents
+- **Databricks SQL Warehouse** — Energy readings, weather, air quality, forecasts, model monitoring (catalog `pv`, schemas `silver` and `gold`)
+- **LLM Provider** — GPT-4o (OpenAI), Gemini, or Anthropic for agentic tool-calling chat
+
+## Project Structure
+
+```
+dlh-pv-website/
+├── .env                              # Environment configuration
+├── requirements.txt                  # Python dependencies
+├── README.md
+└── main/
+    ├── 002-create-lakehouse-tables.sql  # PostgreSQL bootstrap
+    ├── 005-app_setup.py                 # Initial setup script
+    ├── backend/
+    │   └── app/
+    │       ├── main.py                  # FastAPI app entry point
+    │       ├── api/                     # Route handlers
+    │       │   ├── auth/                # Login/logout, JWT sessions
+    │       │   ├── dashboard/           # Dashboard data endpoints
+    │       │   ├── solar_ai_chat/       # Chat API (query, sessions)
+    │       │   ├── data_pipeline/       # Pipeline monitoring API
+    │       │   ├── data_quality/        # Quality metrics API
+    │       │   ├── forecast/            # Forecast data API
+    │       │   ├── ml_training/         # Training metrics API
+    │       │   ├── model_registry/      # Model registry API
+    │       │   ├── analytics/           # Analytics data API
+    │       │   └── frontend.py          # Template rendering routes
+    │       ├── core/                    # Settings, config
+    │       ├── db/                      # Database connections
+    │       ├── schemas/                 # Pydantic models & tool schemas
+    │       ├── services/
+    │       │   ├── auth/                # Auth service
+    │       │   ├── dashboard/           # Dashboard service
+    │       │   ├── databricks_service.py # Databricks SQL connector
+    │       │   └── solar_ai_chat/       # AI Chat module
+    │       │       ├── chat_service.py      # Main agentic loop
+    │       │       ├── llm_client.py        # Multi-provider LLM client
+    │       │       ├── tool_executor.py     # Tool dispatch
+    │       │       ├── intent_service.py    # Intent classification
+    │       │       ├── prompt_builder.py    # System prompt builder
+    │       │       ├── nlp_parser.py        # Date/entity extraction
+    │       │       ├── permissions.py       # RBAC for tools
+    │       │       ├── web_search_client.py # Web search integration
+    │       │       └── ...
+    │       └── repositories/
+    │           ├── auth/                # User/role queries
+    │           └── solar_ai_chat/       # Data access layer
+    │               ├── base_repository.py       # Shared Databricks/CSV logic
+    │               ├── topic_repository.py      # Per-topic metrics queries
+    │               ├── report_repository.py     # Station daily reports
+    │               ├── extreme_repository.py    # Extreme value queries
+    │               ├── chat_repository.py       # Facility info
+    │               ├── postgres_history_repository.py  # Chat history (Postgres)
+    │               ├── databricks_history_repository.py # Chat history (Databricks)
+    │               └── vector_repository.py     # RAG vector search
+    └── frontend/
+        ├── templates/
+        │   └── platform_portal/
+        │       ├── base.html            # Layout template
+        │       ├── dashboard.html       # Main dashboard
+        │       ├── solar_chat.html      # AI Chat interface
+        │       ├── quality.html         # Data quality dashboard
+        │       ├── forecast.html        # Forecast dashboard
+        │       ├── pipeline.html        # Pipeline monitoring
+        │       ├── training.html        # ML training dashboard
+        │       ├── registry.html        # Model registry
+        │       ├── analytics.html       # Analytics page
+        │       ├── accounts.html        # User management
+        │       ├── login.html           # Login page
+        │       └── components/          # Shared UI components
+        └── static/
+            ├── css/
+            │   ├── platform_portal.css       # Main layout & components
+            │   ├── solar_chat_premium.css     # Chat UI enhancements
+            │   ├── chatbot-bubble.css         # Floating chatbot widget
+            │   ├── app.css                    # Global styles
+            │   ├── data_pipeline.css          # Pipeline page styles
+            │   ├── platform_accounts.css      # Accounts page styles
+            │   └── platform_auth.css          # Auth pages styles
+            └── js/platform_portal/
+                ├── solar_chat_page.js    # Full-page AI chat client
+                ├── chatbot_widget.js     # Floating chatbot widget
+                ├── chatbot-bubble.js     # Bubble animations
+                ├── common.js             # Shared utilities & page init
+                ├── charts.js             # Chart.js helpers
+                ├── data_pipeline.js      # Pipeline page logic
+                ├── data_quality.js       # Quality page logic
+                ├── forecast.js           # Forecast page logic
+                ├── training.js           # Training page logic
+                ├── registry.js           # Registry page logic
+                └── accounts_page.js      # User accounts logic
+```
+
+## Dashboard Pages
+
+| Page | URL | Description |
+|---|---|---|
+| Dashboard | `/platform/dashboard` | KPI cards, energy charts, system overview |
+| Solar AI Chat | `/platform/solar-chat` | Full-page agentic AI assistant with tool-calling |
+| Data Quality | `/platform/quality` | Per-facility quality scores, issue tracking |
+| Forecast | `/platform/forecast` | 72-hour energy forecasts with confidence intervals |
+| Pipeline | `/platform/pipeline` | Medallion pipeline stage progress & diagnostics |
+| ML Training | `/platform/training` | Model training metrics & evaluation |
+| Model Registry | `/platform/registry` | Model version registry & comparison |
+| Analytics | `/platform/analytics` | Extended analytics views |
+| Accounts | `/platform/accounts` | User management (admin only) |
+
+## Solar AI Chat — Agentic Tool-Calling
+
+The chat module implements an **agentic loop** where the LLM can call backend tools to retrieve live data from Databricks:
+
+**Available tools:**
+
+| Tool | Returns |
+|---|---|
+| `get_system_overview` | Production MWh, R², quality score, facility count, latest data timestamp |
+| `get_energy_performance` | Top/bottom facilities, peak hours, capacity factors, forecast |
+| `get_ml_model_info` | Model name/version, R², skill score, NRMSE |
+| `get_pipeline_status` | Bronze/Silver/Gold stage progress, alerts |
+| `get_data_quality_issues` | Per-facility quality scores, likely causes, latest data timestamp |
+| `get_forecast_72h` | 3-day forecast with confidence intervals |
+| `get_station_daily_report` | Per-station daily data (energy, radiation, weather) for a specific date; supports `station_name` filtering |
+| `get_facility_info` | Facility metadata (location, capacity, timezone) |
+| `get_extreme_*` | Record values for AQI, energy, weather |
+| `web_search` | Live internet search for external context |
+
+**Key features:**
+
+- **Intent pre-fetch**: Automatically detects topic from user message and pre-loads relevant data
+- **Date-aware queries**: Extracts dates from natural language (`DD/MM/YYYY`, `YYYY-MM-DD`) and directly queries the correct day
+- **Dynamic date context**: System prompt includes today's date so the LLM correctly handles past vs. future dates
+- **Multi-provider LLM**: Supports OpenAI, Gemini, and Anthropic APIs with automatic fallback
+- **RBAC**: Role-based tool permissions (admin, data_engineer, ml_engineer, data_analyst)
+- **Bilingual**: Vietnamese and English
+
+## Prerequisites
 
 - Python 3.11+
-- PowerShell (Windows) or Bash (Linux/WSL)
 - Neon PostgreSQL connection string
-- Databricks workspace, SQL Warehouse, and PAT token
+- Databricks workspace + SQL Warehouse + PAT token
+- LLM API key (OpenAI recommended)
 
-## 2) Create a virtual environment
+## Quick Start
 
-Run from this folder:
+### 1. Virtual environment
 
 ```powershell
 cd dlh-pv-website
@@ -27,209 +177,107 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-If PowerShell blocks activation scripts:
+### 2. Environment configuration
 
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+Create/edit `.env` in the project root:
+
+```env
+# Database
+DATABASE_URL=postgresql://...
+POSTGRES_SSLMODE=require
+POSTGRES_CHANNEL_BINDING=require
+SOLAR_CHAT_HISTORY_BACKEND=postgres
+
+# Databricks
+DATABRICKS_HOST=https://...
+DATABRICKS_TOKEN=dapi...
+DATABRICKS_SQL_HTTP_PATH=/sql/1.0/warehouses/...
+UC_CATALOG=pv
+UC_SILVER_SCHEMA=silver
+UC_GOLD_SCHEMA=gold
+
+# LLM (OpenAI recommended)
+SOLAR_CHAT_LLM_API_FORMAT=openai
+SOLAR_CHAT_LLM_API_KEY=sk-...
+SOLAR_CHAT_PRIMARY_MODEL=gpt-4o
+SOLAR_CHAT_FALLBACK_MODEL=gpt-4o-mini
+
+# Auth
+SECRET_KEY=your-secret-key
 ```
 
-## 3) Configure environment
+> **Note:** Non-comment plain text lines in `.env` must be `KEY=VALUE` format. Use `#` for section headers.
 
-Main runtime file: [.env](.env)
-
-Required variables:
-
-- `DATABASE_URL=postgresql://...`
-- `POSTGRES_SSLMODE=require`
-- `POSTGRES_CHANNEL_BINDING=require`
-- `SOLAR_CHAT_HISTORY_BACKEND=postgres`
-- `DATABRICKS_HOST=https://...`
-- `DATABRICKS_TOKEN=...`
-- `DATABRICKS_SQL_HTTP_PATH=/sql/1.0/warehouses/...`
-- `DATABRICKS_WAREHOUSE_ID=...` (optional alternative to `DATABRICKS_SQL_HTTP_PATH`)
-- `UC_CATALOG=pv`
-- `UC_SILVER_SCHEMA=silver`
-- `UC_GOLD_SCHEMA=gold`
-
-Recommended LLM variables for GPT-4o tool-calling:
-
-- `SOLAR_CHAT_LLM_API_FORMAT=openai`
-- `SOLAR_CHAT_LLM_API_KEY=...`
-- `SOLAR_CHAT_PRIMARY_MODEL=gpt-4o`
-- `SOLAR_CHAT_FALLBACK_MODEL=gpt-4o-mini`
-- `SOLAR_CHAT_LLM_BASE_URL=https://api.openai.com/v1` (optional if using default OpenAI endpoint)
-
-Important:
-
-- Any plain text line in `.env` must start with `#` if it is a section title.
-- Example: use `# Solar AI Chat`, not `Solar AI Chat`.
-
-## 4) Bootstrap metadata tables in Neon
-
-Bootstrap SQL: [main/002-create-lakehouse-tables.sql](main/002-create-lakehouse-tables.sql)
-
-Quick run (without `psql` CLI):
+### 3. Bootstrap database
 
 ```powershell
-cd dlh-pv-website
-.\.venv\Scripts\python.exe -c "import os; from pathlib import Path; import psycopg2; from dotenv import load_dotenv; load_dotenv('.env'); dsn=os.getenv('DATABASE_URL'); sql=Path('main/002-create-lakehouse-tables.sql').read_text(encoding='utf-8'); conn=psycopg2.connect(dsn); conn.autocommit=True; cur=conn.cursor(); cur.execute(sql); cur.close(); conn.close(); print('bootstrap_ok')"
+python -c "
+import os; from pathlib import Path; import psycopg2; from dotenv import load_dotenv
+load_dotenv('.env'); dsn=os.getenv('DATABASE_URL')
+sql=Path('main/002-create-lakehouse-tables.sql').read_text(encoding='utf-8')
+conn=psycopg2.connect(dsn); conn.autocommit=True
+cur=conn.cursor(); cur.execute(sql); cur.close(); conn.close()
+print('bootstrap_ok')
+"
 ```
 
-Main tables created:
+Tables created: `auth_roles`, `auth_users`, `chat_sessions`, `chat_messages`, `rag_documents`
 
-- `auth_roles`
-- `auth_users`
-- `chat_sessions`
-- `chat_messages`
-- `rag_documents`
-
-## 5) Run backend API (correct command usage)
-
-**First, check where you are:**
+### 4. Run the server
 
 ```powershell
-Get-Location
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
 ```
 
-If the output ends with `dlh-pv-website`, use Option B. If it ends with `dlh-pv` (or higher), use Option A.
+### 5. Open the app
 
-**Option A: from `dlh-pv` (repo root)**
+- Login: `http://127.0.0.1:8000/login`
+- Dashboard: `http://127.0.0.1:8000/platform/dashboard`
+- Solar AI Chat: `http://127.0.0.1:8000/platform/solar-chat`
+
+## Testing
+
+### Chatbot latency benchmark
 
 ```powershell
-Set-Location dlh-pv-website
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir main/backend
+python main/backend/scripts/solar_chat_perf_cli.py \
+  --base-url http://127.0.0.1:8000 \
+  --mode full \
+  --username admin --password admin123 \
+  --role data_engineer \
+  --message "Give me a quick PV Lakehouse overview" \
+  --repeat 1 --print-answer
 ```
 
-**Option B: when you are already in `dlh-pv-website` folder**
+### Accuracy regression suite
 
 ```powershell
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir main/backend
+python main/backend/scripts/solar_chat_accuracy_suite.py \
+  --base-url http://127.0.0.1:8000 \
+  --username admin --password admin123 \
+  --role admin --strict-exit
 ```
 
-⚠️ **Do NOT run `Set-Location dlh-pv-website` if you are already in `dlh-pv-website`.** Check with `Get-Location` first.
+Reports: `main/backend/test_reports/solar_chat_accuracy/`
 
-## 6) Open the web app
-
-After the server starts:
-
-- Login page: `http://127.0.0.1:8001/login`
-- Solar chat page: `http://127.0.0.1:8001/solar-chat`
-
-## 7) Quick smoke tests
-
-1. Login behavior:
-
-- `GET /` returns `303` to `/login` when unauthenticated.
-- `POST /auth/login` returns `303` on successful login redirect.
-
-2. Verify chat sessions are written to Neon:
+### Unit tests
 
 ```powershell
-cd dlh-pv-website
-.\.venv\Scripts\python.exe -c "import os, psycopg2; from dotenv import load_dotenv; load_dotenv('.env'); conn=psycopg2.connect(os.getenv('DATABASE_URL')); cur=conn.cursor(); cur.execute('select count(*) from chat_sessions'); print('chat_sessions', cur.fetchone()[0]); cur.close(); conn.close()"
+python -m pytest main/backend/tests/unit/ -q
 ```
 
-## 8) Troubleshooting
+## Troubleshooting
 
-### A) `ModuleNotFoundError: No module named app`
+| Problem | Cause | Fix |
+|---|---|---|
+| `ModuleNotFoundError: No module named app` | Wrong working directory | Run from `dlh-pv-website/` with `--app-dir main/backend` |
+| Port already in use | Stale server process | `Get-NetTCPConnection -LocalPort 8000 \| % { Stop-Process -Id $_.OwningProcess -Force }` |
+| `.env` parse error | Non-comment plain text line | Prefix section headers with `#` |
+| Tool-calling errors | Model doesn't support function calling | Switch to GPT-4o or enable fallback |
+| Chat returns "future date" error | LLM doesn't know today's date | Ensure `prompt_builder.py` injects current date (already implemented) |
 
-Cause: wrong working directory or missing `--app-dir`.
+## Security
 
-Fix: use one of the commands in section 5 exactly.
-
-### B) `Set-Location` path not found (`...\\dlh-pv-website\\dlh-pv-website`)
-
-Cause: running `Set-Location dlh-pv-website` while already in `dlh-pv-website`.
-
-Fix:
-
-1. Check where you are: `Get-Location`
-2. If output ends with `dlh-pv-website`, run only the `python -m uvicorn ...` command (skip `Set-Location`).
-3. If output ends with `dlh-pv`, then run `Set-Location dlh-pv-website` first, then the `python` command.
-
-### C) `Python-dotenv could not parse statement ...`
-
-Cause: invalid `.env` syntax (usually a non-comment plain text line).
-
-Fix: convert section headers to comments (prefix with `#`) and keep lines in `KEY=VALUE` format.
-
-### D) Port 8001 already in use (`error while attempting to bind ... only one usage of each socket address`)
-
-Cause: another server process is still using port 8001.
-
-Fix:
-
-```powershell
-Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
-```
-
-Then retry the uvicorn command.
-
-### E) Tool-calling model errors (for example `tool_use_failed`)
-
-Some OpenAI-compatible local models do not support function calling reliably.
-
-Recommended actions:
-
-- Switch to a model with reliable tool-calling support.
-- Keep fallback behavior enabled so the app still returns data-backed summaries.
-
-## 9) Benchmark chatbot latency from CLI
-
-Script: [main/backend/scripts/solar_chat_perf_cli.py](main/backend/scripts/solar_chat_perf_cli.py)
-
-Full pipeline benchmark:
-
-```powershell
-cd dlh-pv-website
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe main/backend/scripts/solar_chat_perf_cli.py --base-url http://127.0.0.1:8001 --mode full --username admin --password admin123 --role data_engineer --message "Give me a quick PV Lakehouse overview" --repeat 1 --print-answer
-```
-
-Chat endpoint benchmark (same route as website UI):
-
-```powershell
-cd dlh-pv-website
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe main/backend/scripts/solar_chat_perf_cli.py --base-url http://127.0.0.1:8001 --mode chat --username admin --password admin123 --role data_engineer --message "Compare 2 largest facilities" --repeat 1 --print-answer --print-metrics
-```
-
-Model-only benchmark (no tools / no RAG):
-
-```powershell
-cd dlh-pv-website
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe main/backend/scripts/solar_chat_perf_cli.py --base-url http://127.0.0.1:8001 --mode model-only --username admin --password admin123 --role data_engineer --message "Summarize the current system status" --repeat 1 --print-answer
-```
-
-Key metrics in output:
-
-- `roundtrip_ms`: client-side total latency
-- `server_elapsed_ms`: endpoint processing time
-- `service_latency_ms`: `SolarAIChatService` time (full mode)
-- `model_generation_ms`: model generation time (model-only mode)
-- `route_overhead_ms`: endpoint overhead above service/model time
-
-## 10) Accuracy and regression testing
-
-End-to-end bilingual + Databricks verification suite:
-
-```powershell
-cd dlh-pv-website
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe main/backend/scripts/solar_chat_accuracy_suite.py --base-url http://127.0.0.1:8001 --username admin --password admin123 --role admin --strict-exit
-```
-
-Output reports are written under:
-
-- `main/backend/test_reports/solar_chat_accuracy/solar_chat_accuracy_latest.md`
-- `main/backend/test_reports/solar_chat_accuracy/solar_chat_accuracy_latest.json`
-
-Targeted backend regression tests for routing + fallback guards:
-
-```powershell
-cd dlh-pv-website
-d:/University/HK8/dlh-pv/.venv/Scripts/python.exe -m pytest main/backend/tests/unit/test_solar_chat_intent_service.py main/backend/tests/unit/test_facility_fallback_guard.py main/backend/tests/unit/test_prompt_builder_energy_kpis.py main/backend/tests/unit/test_solar_ai_chat_service_energy_kpis.py main/backend/tests/unit/test_solar_ai_chat_service_facility_websearch.py -q
-```
-
-## 11) Security notes
-
-- Never commit real secrets.
-- Rotate tokens and API keys if they were exposed in logs or chat history.
-
+- Never commit `.env` or real API keys
+- Rotate tokens if exposed in logs or chat history
+- All SQL queries use sanitized parameters to prevent injection
