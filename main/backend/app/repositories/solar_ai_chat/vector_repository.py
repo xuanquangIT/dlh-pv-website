@@ -14,21 +14,29 @@ class VectorRepository:
     """PostgreSQL-backed vector store using pgvector for similarity search."""
 
     def __init__(self, settings: SolarChatSettings) -> None:
-        if settings.pg_database_url:
-            self._dsn = settings.pg_database_url.strip()
+        raw_database_url = getattr(settings, "pg_database_url", None)
+        if isinstance(raw_database_url, str) and raw_database_url.strip():
+            self._dsn = raw_database_url.strip()
             return
 
+        sslmode = getattr(settings, "pg_sslmode", None)
+        if not isinstance(sslmode, str):
+            sslmode = ""
+        channel_binding = getattr(settings, "pg_channel_binding", None)
+        if not isinstance(channel_binding, str):
+            channel_binding = ""
+
         dsn_parts = [
-            f"host={settings.pg_host}",
-            f"port={settings.pg_port}",
-            f"dbname={settings.pg_database}",
-            f"user={settings.pg_user}",
-            f"password={settings.pg_password}",
+            f"host={getattr(settings, 'pg_host', 'localhost')}",
+            f"port={getattr(settings, 'pg_port', 5432)}",
+            f"dbname={getattr(settings, 'pg_database', 'postgres')}",
+            f"user={getattr(settings, 'pg_user', 'postgres')}",
+            f"password={getattr(settings, 'pg_password', '')}",
         ]
-        if settings.pg_sslmode:
-            dsn_parts.append(f"sslmode={settings.pg_sslmode}")
-        if settings.pg_channel_binding:
-            dsn_parts.append(f"channel_binding={settings.pg_channel_binding}")
+        if sslmode.strip():
+            dsn_parts.append(f"sslmode={sslmode.strip()}")
+        if channel_binding.strip():
+            dsn_parts.append(f"channel_binding={channel_binding.strip()}")
         self._dsn = " ".join(dsn_parts)
 
     def _connect(self) -> "psycopg2.extensions.connection":

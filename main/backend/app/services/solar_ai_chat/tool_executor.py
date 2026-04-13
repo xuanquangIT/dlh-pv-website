@@ -2,8 +2,10 @@ import logging
 from datetime import date
 from typing import Any
 
+from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.vector_repository import VectorRepository
+from app.schemas.solar_ai_chat.agent import ToolResultEnvelope
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 from app.schemas.solar_ai_chat.tools import TOOL_NAME_TO_TOPIC
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
@@ -29,8 +31,6 @@ WEATHER_METRIC_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
-
-
 class ToolExecutor:
     """Dispatcher that maps Gemini function calls to repository methods."""
 
@@ -43,6 +43,51 @@ class ToolExecutor:
         self._repository = repository
         self._vector_repo = vector_repo
         self._embedding_client = embedding_client
+
+    def execute_envelope(
+        self,
+        function_name: str,
+        arguments: dict[str, Any],
+        role: ChatRole,
+    ) -> ToolResultEnvelope:
+        """Execute a tool and return a standardised ToolResultEnvelope.
+
+        This is the preferred method for the new orchestrator path.
+        The legacy ``execute()`` method delegates here for backward compatibility.
+        """
+        try:
+            data, sources = self.execute(function_name, arguments, role)
+            return ToolResultEnvelope(
+                status="ok",
+                data=data,
+                sources=sources,
+                confidence=1.0,
+                errors=[],
+                tool_name=function_name,
+            )
+        except PermissionError as exc:
+            return ToolResultEnvelope(
+                status="error",
+                data={},
+                sources=[],
+                confidence=0.0,
+                errors=[str(exc)],
+                tool_name=function_name,
+            )
+        except DatabricksDataUnavailableError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "tool_executor_envelope_error tool=%s error=%s", function_name, exc
+            )
+            return ToolResultEnvelope(
+                status="error",
+                data={},
+                sources=[],
+                confidence=0.0,
+                errors=[str(exc)],
+                tool_name=function_name,
+            )
 
     def execute(
         self,
@@ -154,9 +199,11 @@ class ToolExecutor:
             except Exception:
                 anchor = date.today()
         metrics = arguments.get("metrics")
+        station_name = arguments.get("station_name")
         return self._repository.fetch_station_daily_report(
             anchor_date=anchor,
             metrics=metrics,
+            station_name=station_name,
         )
 
     @staticmethod
@@ -173,9 +220,22 @@ class ToolExecutor:
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         """Return facility details including location and capacity."""
         facility_name = arguments.get("facility_name")
-        return self._repository._facility_info(
-            facility_name=facility_name,
-        )
+        result = None
+        if hasattr(self._repository, "_facility_info"):
+            result = self._repository._facility_info(
+                facility_name=facility_name,
+            )
+
+        if (
+            isinstance(result, tuple)
+            and len(result) == 2
+            and isinstance(result[0], dict)
+            and isinstance(result[1], list)
+        ):
+            return result
+
+        # Backward compatibility for tests/mocks that expose only topic-level metrics.
+        return self._repository.fetch_topic_metrics(ChatTopic.FACILITY_INFO)
 
     def _search_documents(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
         if not self._vector_repo or not self._embedding_client:
@@ -184,8 +244,20 @@ class ToolExecutor:
                 [{"layer": "rag", "dataset": "rag_documents", "data_source": "unavailable"}],
             )
 
-        query_text = arguments.get("query", "")
-        doc_type = arguments.get("doc_type")
+        query_text = str(arguments.get("query", "") or "").strip()
+        doc_type_raw = arguments.get("doc_type")
+        doc_type = str(doc_type_raw).strip() if isinstance(doc_type_raw, str) else None
+
+        if not query_text:
+            # Avoid embedding API calls with empty input; treat as an empty retrieval result.
+            return (
+                {
+                    "message": "Empty search query. Skipped document search.",
+                    "chunks": [],
+                    "total_results": 0,
+                },
+                [{"layer": "rag", "dataset": "rag_documents", "data_source": "pgvector"}],
+            )
 
         query_embedding = self._embedding_client.embed_text(query_text)
         chunks = self._vector_repo.search_similar(

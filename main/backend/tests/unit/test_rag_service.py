@@ -173,6 +173,30 @@ class VectorRepositoryMockTests(unittest.TestCase):
         )
         self.assertIn("Khong tim thay", metrics["message"])
 
+    def test_search_documents_empty_query_skips_embedding_call(self) -> None:
+        from app.services.solar_ai_chat.tool_executor import ToolExecutor
+        from app.schemas.solar_ai_chat.enums import ChatRole
+
+        mock_vector = MagicMock()
+        mock_embed = MagicMock()
+
+        repo = MagicMock()
+        executor = ToolExecutor(
+            repository=repo,
+            vector_repo=mock_vector,
+            embedding_client=mock_embed,
+        )
+        metrics, sources = executor.execute(
+            "search_documents", {}, ChatRole.ADMIN,
+        )
+
+        self.assertIn("Empty search query", metrics["message"])
+        self.assertEqual(metrics["chunks"], [])
+        self.assertEqual(metrics["total_results"], 0)
+        self.assertEqual(sources[0]["data_source"], "pgvector")
+        mock_embed.embed_text.assert_not_called()
+        mock_vector.search_similar.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -953,8 +953,8 @@
 
       state.filteredSessions = normalized
         ? projectScoped.filter(function (summary) {
-            return (summary.title || "").toLowerCase().includes(normalized);
-          })
+          return (summary.title || "").toLowerCase().includes(normalized);
+        })
         : projectScoped;
 
       renderSessionGroups();

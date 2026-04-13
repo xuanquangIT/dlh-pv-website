@@ -19,6 +19,7 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 _TEMP_UNAVAILABLE_COOLDOWN_SECONDS = 45.0
+_TOOL_CALL_DISABLE_TTL_SECONDS = 300.0
 
 
 class ModelUnavailableError(RuntimeError):
@@ -71,18 +72,35 @@ class LLMModelRouter:
         self._fallback_model = settings.fallback_model
         self._timeout = settings.request_timeout_seconds
         self._anthropic_version = settings.llm_anthropic_version
+        self._default_max_output_tokens = max(1, int(settings.llm_default_max_output_tokens))
+        self._tool_call_max_output_tokens = max(1, int(settings.llm_tool_call_max_output_tokens))
         self._request_executor = request_executor
-        # Models that produced invalid tool invocations are skipped for future tool-call turns.
-        self._tool_call_disabled_models: set[str] = set()
+        # Models that produced invalid tool invocations are skipped for a short TTL window.
+        self._tool_call_disabled_models: dict[str, float] = {}
         self._cooldown_until = 0.0
 
-    def generate(self, prompt: str) -> LLMGenerationResult:
+    def generate(
+        self,
+        prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+        temperature: float = 0.1,
+    ) -> LLMGenerationResult:
         if not self._api_key:
             raise ModelUnavailableError("LLM API key is not configured.")
+
+        effective_max_tokens = self._resolve_max_output_tokens(
+            value=max_output_tokens,
+            default_value=self._default_max_output_tokens,
+        )
 
         if self._api_format == "gemini":
             payload: dict[str, object] = {
                 "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "maxOutputTokens": effective_max_tokens,
+                    "temperature": temperature,
+                },
             }
 
             def _call_and_extract(model: str) -> str:
@@ -96,8 +114,8 @@ class LLMModelRouter:
         elif self._api_format == "anthropic":
             payload = {
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 512,
-                "temperature": 0.1,
+                "max_tokens": effective_max_tokens,
+                "temperature": temperature,
             }
 
             def _call_and_extract(model: str) -> str:
@@ -107,7 +125,8 @@ class LLMModelRouter:
         else:
             payload = {
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
+                "temperature": temperature,
+                "max_tokens": effective_max_tokens,
             }
 
             def _call_and_extract(model: str) -> str:
@@ -128,80 +147,214 @@ class LLMModelRouter:
         self,
         messages: list[dict[str, object]],
         tools: list[dict[str, object]],
+        *,
+        require_function_call: bool = False,
+        max_output_tokens: int | None = None,
     ) -> LLMToolResult:
         if not self._api_key:
             raise ModelUnavailableError("LLM API key is not configured.")
 
-        if self._api_format == "gemini":
-            payload: dict[str, object] = {
-                "contents": messages,
-                "tools": [{"function_declarations": tools}],
-                "tool_config": {"function_calling_config": {"mode": "AUTO"}},
-            }
-            raw, model_used, fallback_used = self._with_model_fallback(
-                lambda model: self._call_model_raw(model, payload),
-                "solar_chat_tool_call",
-                max_attempts=1,
-            )
-            return self._parse_gemini_tool_response(raw, model_used, fallback_used)
-
-        if self._api_format == "anthropic":
-            payload = {
-                "messages": self._convert_gemini_messages_to_anthropic(messages),
-                "tools": self._convert_gemini_tools_to_anthropic(tools),
-                "max_tokens": 1024,
-                "temperature": 0.0,
-            }
-            raw, model_used, fallback_used = self._with_model_fallback(
-                lambda model: self._call_model_raw(model, payload),
-                "solar_chat_tool_call",
-                max_attempts=1,
-            )
-            return self._parse_anthropic_tool_response(raw, model_used, fallback_used)
-
-        payload = {
-            "messages": self._convert_gemini_messages_to_openai(messages),
-            "tools": self._convert_gemini_tools_to_openai(tools),
-            "tool_choice": "auto",
-            "temperature": 0.0,
-        }
+        payload, skip_models = self._build_tool_generation_payload(
+            messages,
+            tools,
+            require_function_call=require_function_call,
+            max_output_tokens=max_output_tokens,
+        )
         raw, model_used, fallback_used = self._with_model_fallback(
             lambda model: self._call_model_raw(model, payload),
             "solar_chat_tool_call",
             max_attempts=1,
-            skip_models=self._tool_call_disabled_models,
+            skip_models=skip_models,
         )
-        return self._parse_openai_tool_response(raw, model_used, fallback_used)
+        return self._parse_tool_result_by_format(raw, model_used, fallback_used)
 
     def send_tool_result(
         self,
         messages: list[dict[str, object]],
         model_name: str,
+        *,
+        max_output_tokens: int | None = None,
     ) -> LLMToolResult:
         """Backward-compatible helper for tests and legacy call sites."""
         if not self._api_key:
             raise ModelUnavailableError("LLM API key is not configured.")
 
+        payload = self._build_tool_result_payload(
+            messages,
+            max_output_tokens=max_output_tokens,
+        )
+        raw = self._call_model_raw(model_name, payload)
+        return self._parse_tool_result_by_format(raw, model_name, False)
+
+    def _build_tool_generation_payload(
+        self,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]],
+        *,
+        require_function_call: bool = False,
+        max_output_tokens: int | None = None,
+    ) -> tuple[dict[str, object], set[str] | None]:
+        effective_max_tokens = self._resolve_max_output_tokens(
+            value=max_output_tokens,
+            default_value=self._tool_call_max_output_tokens,
+        )
+
         if self._api_format == "gemini":
-            payload: dict[str, object] = {"contents": messages}
-            raw = self._call_model_raw(model_name, payload)
-            return self._parse_gemini_tool_response(raw, model_name, False)
+            function_call_mode = "ANY" if require_function_call else "AUTO"
+            # Gemini uses systemInstruction for system messages
+            system_parts: list[dict[str, object]] = []
+            contents: list[dict[str, object]] = []
+            for msg in messages:
+                if str(msg.get("role", "")) == "system":
+                    parts = msg.get("parts")
+                    if isinstance(parts, list):
+                        system_parts.extend(parts)
+                else:
+                    contents.append(msg)
+            payload: dict[str, object] = {
+                "contents": contents,
+                "tools": [{"function_declarations": tools}],
+                "tool_config": {"function_calling_config": {"mode": function_call_mode}},
+                "generationConfig": {
+                    "maxOutputTokens": effective_max_tokens,
+                    "temperature": 0.0,
+                },
+            }
+            if system_parts:
+                payload["systemInstruction"] = {"parts": system_parts}
+            return payload, None
 
         if self._api_format == "anthropic":
+            # Anthropic uses top-level "system" parameter for system messages
+            system_texts: list[str] = []
+            non_system_messages: list[dict[str, object]] = []
+            for msg in messages:
+                if str(msg.get("role", "")) == "system":
+                    parts = msg.get("parts")
+                    if isinstance(parts, list):
+                        for p in parts:
+                            if isinstance(p, dict):
+                                t = p.get("text")
+                                if isinstance(t, str) and t.strip():
+                                    system_texts.append(t)
+                else:
+                    non_system_messages.append(msg)
             payload = {
-                "messages": self._convert_gemini_messages_to_anthropic(messages),
-                "max_tokens": 1024,
+                "messages": self._convert_gemini_messages_to_anthropic(non_system_messages),
+                "tools": self._convert_gemini_tools_to_anthropic(tools),
+                "max_tokens": effective_max_tokens,
                 "temperature": 0.0,
             }
-            raw = self._call_model_raw(model_name, payload)
-            return self._parse_anthropic_tool_response(raw, model_name, False)
+            if system_texts:
+                payload["system"] = "\n\n".join(system_texts)
+            if require_function_call:
+                payload["tool_choice"] = {"type": "any"}
+            return payload, None
 
+        tool_choice = "required" if require_function_call else "auto"
         payload = {
             "messages": self._convert_gemini_messages_to_openai(messages),
+            "tools": self._convert_gemini_tools_to_openai(tools),
+            "tool_choice": tool_choice,
             "temperature": 0.0,
+            "max_tokens": effective_max_tokens,
         }
-        raw = self._call_model_raw(model_name, payload)
-        return self._parse_openai_tool_response(raw, model_name, False)
+        return payload, self._active_tool_call_disabled_models()
+
+    def _build_tool_result_payload(
+        self,
+        messages: list[dict[str, object]],
+        *,
+        max_output_tokens: int | None = None,
+    ) -> dict[str, object]:
+        effective_max_tokens = self._resolve_max_output_tokens(
+            value=max_output_tokens,
+            default_value=self._tool_call_max_output_tokens,
+        )
+
+        if self._api_format == "gemini":
+            system_parts: list[dict[str, object]] = []
+            contents: list[dict[str, object]] = []
+            for msg in messages:
+                if str(msg.get("role", "")) == "system":
+                    parts = msg.get("parts")
+                    if isinstance(parts, list):
+                        system_parts.extend(parts)
+                else:
+                    contents.append(msg)
+            result_payload: dict[str, object] = {
+                "contents": contents,
+                "generationConfig": {
+                    "maxOutputTokens": effective_max_tokens,
+                    "temperature": 0.0,
+                },
+            }
+            if system_parts:
+                result_payload["systemInstruction"] = {"parts": system_parts}
+            return result_payload
+        if self._api_format == "anthropic":
+            system_texts: list[str] = []
+            non_system: list[dict[str, object]] = []
+            for msg in messages:
+                if str(msg.get("role", "")) == "system":
+                    parts = msg.get("parts")
+                    if isinstance(parts, list):
+                        for p in parts:
+                            if isinstance(p, dict):
+                                t = p.get("text")
+                                if isinstance(t, str) and t.strip():
+                                    system_texts.append(t)
+                else:
+                    non_system.append(msg)
+            anthro_payload: dict[str, object] = {
+                "messages": self._convert_gemini_messages_to_anthropic(non_system),
+                "max_tokens": effective_max_tokens,
+                "temperature": 0.0,
+            }
+            if system_texts:
+                anthro_payload["system"] = "\n\n".join(system_texts)
+            return anthro_payload
+        return {
+            "messages": self._convert_gemini_messages_to_openai(messages),
+            "temperature": 0.0,
+            "max_tokens": effective_max_tokens,
+        }
+
+    @staticmethod
+    def _resolve_max_output_tokens(value: int | None, default_value: int) -> int:
+        if value is None:
+            return max(1, int(default_value))
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return max(1, int(default_value))
+
+    def _parse_tool_result_by_format(
+        self,
+        raw: dict[str, object],
+        model_used: str,
+        fallback_used: bool,
+    ) -> LLMToolResult:
+        if self._api_format == "gemini":
+            return self._parse_gemini_tool_response(raw, model_used, fallback_used)
+        if self._api_format == "anthropic":
+            return self._parse_anthropic_tool_response(raw, model_used, fallback_used)
+        return self._parse_openai_tool_response(raw, model_used, fallback_used)
+
+    def _active_tool_call_disabled_models(self) -> set[str]:
+        now = time.monotonic()
+        expired_models = [
+            model
+            for model, disabled_until in self._tool_call_disabled_models.items()
+            if disabled_until <= now
+        ]
+        for model in expired_models:
+            self._tool_call_disabled_models.pop(model, None)
+        return {
+            model
+            for model, disabled_until in self._tool_call_disabled_models.items()
+            if disabled_until > now
+        }
 
     def _with_model_fallback(
         self,
@@ -222,11 +375,15 @@ class LLMModelRouter:
             models.append((self._fallback_model, True))
 
         if skip_models:
+            full_model_set = list(models)
             models = [
                 (model_name, is_fallback)
                 for model_name, is_fallback in models
                 if model_name not in skip_models
             ]
+            if not models:
+                # All models are temporarily disabled; fall back to full set as a last resort.
+                models = full_model_set
 
         if not models:
             raise ModelUnavailableError("No eligible models available for this request.")
@@ -261,10 +418,12 @@ class LLMModelRouter:
                         and _is_tool_use_failed_error(err)
                     ):
                         saw_tool_use_failed = True
-                        self._tool_call_disabled_models.add(model)
+                        disabled_until = time.monotonic() + _TOOL_CALL_DISABLE_TTL_SECONDS
+                        self._tool_call_disabled_models[model] = disabled_until
                         logger.warning(
-                            "Tool-call disabled for model=%s due to provider invalid tool invocation.",
+                            "Tool-call disabled for model=%s until %.1f due to provider invalid tool invocation.",
                             model,
+                            disabled_until,
                         )
                     is_temporary_unavailable = _is_temporary_unavailable_error(err)
                     saw_temporary_unavailable = saw_temporary_unavailable or is_temporary_unavailable
@@ -385,25 +544,33 @@ class LLMModelRouter:
         fallback_used: bool,
     ) -> LLMToolResult:
         parts = cls._extract_gemini_parts(raw)
-        first_part = parts[0]
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            function_call = part.get("functionCall")
+            if isinstance(function_call, dict):
+                arguments = function_call.get("args", {})
+                if not isinstance(arguments, dict):
+                    arguments = {}
+                return LLMToolResult(
+                    function_call=ToolCallRequest(
+                        name=str(function_call.get("name", "")),
+                        arguments=arguments,
+                    ),
+                    text=None,
+                    model_used=model_used,
+                    fallback_used=fallback_used,
+                )
 
-        function_call = first_part.get("functionCall")
-        if isinstance(function_call, dict):
-            return LLMToolResult(
-                function_call=ToolCallRequest(
-                    name=function_call.get("name", ""),
-                    arguments=function_call.get("args", {}),
-                ),
-                text=None,
-                model_used=model_used,
-                fallback_used=fallback_used,
-            )
-
-        text_value = first_part.get("text")
-        if isinstance(text_value, str) and text_value.strip():
+        text_segments = [
+            str(part.get("text", "")).strip()
+            for part in parts
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and str(part.get("text", "")).strip()
+        ]
+        if text_segments:
             return LLMToolResult(
                 function_call=None,
-                text=text_value.strip(),
+                text="\n".join(text_segments),
                 model_used=model_used,
                 fallback_used=fallback_used,
             )
@@ -427,28 +594,30 @@ class LLMModelRouter:
 
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
-            first_call = tool_calls[0]
-            function = first_call.get("function", {}) if isinstance(first_call, dict) else {}
-            name = str(function.get("name", ""))
-            raw_arguments = function.get("arguments", "{}")
-            arguments: dict[str, object]
-            if isinstance(raw_arguments, str):
-                try:
-                    loaded = json.loads(raw_arguments)
-                    arguments = loaded if isinstance(loaded, dict) else {}
-                except json.JSONDecodeError:
+            for call in tool_calls:
+                function = call.get("function", {}) if isinstance(call, dict) else {}
+                name = str(function.get("name", ""))
+                if not name:
+                    continue
+                raw_arguments = function.get("arguments", "{}")
+                arguments: dict[str, object]
+                if isinstance(raw_arguments, str):
+                    try:
+                        loaded = json.loads(raw_arguments)
+                        arguments = loaded if isinstance(loaded, dict) else {}
+                    except json.JSONDecodeError:
+                        arguments = {}
+                elif isinstance(raw_arguments, dict):
+                    arguments = raw_arguments
+                else:
                     arguments = {}
-            elif isinstance(raw_arguments, dict):
-                arguments = raw_arguments
-            else:
-                arguments = {}
 
-            return LLMToolResult(
-                function_call=ToolCallRequest(name=name, arguments=arguments),
-                text=None,
-                model_used=model_used,
-                fallback_used=fallback_used,
-            )
+                return LLMToolResult(
+                    function_call=ToolCallRequest(name=name, arguments=arguments),
+                    text=None,
+                    model_used=model_used,
+                    fallback_used=fallback_used,
+                )
 
         content = message.get("content")
         if isinstance(content, str) and content.strip():
@@ -561,9 +730,15 @@ class LLMModelRouter:
 
                 text = part.get("text")
                 if isinstance(text, str) and text.strip():
+                    if role == "system":
+                        openai_role = "system"
+                    elif role == "model":
+                        openai_role = "assistant"
+                    else:
+                        openai_role = "user"
                     converted.append(
                         {
-                            "role": "assistant" if role == "model" else "user",
+                            "role": openai_role,
                             "content": text,
                         }
                     )
@@ -611,10 +786,15 @@ class LLMModelRouter:
                     except TypeError:
                         function_content = str(function_payload)
 
+                    tool_call_id = last_tool_call_id_by_name.get(function_name)
+                    if not tool_call_id:
+                        tool_call_index += 1
+                        tool_call_id = f"call_orphan_{tool_call_index}"
+
                     converted.append(
                         {
                             "role": "tool",
-                            "tool_call_id": last_tool_call_id_by_name.get(function_name, "call_1"),
+                            "tool_call_id": tool_call_id,
                             "content": function_content,
                         }
                     )
@@ -685,13 +865,18 @@ class LLMModelRouter:
                     except TypeError:
                         function_content = str(function_payload)
 
+                    tool_use_id = last_tool_call_id_by_name.get(function_name)
+                    if not tool_use_id:
+                        tool_call_index += 1
+                        tool_use_id = f"toolu_orphan_{tool_call_index}"
+
                     converted.append(
                         {
                             "role": "user",
                             "content": [
                                 {
                                     "type": "tool_result",
-                                    "tool_use_id": last_tool_call_id_by_name.get(function_name, "toolu_1"),
+                                    "tool_use_id": tool_use_id,
                                     "content": function_content,
                                 }
                             ],

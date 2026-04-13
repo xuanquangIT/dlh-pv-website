@@ -62,6 +62,46 @@ class SolarChatSettings(BaseSettings):
         default=15.0,
         validation_alias=AliasChoices("SOLAR_CHAT_REQUEST_TIMEOUT_SECONDS", "request_timeout_seconds"),
     )
+    llm_default_max_output_tokens: int = Field(
+        default=1800,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_DEFAULT_MAX_OUTPUT_TOKENS",
+            "SOLAR_AI_DEFAULT_MAX_OUTPUT_TOKENS",
+            "llm_default_max_output_tokens",
+        ),
+    )
+    llm_tool_call_max_output_tokens: int = Field(
+        default=2000,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_TOOL_CALL_MAX_OUTPUT_TOKENS",
+            "SOLAR_AI_TOOL_CALL_MAX_OUTPUT_TOKENS",
+            "llm_tool_call_max_output_tokens",
+        ),
+    )
+    llm_planner_max_output_tokens: int = Field(
+        default=2600,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_PLANNER_MAX_OUTPUT_TOKENS",
+            "SOLAR_AI_PLANNER_MAX_OUTPUT_TOKENS",
+            "llm_planner_max_output_tokens",
+        ),
+    )
+    llm_synthesis_max_output_tokens: int = Field(
+        default=3600,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_SYNTHESIS_MAX_OUTPUT_TOKENS",
+            "SOLAR_AI_SYNTHESIS_MAX_OUTPUT_TOKENS",
+            "llm_synthesis_max_output_tokens",
+        ),
+    )
+    llm_verifier_max_output_tokens: int = Field(
+        default=1600,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_LLM_VERIFIER_MAX_OUTPUT_TOKENS",
+            "SOLAR_AI_VERIFIER_MAX_OUTPUT_TOKENS",
+            "llm_verifier_max_output_tokens",
+        ),
+    )
     llm_anthropic_version: str = Field(
         default="2023-06-01",
         alias="SOLAR_CHAT_ANTHROPIC_VERSION",
@@ -72,6 +112,20 @@ class SolarChatSettings(BaseSettings):
     databricks_token: str | None = Field(default=None, alias="DATABRICKS_TOKEN")
     databricks_sql_http_path: str | None = Field(default=None, alias="DATABRICKS_SQL_HTTP_PATH")
     databricks_warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
+    databricks_query_timeout_seconds: float = Field(
+        default=12.0,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_DATABRICKS_QUERY_TIMEOUT_SECONDS",
+            "databricks_query_timeout_seconds",
+        ),
+    )
+    allow_csv_fallback: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_ALLOW_CSV_FALLBACK",
+            "allow_csv_fallback",
+        ),
+    )
     uc_catalog: str = Field(default="pv", alias="UC_CATALOG")
     uc_app_catalog: str = Field(default="dlh-web", alias="UC_APP_CATALOG")
     uc_silver_schema: str = Field(default="silver", alias="UC_SILVER_SCHEMA")
@@ -127,7 +181,7 @@ class SolarChatSettings(BaseSettings):
         alias="SOLAR_CHAT_INTENT_SEMANTIC_MIN_CONFIDENCE",
     )
     intent_keyword_fastpath_score: int = Field(
-        default=1,
+        default=2,
         alias="SOLAR_CHAT_INTENT_KEYWORD_FASTPATH_SCORE",
     )
     websearch_api_key: str | None = Field(
@@ -143,8 +197,34 @@ class SolarChatSettings(BaseSettings):
         alias="SOLAR_CHAT_WEBSEARCH_TIMEOUT_SECONDS",
     )
     websearch_max_results: int = Field(
-        default=5,
+        default=10,
         alias="SOLAR_CHAT_WEBSEARCH_MAX_RESULTS",
+    )
+
+    # --- Agent Architecture Feature Flags ---
+    planner_enabled: bool = Field(
+        default=True,
+        alias="SOLAR_AI_PLANNER_ENABLED",
+    )
+    orchestrator_enabled: bool = Field(
+        default=True,
+        alias="SOLAR_AI_ORCHESTRATOR_ENABLED",
+    )
+    verifier_enabled: bool = Field(
+        default=True,
+        alias="SOLAR_AI_VERIFIER_ENABLED",
+    )
+    hybrid_retrieval_enabled: bool = Field(
+        default=True,
+        alias="SOLAR_AI_HYBRID_RETRIEVAL_ENABLED",
+    )
+    legacy_router_enabled: bool = Field(
+        default=False,
+        alias="SOLAR_AI_LEGACY_ROUTER_ENABLED",
+    )
+    max_tool_steps: int = Field(
+        default=6,
+        alias="SOLAR_AI_MAX_TOOL_STEPS",
     )
 
     @property

@@ -1,4 +1,4 @@
-﻿"""Station daily report repository: per-facility aggregation for a given date."""
+"""Station daily report repository: per-facility aggregation for a given date."""
 from __future__ import annotations
 
 import logging
@@ -37,22 +37,29 @@ class ReportRepository(BaseRepository):
         self,
         anchor_date: date,
         metrics: list[str] | None = None,
+        station_name: str | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         requested = set(metrics) & _ALL_REPORT_METRICS if metrics else _ALL_REPORT_METRICS
         if not requested:
             requested = _ALL_REPORT_METRICS
 
         data_source = "databricks"
-        stations = self._station_daily_report_databricks(anchor_date, requested)
-        available_date_min, available_date_max = self._station_report_date_range_databricks(requested)
+        stations = self._station_daily_report_trino(anchor_date, requested, station_name=station_name)
+        available_date_min, available_date_max = self._station_report_date_range_trino(requested)
 
         has_data = bool(stations)
         no_data_reason: str | None = None
         if not has_data:
-            no_data_reason = f"khong co du lieu cho ngay {anchor_date.isoformat()}"
+            if station_name:
+                no_data_reason = (
+                    f"không có dữ liệu cho trạm '{station_name}' ngày {anchor_date.isoformat()}"
+                )
+            else:
+                no_data_reason = f"không có dữ liệu cho ngày {anchor_date.isoformat()}"
             logger.info(
-                "station_daily_report_no_data date=%s available_date_min=%s available_date_max=%s source=%s",
+                "station_daily_report_no_data date=%s station_name=%s available_date_min=%s available_date_max=%s source=%s",
                 anchor_date.isoformat(),
+                station_name,
                 available_date_min,
                 available_date_max,
                 data_source,
@@ -66,7 +73,7 @@ class ReportRepository(BaseRepository):
         if requested & {"aqi_value"}:
             sources.append({"layer": "Silver", "dataset": "silver.air_quality", "data_source": data_source})
 
-        return {
+        result: dict[str, Any] = {
             "report_date": anchor_date.isoformat(),
             "metrics_requested": sorted(requested),
             "stations": stations,
@@ -75,7 +82,20 @@ class ReportRepository(BaseRepository):
             "no_data_reason": no_data_reason,
             "available_date_min": available_date_min,
             "available_date_max": available_date_max,
-        }, sources
+        }
+        if station_name:
+            result["station_filter"] = station_name
+
+        return result, sources
+
+    # Legacy aliases retained for compatibility with existing tests/call sites.
+    def _station_report_date_range_trino(self, requested: set[str]) -> tuple[str | None, str | None]:
+        return self._station_report_date_range_databricks(requested)
+
+    def _station_daily_report_trino(
+        self, anchor_date: date, requested: set[str], station_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._station_daily_report_databricks(anchor_date, requested, station_name=station_name)
 
     @staticmethod
     def _normalize_date_value(value: Any) -> str | None:
@@ -150,16 +170,38 @@ class ReportRepository(BaseRepository):
 
         return min_date, max_date
 
-    def _station_daily_report_databricks(self, anchor_date: date, requested: set[str]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _build_station_filter_clause(
+        station_name: str | None,
+        facility_expr: str,
+    ) -> str:
+        """Build a SQL WHERE clause fragment for station name filtering.
+
+        Uses LOWER + LIKE for case-insensitive partial matching.
+        Returns an empty string if no station filter is requested.
+        """
+        if not station_name or not station_name.strip():
+            return ""
+        # Escape SQL wildcards in user input to prevent injection
+        safe_name = station_name.strip().replace("'", "''").replace("%", "\\%").replace("_", "\\_")
+        return f" AND LOWER({facility_expr}) LIKE LOWER('%{safe_name}%')"
+
+    def _station_daily_report_databricks(
+        self, anchor_date: date, requested: set[str], station_name: str | None = None,
+    ) -> list[dict[str, Any]]:
         date_str = anchor_date.isoformat()
         facility_data: dict[str, dict[str, Any]] = {}
 
         if "energy_mwh" in requested:
+            station_filter = self._build_station_filter_clause(
+                station_name, "COALESCE(facility_name, facility_id)",
+            )
             rows = self._execute_query(
                 f"SELECT COALESCE(facility_name, facility_id) AS facility,"
                 f"       SUM(energy_kwh) AS total_energy_kwh"
                 f" FROM silver.energy_readings"
                 f" WHERE CAST(date_hour AS DATE) = DATE '{date_str}'"
+                f"{station_filter}"
                 f" GROUP BY COALESCE(facility_name, facility_id)"
             )
             for r in rows:
@@ -173,10 +215,14 @@ class ReportRepository(BaseRepository):
                 f"AVG({_WEATHER_METRIC_COLUMN_MAP[col]}) AS avg_{col}"
                 for col in sorted(weather_cols)
             )
+            station_filter = self._build_station_filter_clause(
+                station_name, "COALESCE(facility_name, location_id)",
+            )
             rows = self._execute_query(
                 f"SELECT COALESCE(facility_name, location_id) AS facility, {agg_parts}"
                 f" FROM silver.weather"
                 f" WHERE CAST(weather_timestamp AS DATE) = DATE '{date_str}'"
+                f"{station_filter}"
                 f" GROUP BY COALESCE(facility_name, location_id)"
             )
             for r in rows:
@@ -188,11 +234,15 @@ class ReportRepository(BaseRepository):
                         facility_data[name][col] = round(float(val), 2)
 
         if "aqi_value" in requested:
+            station_filter = self._build_station_filter_clause(
+                station_name, "COALESCE(facility_name, location_id)",
+            )
             rows = self._execute_query(
                 f"SELECT COALESCE(facility_name, location_id) AS facility,"
                 f"       AVG(aqi_value) AS avg_aqi"
                 f" FROM silver.air_quality"
                 f" WHERE CAST(aqi_timestamp AS DATE) = DATE '{date_str}'"
+                f"{station_filter}"
                 f" GROUP BY COALESCE(facility_name, location_id)"
             )
             for r in rows:

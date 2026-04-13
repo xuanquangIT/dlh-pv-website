@@ -109,6 +109,8 @@ class VietnameseIntentService:
             "compare",
             "comparison",
             "top 2",
+            "top 3",
+            "top 5",
             "2 facilities",
             "2 facility",
             "largest facilities",
@@ -116,6 +118,15 @@ class VietnameseIntentService:
             "facility lon nhat",
             "facilities lon nhat",
             "top facilities",
+            "lon nhat",
+            "nho nhat",
+            "tram lon nhat",
+            "nha may lon nhat",
+            "co so lon nhat",
+            "2 tram",
+            "hai tram",
+            "3 tram",
+            "ba tram",
         ),
         ChatTopic.SYSTEM_OVERVIEW: (
             "tong quan",
@@ -262,15 +273,7 @@ class VietnameseIntentService:
             return cached
 
         matched_topic, matched_score = self._keyword_match(normalized_message)
-
-        # Fast path: keyword intent already clear, skip remote embedding call.
-        if matched_topic is not None and matched_score >= self._semantic_keyword_score_threshold:
-            result = IntentDetectionResult(
-                topic=matched_topic,
-                confidence=self._keyword_confidence(matched_score),
-            )
-            self._cache_intent(normalized_message, result)
-            return result
+        semantic_result: IntentDetectionResult | None = None
 
         if self._semantic_enabled and self._embedding_client and self._topic_embeddings:
             try:
@@ -286,16 +289,37 @@ class VietnameseIntentService:
                             best_topic = topic
 
                 if max_sim >= self._semantic_min_confidence and best_topic:
-                    result = IntentDetectionResult(
+                    semantic_result = IntentDetectionResult(
                         topic=best_topic,
                         confidence=round(max_sim, 2),
                     )
-                    self._cache_intent(normalized_message, result)
-                    return result
             except Exception as e:
                 logger.warning("Semantic routing failed, fallback to keyword: %s", e)
                 self._embedding_client = None
                 self._topic_embeddings = {}
+
+        # Fast path: strong keyword match, but semantic can still override when signals disagree.
+        if matched_topic is not None and matched_score >= self._semantic_keyword_score_threshold:
+            keyword_result = IntentDetectionResult(
+                topic=matched_topic,
+                confidence=self._keyword_confidence(matched_score),
+            )
+            # When semantic and keyword disagree, prefer semantic to reduce rigid keyword locks.
+            if semantic_result is not None and semantic_result.topic != keyword_result.topic:
+                result = semantic_result
+            elif (
+                semantic_result is not None
+                and semantic_result.confidence >= (keyword_result.confidence + 0.08)
+            ):
+                result = semantic_result
+            else:
+                result = keyword_result
+            self._cache_intent(normalized_message, result)
+            return result
+
+        if semantic_result is not None:
+            self._cache_intent(normalized_message, semantic_result)
+            return semantic_result
 
         if matched_topic is None:
             result = IntentDetectionResult(topic=ChatTopic.GENERAL, confidence=0.3)
@@ -334,15 +358,21 @@ class VietnameseIntentService:
             "largest",
             "highest",
             "lon nhat",
+            "nho nhat",
             "2 facilities",
             "2 facility",
             "hai tram",
             "hai co so",
+            "2 tram",
         )
+        # Don't fire on AQI/weather metric queries — those belong to data_quality
+        if "aqi" in normalized_message or "chi so aqi" in normalized_message:
+            return False
         has_compare = any(marker in normalized_message for marker in compare_markers)
         has_facility = any(marker in normalized_message for marker in facility_markers)
         has_ranking = any(marker in normalized_message for marker in ranking_markers)
-        return has_compare and has_facility and has_ranking
+        # Fire the bias if: (explicit comparison) OR (facility + ranking together)
+        return has_facility and has_ranking or (has_compare and has_facility)
 
     @staticmethod
     def _keyword_confidence(matched_score: int) -> float:
