@@ -19,6 +19,7 @@ Replaces the old fixed-template / hardcoded-branch approach with:
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 from unicodedata import normalize
 
@@ -62,15 +63,15 @@ Data is processed in three layers:
 ### What each tool returns
 | Tool | Key fields returned |
 |---|---|
-| `get_system_overview` | production_output_mwh, r_squared, data_quality_score, facility_count |
+| `get_system_overview` | production_output_mwh, r_squared, data_quality_score, facility_count, latest_data_timestamp |
 | `get_energy_performance` | **top_facilities** (list: facility, energy_mwh, capacity_factor_pct, capacity_mw), **bottom_facilities** (same shape — lowest producers), facility_count, peak_hours, tomorrow_forecast_mwh, window_days |
 | `get_ml_model_info` | model_name, model_version, parameters.approach, comparison (current_r_squared, previous_r_squared, delta_r_squared, skill_score, nrmse_pct, evaluated_on) |
 | `get_pipeline_status` | stage_progress (bronze/silver/gold/serving %), eta_minutes, alerts (list of quality issues) |
 | `get_forecast_72h` | daily_forecast (list: date, expected_mwh, confidence_interval.low/high) |
-| `get_data_quality_issues` | facility_quality_scores, low_score_facilities (with likely_causes) |
+| `get_data_quality_issues` | facility_quality_scores, low_score_facilities (with likely_causes), latest_data_timestamp |
 | `get_facility_info` | facilities (list: facility_name, latitude, longitude, capacity_mw, timezone, country, state) |
 | `get_extreme_aqi / get_extreme_energy / get_extreme_weather` | facility, value, unit, metric, recorded_at |
-| `get_station_daily_report` | per-station rows with energy_mwh, aqi, temperature, wind, radiation for a date |
+| `get_station_daily_report` | per-station rows with energy_mwh, aqi, temperature, wind, radiation for a date; pass station_name to filter for a single station |
 | `search_documents` | text chunks from knowledge base — use for definitions and explanations |
 
 ## Behavioural rules
@@ -87,6 +88,12 @@ sequentially and address every part in the final answer.
 8. **Language** — reply in Vietnamese (with full diacritics) if the user writes \
 in Vietnamese; otherwise reply in English.
 9. Default time window is the **last 30 days** unless the user specifies otherwise.
+10. For **single-station daily data** queries (e.g., "dữ liệu trạm X ngày Y", \
+"data of station Alpha on 2024-03-15") call `get_station_daily_report` with \
+both `anchor_date` and `station_name` filled in.
+11. **Never refuse a data query without first calling a tool.** If the user asks \
+for data on a specific date, always call the appropriate tool with that date — \
+do not assume the data is unavailable or that the date is in the future.
 """
 
 
@@ -119,8 +126,14 @@ def build_agentic_messages(
     (which lacks a system role) the converter keeps it as a user turn — but
     for OpenAI and Anthropic the system role is natively supported.
     """
+    # Inject today's date so the LLM can distinguish past vs future dates.
+    today_str = date.today().isoformat()
+    system_text = (
+        f"Today's date: {today_str}\n\n"
+        + _LAKEHOUSE_ARCHITECTURE_CONTEXT
+    )
     messages: list[dict[str, object]] = [
-        {"role": "system", "parts": [{"text": _LAKEHOUSE_ARCHITECTURE_CONTEXT}]},
+        {"role": "system", "parts": [{"text": system_text}]},
     ]
     if history:
         messages.extend(_format_history_messages(history))
@@ -202,7 +215,10 @@ def build_synthesis_prompt(
         if lines:
             history_section = "## Recent conversation\n" + "\n".join(lines) + "\n\n"
 
+    today_str = date.today().isoformat()
+
     return (
+        f"Today's date: {today_str}\n\n"
         f"{_LAKEHOUSE_ARCHITECTURE_CONTEXT}\n\n"
         f"## Retrieved evidence\n{evidence_text[:4000] if evidence_text else '(none)'}\n\n"
         f"{history_section}"

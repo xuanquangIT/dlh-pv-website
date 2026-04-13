@@ -182,9 +182,12 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_station_daily_report",
         "description": (
-            "Retrieve a comprehensive report for a specific day across all stations: "
+            "Retrieve a comprehensive report for a specific day: "
             "energy (MWh), shortwave radiation (W/m2), AQI, "
-            "temperature, wind. Use this when the user requests a report for a specific day. "
+            "temperature, wind. Can return data for ALL stations or a SINGLE station. "
+            "Use this when the user requests a report for a specific day, "
+            "or asks about a specific station's data on a particular date. "
+            "If the user mentions a station name or code, pass it as station_name. "
             "DO NOT use this tool for requests over the last X days/3 days/general trends."
         ),
         "parameters": {
@@ -193,6 +196,14 @@ TOOL_DECLARATIONS: list[dict] = [
                 "anchor_date": {
                     "type": "string",
                     "description": "Date for the report (YYYY-MM-DD). Leave empty for the latest data date.",
+                },
+                "station_name": {
+                    "type": "string",
+                    "description": (
+                        "Name or code of a specific station to filter. "
+                        "Leave empty to retrieve data for all stations. "
+                        "Supports partial matching (e.g. 'Solar' will match 'Solar Farm Alpha')."
+                    ),
                 },
                 "metrics": {
                     "type": "array",

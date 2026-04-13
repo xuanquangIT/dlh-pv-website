@@ -1,4 +1,4 @@
-﻿"""Topic metrics repository: system overview, energy, ML model, pipeline,
+"""Topic metrics repository: system overview, energy, ML model, pipeline,
 forecast 72h, and data quality handlers with Databricks SQL only."""
 from __future__ import annotations
 
@@ -89,12 +89,14 @@ class TopicRepository(BaseRepository):
             " WHERE is_current = true"
         )
         facility_count = int(fac[0]["cnt"]) if fac else 0
+        latest_data_ts = self._resolve_latest_datetime("gold.fact_energy")
         return {
             "production_output_mwh": round(total_mwh, 2),
             "r_squared": round(r_squared, 4),
             "data_quality_score": round(avg_quality, 2),
             "facility_count": facility_count,
             "window_days": lookback_days,
+            "latest_data_timestamp": latest_data_ts,
         }
 
     def _system_overview_csv(self) -> dict[str, Any]:
@@ -767,9 +769,12 @@ class TopicRepository(BaseRepository):
             for r in low_score_rows[:5]
         ]
 
+        latest_data_ts = self._resolve_latest_datetime("silver.energy_readings")
+
         result: dict[str, Any] = {
             "facility_quality_scores": facility_quality_scores,
             "low_score_facilities": low_score,
+            "latest_data_timestamp": latest_data_ts,
         }
         if not low_score:
             result["summary"] = "All facilities have quality score >= 95%. No issues detected."

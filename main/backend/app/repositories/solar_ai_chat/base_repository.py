@@ -185,6 +185,23 @@ class BaseRepository:
             logger.warning("Cannot resolve latest date from %s (%s). Using current date.", table, exc)
         return date.today()
 
+    def _resolve_latest_datetime(self, table: str) -> str:
+        """Return the latest timestamp (date + time) from a Silver/Gold table as ISO string."""
+        timestamp_column = {
+            "silver.weather": "weather_timestamp",
+            "silver.air_quality": "aqi_timestamp",
+        }.get(table, "date_hour")
+        try:
+            rows = self._execute_query(
+                f"SELECT MAX({timestamp_column}) AS latest FROM {table}"
+            )
+            if rows and rows[0]["latest"]:
+                val = rows[0]["latest"]
+                return self._format_observed_at(val)
+        except Exception as exc:
+            logger.warning("Cannot resolve latest datetime from %s (%s).", table, exc)
+        return ""
+
     def _with_databricks_query(
         self,
         topic_label: str,

@@ -199,9 +199,11 @@ class ToolExecutor:
             except Exception:
                 anchor = date.today()
         metrics = arguments.get("metrics")
+        station_name = arguments.get("station_name")
         return self._repository.fetch_station_daily_report(
             anchor_date=anchor,
             metrics=metrics,
+            station_name=station_name,
         )
 
     @staticmethod

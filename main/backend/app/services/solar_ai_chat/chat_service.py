@@ -45,6 +45,7 @@ from app.services.solar_ai_chat.intent_service import (
 from app.services.solar_ai_chat.nlp_parser import (
     ExtremeMetricQuery,
     extract_extreme_metric_query,
+    extract_query_date,
     extract_timeframe,
 )
 from app.services.solar_ai_chat.permissions import ROLE_TOPIC_PERMISSIONS, ROLE_TOOL_PERMISSIONS
@@ -358,7 +359,66 @@ class SolarAIChatService:
             intent_confidence,
         )
 
-        if (
+        # Skip intent pre-fetch when the user message references a specific
+        # date (e.g. "ngày 10/4/2026").  Pre-fetch tools like
+        # get_energy_performance don't accept date parameters, so their
+        # results would be irrelevant.  Instead, directly pre-fetch
+        # get_station_daily_report with the extracted anchor_date.
+        user_query_date = extract_query_date(request.message)
+
+        if user_query_date is not None:
+            # Date-specific query: pre-fetch station daily report with the
+            # extracted date so the LLM has real data to synthesise from.
+            prefetch_tool = "get_station_daily_report"
+            allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+            if prefetch_tool in allowed_tools:
+                try:
+                    tool_args = {"anchor_date": user_query_date.isoformat()}
+                    data, sources = self._tool_executor.execute(
+                        prefetch_tool, tool_args, request.role
+                    )
+                    all_metrics.update(data)
+                    all_sources.extend(sources)
+                    topic = ChatTopic.ENERGY_PERFORMANCE
+                    messages.append({
+                        "role": "model",
+                        "parts": [{"functionCall": {"name": prefetch_tool, "args": tool_args}}],
+                    })
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {
+                            "name": prefetch_tool,
+                            "response": data,
+                        }}],
+                    })
+                    step_events.append({
+                        "step": 0,
+                        "tool": prefetch_tool,
+                        "status": "ok",
+                        "metric_keys": sorted(data.keys()),
+                        "source_count": len(sources),
+                    })
+                    logger.info(
+                        "solar_chat_date_prefetch trace_id=%s tool=%s date=%s metric_keys=%s",
+                        trace_id,
+                        prefetch_tool,
+                        user_query_date.isoformat(),
+                        sorted(data.keys()),
+                    )
+                except DatabricksDataUnavailableError as db_err:
+                    logger.error(
+                        "solar_chat_date_prefetch_databricks_unavailable trace_id=%s error=%s",
+                        trace_id,
+                        db_err,
+                    )
+                    raise
+                except Exception as prefetch_err:
+                    logger.warning(
+                        "solar_chat_date_prefetch_failed trace_id=%s error=%s",
+                        trace_id,
+                        prefetch_err,
+                    )
+        elif (
             intent_result.topic != ChatTopic.GENERAL
             and intent_confidence >= 0.6
         ):
