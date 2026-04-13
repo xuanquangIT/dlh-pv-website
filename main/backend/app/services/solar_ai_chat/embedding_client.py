@@ -31,11 +31,15 @@ class GeminiEmbeddingClient:
         self._dimensions = dimensions
 
     def embed_text(self, text: str) -> list[float]:
+        normalized_text = " ".join(str(text or "").split()).strip()
+        if not normalized_text:
+            raise EmbeddingUnavailableError("Embedding input text is empty after trimming.")
+
         # C4: API key sent as header, never in URL
         endpoint = f"{self._base_url}/models/{self._model}:embedContent"
         payload = {
             "model": f"models/{self._model}",
-            "content": {"parts": [{"text": text}]},
+            "content": {"parts": [{"text": normalized_text}]},
         }
         result = self._post(endpoint, payload)
         values = result.get("embedding", {}).get("values", [])
@@ -45,6 +49,15 @@ class GeminiEmbeddingClient:
         if not texts:
             return []
 
+        normalized_texts: list[str] = []
+        for index, text in enumerate(texts):
+            normalized_text = " ".join(str(text or "").split()).strip()
+            if not normalized_text:
+                raise EmbeddingUnavailableError(
+                    f"Embedding input text at index {index} is empty after trimming."
+                )
+            normalized_texts.append(normalized_text)
+
         # C4: API key sent as header, never in URL
         endpoint = f"{self._base_url}/models/{self._model}:batchEmbedContents"
         requests_body = [
@@ -52,7 +65,7 @@ class GeminiEmbeddingClient:
                 "model": f"models/{self._model}",
                 "content": {"parts": [{"text": t}]},
             }
-            for t in texts
+            for t in normalized_texts
         ]
         payload = {"requests": requests_body}
         try:
@@ -61,12 +74,12 @@ class GeminiEmbeddingClient:
             if "location is not supported" in str(exc).lower():
                 raise
             # Some embedding endpoints reject batch mode. Fall back to sequential calls.
-            return [self.embed_text(text) for text in texts]
+            return [self.embed_text(text) for text in normalized_texts]
 
         embeddings_list = result.get("embeddings", [])
-        if not isinstance(embeddings_list, list) or len(embeddings_list) != len(texts):
+        if not isinstance(embeddings_list, list) or len(embeddings_list) != len(normalized_texts):
             raise EmbeddingUnavailableError(
-                f"Expected {len(texts)} embeddings, got {len(embeddings_list)}."
+                f"Expected {len(normalized_texts)} embeddings, got {len(embeddings_list)}."
             )
         return [self._validate_vector(emb.get("values", [])) for emb in embeddings_list]
 

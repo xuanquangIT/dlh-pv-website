@@ -134,16 +134,39 @@ class TopicRepository(BaseRepository):
 
     def _energy_performance_databricks(self) -> dict[str, Any]:
         lookback_days = self._lookback_days()
-        top_fac = self._execute_query(
+        # Fetch all facilities (no LIMIT) so we can derive both top-N and bottom-N.
+        # Include capacity_mw and capacity_factor_pct for richer per-facility context.
+        all_fac_rows = self._execute_query(
             "SELECT COALESCE(d.facility_name, f.facility_id) AS facility,"
-            "       SUM(f.energy_mwh) AS total_mwh"
+            "       SUM(f.energy_mwh) AS total_mwh,"
+            "       AVG(f.capacity_factor_pct) AS capacity_factor_pct,"
+            "       MAX(d.total_capacity_mw) AS capacity_mw"
             " FROM gold.fact_energy f"
             " LEFT JOIN gold.dim_facility d"
             "   ON f.facility_id = d.facility_id AND d.is_current = true"
             f" WHERE f.date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
             " GROUP BY COALESCE(d.facility_name, f.facility_id)"
-            " ORDER BY total_mwh DESC LIMIT 3"
+            " ORDER BY total_mwh DESC"
         )
+
+        def _to_facility_dict(r: dict[str, Any]) -> dict[str, Any]:
+            entry: dict[str, Any] = {
+                "facility": r["facility"],
+                "energy_mwh": round(float(r["total_mwh"]), 2),
+            }
+            if r.get("capacity_factor_pct") is not None:
+                entry["capacity_factor_pct"] = round(float(r["capacity_factor_pct"]), 2)
+            if r.get("capacity_mw") is not None:
+                entry["capacity_mw"] = round(float(r["capacity_mw"]), 2)
+            return entry
+
+        all_facilities = [_to_facility_dict(r) for r in all_fac_rows]
+        top_fac = all_facilities[:3]
+        # Bottom facilities: up to 3 smallest producers (ascending order), excluding any
+        # already represented in top_fac to avoid duplication when total facilities <= 6.
+        top_names = {f["facility"] for f in top_fac}
+        bottom_fac = [f for f in reversed(all_facilities) if f["facility"] not in top_names][:3]
+
         peak = self._execute_query(
             "SELECT EXTRACT(HOUR FROM date_hour) AS hr,"
             "       SUM(energy_mwh) AS total_mwh"
@@ -185,10 +208,9 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = mean(daily_values) if daily_values else 0.0
 
         return {
-            "top_facilities": [
-                {"facility": r["facility"], "energy_mwh": round(float(r["total_mwh"]), 2)}
-                for r in top_fac
-            ],
+            "top_facilities": top_fac,
+            "bottom_facilities": bottom_fac,
+            "facility_count": len(all_facilities),
             "peak_hours": [
                 {"hour": int(r["hr"]), "energy_mwh": round(float(r["total_mwh"]), 2)}
                 for r in peak
@@ -243,11 +265,19 @@ class TopicRepository(BaseRepository):
 
         sorted_days = sorted(daily_totals.keys())
         window = sorted_days[-7:] if len(sorted_days) >= 7 else sorted_days
+
+        all_fac_sorted = [
+            {"facility": f, "energy_mwh": round(t, 2)}
+            for f, t in sorted(facility_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+        top_fac_csv = all_fac_sorted[:3]
+        top_names_csv = {f["facility"] for f in top_fac_csv}
+        bottom_fac_csv = [f for f in reversed(all_fac_sorted) if f["facility"] not in top_names_csv][:3]
+
         return {
-            "top_facilities": [
-                {"facility": f, "energy_mwh": round(t, 2)}
-                for f, t in sorted(facility_totals.items(), key=lambda x: x[1], reverse=True)[:3]
-            ],
+            "top_facilities": top_fac_csv,
+            "bottom_facilities": bottom_fac_csv,
+            "facility_count": len(all_fac_sorted),
             "peak_hours": [
                 {"hour": h, "energy_mwh": round(t, 2)}
                 for h, t in sorted(hour_totals.items(), key=lambda x: x[1], reverse=True)[:3]

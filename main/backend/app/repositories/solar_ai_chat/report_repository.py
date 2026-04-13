@@ -43,13 +43,13 @@ class ReportRepository(BaseRepository):
             requested = _ALL_REPORT_METRICS
 
         data_source = "databricks"
-        stations = self._station_daily_report_databricks(anchor_date, requested)
-        available_date_min, available_date_max = self._station_report_date_range_databricks(requested)
+        stations = self._station_daily_report_trino(anchor_date, requested)
+        available_date_min, available_date_max = self._station_report_date_range_trino(requested)
 
         has_data = bool(stations)
         no_data_reason: str | None = None
         if not has_data:
-            no_data_reason = f"khong co du lieu cho ngay {anchor_date.isoformat()}"
+            no_data_reason = f"không có dữ liệu cho ngày {anchor_date.isoformat()}"
             logger.info(
                 "station_daily_report_no_data date=%s available_date_min=%s available_date_max=%s source=%s",
                 anchor_date.isoformat(),
@@ -76,6 +76,13 @@ class ReportRepository(BaseRepository):
             "available_date_min": available_date_min,
             "available_date_max": available_date_max,
         }, sources
+
+    # Legacy aliases retained for compatibility with existing tests/call sites.
+    def _station_report_date_range_trino(self, requested: set[str]) -> tuple[str | None, str | None]:
+        return self._station_report_date_range_databricks(requested)
+
+    def _station_daily_report_trino(self, anchor_date: date, requested: set[str]) -> list[dict[str, Any]]:
+        return self._station_daily_report_databricks(anchor_date, requested)
 
     @staticmethod
     def _normalize_date_value(value: Any) -> str | None:

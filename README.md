@@ -85,20 +85,28 @@ Main tables created:
 
 ## 5) Run backend API (correct command usage)
 
-Option A: from repo root
+**First, check where you are:**
+
+```powershell
+Get-Location
+```
+
+If the output ends with `dlh-pv-website`, use Option B. If it ends with `dlh-pv` (or higher), use Option A.
+
+**Option A: from `dlh-pv` (repo root)**
 
 ```powershell
 Set-Location dlh-pv-website
 d:/University/HK8/dlh-pv/.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir main/backend
 ```
 
-Option B: when you are already in `dlh-pv-website`
+**Option B: when you are already in `dlh-pv-website` folder**
 
 ```powershell
 d:/University/HK8/dlh-pv/.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --app-dir main/backend
 ```
 
-Do not run `Set-Location dlh-pv-website` again if your current directory is already `dlh-pv-website`.
+⚠️ **Do NOT run `Set-Location dlh-pv-website` if you are already in `dlh-pv-website`.** Check with `Get-Location` first.
 
 ## 6) Open the web app
 
@@ -129,11 +137,15 @@ Cause: wrong working directory or missing `--app-dir`.
 
 Fix: use one of the commands in section 5 exactly.
 
-### B) `Set-Location` path not found (`...\dlh-pv-website\dlh-pv-website`)
+### B) `Set-Location` path not found (`...\\dlh-pv-website\\dlh-pv-website`)
 
 Cause: running `Set-Location dlh-pv-website` while already in `dlh-pv-website`.
 
-Fix: skip `Set-Location` and run only the `python -m uvicorn ...` command.
+Fix:
+
+1. Check where you are: `Get-Location`
+2. If output ends with `dlh-pv-website`, run only the `python -m uvicorn ...` command (skip `Set-Location`).
+3. If output ends with `dlh-pv`, then run `Set-Location dlh-pv-website` first, then the `python` command.
 
 ### C) `Python-dotenv could not parse statement ...`
 
@@ -141,7 +153,19 @@ Cause: invalid `.env` syntax (usually a non-comment plain text line).
 
 Fix: convert section headers to comments (prefix with `#`) and keep lines in `KEY=VALUE` format.
 
-### D) Tool-calling model errors (for example `tool_use_failed`)
+### D) Port 8001 already in use (`error while attempting to bind ... only one usage of each socket address`)
+
+Cause: another server process is still using port 8001.
+
+Fix:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
+```
+
+Then retry the uvicorn command.
+
+### E) Tool-calling model errors (for example `tool_use_failed`)
 
 Some OpenAI-compatible local models do not support function calling reliably.
 
@@ -208,3 +232,4 @@ d:/University/HK8/dlh-pv/.venv/Scripts/python.exe -m pytest main/backend/tests/u
 
 - Never commit real secrets.
 - Rotate tokens and API keys if they were exposed in logs or chat history.
+

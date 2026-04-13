@@ -3,6 +3,7 @@
 All Silver/Gold repositories inherit from this base.
 """
 import logging
+import re
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -13,6 +14,10 @@ from urllib.parse import urlparse
 from app.core.settings import SolarChatSettings
 
 logger = logging.getLogger(__name__)
+
+
+class DatabricksDataUnavailableError(RuntimeError):
+    """Raised when Databricks queries cannot be served reliably."""
 
 
 class BaseRepository:
@@ -51,11 +56,32 @@ class BaseRepository:
         "total_capacity_maximum_mw",
     })
 
+    # Backward-compatible table rewrite map used by legacy tests and SQL migration helpers.
+    _ICEBERG_TABLE_MAP: dict[str, str] = {
+        "lh_silver_clean_facility_master": "silver.clean_facility_master",
+        "lh_silver_clean_hourly_energy": "silver.clean_hourly_energy",
+        "lh_silver_clean_hourly_weather": "silver.clean_hourly_weather",
+        "lh_silver_clean_hourly_air_quality": "silver.clean_hourly_air_quality",
+        "lh_gold_dim_date": "gold.dim_date",
+        "lh_gold_dim_time": "gold.dim_time",
+        "lh_gold_dim_aqi_category": "gold.dim_aqi_category",
+        "lh_gold_fact_solar_environmental": "gold.fact_solar_environmental",
+        "lh_gold_dim_facility": "gold.dim_facility",
+    }
+
     def __init__(self, settings: SolarChatSettings) -> None:
         self._settings = settings
+        self._trino_catalog = self._resolve_trino_catalog(settings.trino_catalog)
         self._catalog = self._resolve_catalog(settings.uc_catalog)
         self._silver_schema = self._resolve_schema(settings.uc_silver_schema)
         self._gold_schema = settings.uc_gold_schema.strip().lower() or "gold"
+
+    @staticmethod
+    def _resolve_trino_catalog(trino_catalog: str) -> str:
+        normalized = (trino_catalog or "").strip().lower()
+        if normalized in {"postgresql", "postgres"}:
+            return "iceberg"
+        return normalized or "iceberg"
 
     @classmethod
     def _resolve_schema(cls, uc_schema: str) -> str:
@@ -77,6 +103,21 @@ class BaseRepository:
             raise ValueError(f"SQL identifier not allowed: '{value}'")
         return value
 
+    def _rewrite_sql_for_iceberg(self, sql: str) -> str:
+        if self._trino_catalog != "iceberg":
+            return sql
+
+        rewritten = sql
+        for legacy_name, iceberg_name in sorted(
+            self._ICEBERG_TABLE_MAP.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            pattern = rf"\b{re.escape(legacy_name)}\b"
+            rewritten = re.sub(pattern, f"iceberg.{iceberg_name}", rewritten)
+
+        return rewritten
+
     @contextmanager
     def _databricks_connection(self):
         """Context manager ensuring Databricks SQL connections are always closed."""
@@ -87,7 +128,7 @@ class BaseRepository:
         http_path = (self._settings.resolved_databricks_http_path or "").strip()
 
         if not host or not token or not http_path:
-            raise ValueError(
+            raise DatabricksDataUnavailableError(
                 "Missing Databricks connection settings. "
                 "Required: DATABRICKS_HOST, DATABRICKS_TOKEN, and DATABRICKS_SQL_HTTP_PATH "
                 "(or DATABRICKS_WAREHOUSE_ID)."
@@ -96,7 +137,7 @@ class BaseRepository:
         parsed = urlparse(host)
         server_hostname = parsed.netloc if parsed.scheme else host
         if not server_hostname:
-            raise ValueError("Invalid DATABRICKS_HOST value.")
+            raise DatabricksDataUnavailableError("Invalid DATABRICKS_HOST value.")
 
         conn = databricks_sql.connect(
             server_hostname=server_hostname,
@@ -111,11 +152,22 @@ class BaseRepository:
             conn.close()
 
     def _execute_query(self, sql: str) -> list[dict[str, Any]]:
-        with self._databricks_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql)
-            columns = [desc[0] for desc in cursor.description]
-            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        try:
+            with self._databricks_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql)
+                columns = [desc[0] for desc in cursor.description]
+                return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        except DatabricksDataUnavailableError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "databricks_query_failed sql_preview=%r error_type=%s error=%s",
+                sql[:200],
+                type(exc).__name__,
+                exc,
+            )
+            raise DatabricksDataUnavailableError("Failed to execute Databricks SQL query.") from exc
 
     def _resolve_latest_date(self, table: str) -> date:
         timestamp_column = {
@@ -154,9 +206,13 @@ class BaseRepository:
         data_source = "databricks"
         try:
             metrics = query_fn()
+        except DatabricksDataUnavailableError:
+            raise
         except Exception as exc:
             logger.error("Databricks query failed for %s (%s).", topic_label, exc)
-            raise
+            raise DatabricksDataUnavailableError(
+                f"Databricks query failed for topic '{topic_label}'."
+            ) from exc
         sources = [{**s, "data_source": data_source} for s in resolved_sources_template]
         return metrics, sources
 
