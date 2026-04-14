@@ -1,4 +1,4 @@
-﻿"""Topic metrics repository: system overview, energy, ML model, pipeline,
+"""Topic metrics repository: system overview, energy, ML model, pipeline,
 forecast 72h, and data quality handlers with Databricks SQL only."""
 from __future__ import annotations
 
@@ -89,12 +89,14 @@ class TopicRepository(BaseRepository):
             " WHERE is_current = true"
         )
         facility_count = int(fac[0]["cnt"]) if fac else 0
+        latest_data_ts = self._resolve_latest_datetime("gold.fact_energy")
         return {
             "production_output_mwh": round(total_mwh, 2),
             "r_squared": round(r_squared, 4),
             "data_quality_score": round(avg_quality, 2),
             "facility_count": facility_count,
             "window_days": lookback_days,
+            "latest_data_timestamp": latest_data_ts,
         }
 
     def _system_overview_csv(self) -> dict[str, Any]:
@@ -134,21 +136,45 @@ class TopicRepository(BaseRepository):
 
     def _energy_performance_databricks(self) -> dict[str, Any]:
         lookback_days = self._lookback_days()
-        top_fac = self._execute_query(
+        # Fetch all facilities (no LIMIT) so we can derive both top-N and bottom-N.
+        # Include capacity_mw and capacity_factor_pct for richer per-facility context.
+        all_fac_rows = self._execute_query(
             "SELECT COALESCE(d.facility_name, f.facility_id) AS facility,"
-            "       SUM(f.energy_mwh) AS total_mwh"
+            "       SUM(f.energy_mwh) AS total_mwh,"
+            "       AVG(f.capacity_factor_pct) AS capacity_factor_pct,"
+            "       MAX(d.total_capacity_mw) AS capacity_mw"
             " FROM gold.fact_energy f"
             " LEFT JOIN gold.dim_facility d"
             "   ON f.facility_id = d.facility_id AND d.is_current = true"
             f" WHERE f.date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
             " GROUP BY COALESCE(d.facility_name, f.facility_id)"
-            " ORDER BY total_mwh DESC LIMIT 3"
+            " ORDER BY total_mwh DESC"
         )
+
+        def _to_facility_dict(r: dict[str, Any]) -> dict[str, Any]:
+            entry: dict[str, Any] = {
+                "facility": r["facility"],
+                "energy_mwh": round(float(r["total_mwh"]), 2),
+            }
+            if r.get("capacity_factor_pct") is not None:
+                entry["capacity_factor_pct"] = round(float(r["capacity_factor_pct"]), 2)
+            if r.get("capacity_mw") is not None:
+                entry["capacity_mw"] = round(float(r["capacity_mw"]), 2)
+            return entry
+
+        all_facilities = [_to_facility_dict(r) for r in all_fac_rows]
+        top_fac = all_facilities[:3]
+        # Bottom facilities: up to 3 smallest producers (ascending order), excluding any
+        # already represented in top_fac to avoid duplication when total facilities <= 6.
+        top_names = {f["facility"] for f in top_fac}
+        bottom_fac = [f for f in reversed(all_facilities) if f["facility"] not in top_names][:3]
+
         peak = self._execute_query(
             "SELECT EXTRACT(HOUR FROM date_hour) AS hr,"
             "       SUM(energy_mwh) AS total_mwh"
             " FROM gold.fact_energy"
             f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            "   AND energy_mwh > 0"
             " GROUP BY EXTRACT(HOUR FROM date_hour)"
             " ORDER BY total_mwh DESC LIMIT 3"
         )
@@ -185,10 +211,9 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = mean(daily_values) if daily_values else 0.0
 
         return {
-            "top_facilities": [
-                {"facility": r["facility"], "energy_mwh": round(float(r["total_mwh"]), 2)}
-                for r in top_fac
-            ],
+            "top_facilities": top_fac,
+            "bottom_facilities": bottom_fac,
+            "facility_count": len(all_facilities),
             "peak_hours": [
                 {"hour": int(r["hr"]), "energy_mwh": round(float(r["total_mwh"]), 2)}
                 for r in peak
@@ -218,7 +243,10 @@ class TopicRepository(BaseRepository):
             facility_totals[facility] += energy
             dt = self._parse_datetime(row.get("date_hour"))
             if dt is not None:
-                hour_totals[dt.hour] += energy
+                # Only count daytime hours (non-zero production) to avoid
+                # night peaks caused by zero-value nighttime rows (Bug #1).
+                if energy > 0:
+                    hour_totals[dt.hour] += energy
                 daily_totals[dt.date().isoformat()] += energy
 
         for row in gold_fact:
@@ -243,11 +271,19 @@ class TopicRepository(BaseRepository):
 
         sorted_days = sorted(daily_totals.keys())
         window = sorted_days[-7:] if len(sorted_days) >= 7 else sorted_days
+
+        all_fac_sorted = [
+            {"facility": f, "energy_mwh": round(t, 2)}
+            for f, t in sorted(facility_totals.items(), key=lambda x: x[1], reverse=True)
+        ]
+        top_fac_csv = all_fac_sorted[:3]
+        top_names_csv = {f["facility"] for f in top_fac_csv}
+        bottom_fac_csv = [f for f in reversed(all_fac_sorted) if f["facility"] not in top_names_csv][:3]
+
         return {
-            "top_facilities": [
-                {"facility": f, "energy_mwh": round(t, 2)}
-                for f, t in sorted(facility_totals.items(), key=lambda x: x[1], reverse=True)[:3]
-            ],
+            "top_facilities": top_fac_csv,
+            "bottom_facilities": bottom_fac_csv,
+            "facility_count": len(all_fac_sorted),
             "peak_hours": [
                 {"hour": h, "energy_mwh": round(t, 2)}
                 for h, t in sorted(hour_totals.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -457,7 +493,9 @@ class TopicRepository(BaseRepository):
                 issue = f"status={status_value}, bronze_failed={bronze_failed}, silver_failed={silver_failed}"
                 alerts.append(
                     {
-                        "facility": str(row.get("pipeline_name") or "pipeline"),
+                        # Use "pipeline_name" (not "facility") — these are Databricks
+                        # workflow job names, NOT solar facility names (Bug #3).
+                        "pipeline_name": str(row.get("pipeline_name") or "pipeline"),
                         "quality_flag": "WARNING",
                         "issue": issue,
                     }
@@ -572,20 +610,24 @@ class TopicRepository(BaseRepository):
             "SELECT CAST(forecast_date AS DATE) AS day,"
             "       SUM(predicted_energy_mwh_daily) AS expected_mwh"
             " FROM gold.forecast_daily"
-            " WHERE CAST(forecast_date AS DATE) BETWEEN current_date() AND date_add(current_date(), 2)"
+            " WHERE CAST(forecast_date AS DATE) >= current_date()"
+            "   AND CAST(forecast_date AS DATE) < date_add(current_date(), 3)"
             " GROUP BY CAST(forecast_date AS DATE)"
             " ORDER BY day ASC"
         )
 
         if len(rows) < 3:
-            latest_rows = self._safe_execute_query(
+            # Fallback: look for the nearest FUTURE dates available in the table.
+            # Never fall back to past dates — that would mislead the user.
+            future_rows = self._safe_execute_query(
                 "SELECT CAST(forecast_date AS DATE) AS day,"
                 "       SUM(predicted_energy_mwh_daily) AS expected_mwh"
                 " FROM gold.forecast_daily"
+                " WHERE CAST(forecast_date AS DATE) >= current_date()"
                 " GROUP BY CAST(forecast_date AS DATE)"
-                " ORDER BY day DESC LIMIT 3"
+                " ORDER BY day ASC LIMIT 3"
             )
-            rows = list(reversed(latest_rows))
+            rows = future_rows if future_rows else rows
 
         if not rows:
             return {"daily_forecast": []}
@@ -737,9 +779,12 @@ class TopicRepository(BaseRepository):
             for r in low_score_rows[:5]
         ]
 
+        latest_data_ts = self._resolve_latest_datetime("silver.energy_readings")
+
         result: dict[str, Any] = {
             "facility_quality_scores": facility_quality_scores,
             "low_score_facilities": low_score,
+            "latest_data_timestamp": latest_data_ts,
         }
         if not low_score:
             result["summary"] = "All facilities have quality score >= 95%. No issues detected."

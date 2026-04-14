@@ -9,6 +9,7 @@ class SourceMetadata(BaseModel):
     layer: str = Field(description="Data layer name. Accepted values: Silver or Gold.")
     dataset: str = Field(description="Dataset name used to answer the query.")
     data_source: str = Field(default="databricks", description="Backend used to retrieve data. Value: databricks.")
+    url: str | None = Field(default=None, description="Source URL for web search results.")
 
 
 class SolarChatRequest(BaseModel):

@@ -55,6 +55,13 @@ class EmbedTextTests(unittest.TestCase):
             client.embed_text("hello")
 
     @patch("app.services.solar_ai_chat.embedding_client.urlopen")
+    def test_embed_text_raises_on_blank_input_without_http_call(self, mock_urlopen: MagicMock) -> None:
+        client = self._make_client()
+        with self.assertRaises(EmbeddingUnavailableError):
+            client.embed_text("   ")
+        mock_urlopen.assert_not_called()
+
+    @patch("app.services.solar_ai_chat.embedding_client.urlopen")
     def test_embed_batch_returns_multiple_vectors(self, mock_urlopen: MagicMock) -> None:
         vector = [0.5] * DEFAULT_EMBEDDING_DIMENSIONS
         mock_urlopen.return_value = self._mock_response(
@@ -81,6 +88,13 @@ class EmbedTextTests(unittest.TestCase):
         client = self._make_client()
         with self.assertRaises(EmbeddingUnavailableError):
             client.embed_batch(["a", "b", "c"])
+
+    @patch("app.services.solar_ai_chat.embedding_client.urlopen")
+    def test_embed_batch_raises_on_blank_input_without_http_call(self, mock_urlopen: MagicMock) -> None:
+        client = self._make_client()
+        with self.assertRaises(EmbeddingUnavailableError):
+            client.embed_batch(["ok", "   "])
+        mock_urlopen.assert_not_called()
 
     @patch("app.services.solar_ai_chat.embedding_client.urlopen")
     def test_embed_text_builds_correct_url(self, mock_urlopen: MagicMock) -> None:

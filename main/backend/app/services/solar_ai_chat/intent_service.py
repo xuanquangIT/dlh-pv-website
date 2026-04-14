@@ -72,12 +72,42 @@ class VietnameseIntentService:
         ChatTopic.ML_MODEL: (
             "mo hinh",
             "model",
+            "fallback",
+            "du phong",
             "gbt",
             "v4.2",
             "v4.1",
+            "version",
+            "model version",
+            "current version",
+            "forecast model",
             "tham so",
             "model r-squared",
             "r-squared model",
+            # Bug #2/#8: additional ML-model phrases
+            "ml model",
+            "ml model info",
+            "model info",
+            "model name",
+            "nrmse",
+            "nrmse pct",
+            "skill score",
+            "r2",
+            "r-squared",
+            "r squared",
+            "champion model",
+            "production model",
+            "current model",
+            "model performance",
+            "model metrics",
+            "model quality",
+            "model accuracy",
+            "model trend",
+            "model version info",
+            "model details",
+            "hieu suat mo hinh",
+            "do chinh xac mo hinh",
+            "chi so mo hinh",
         ),
         ChatTopic.ENERGY_PERFORMANCE: (
             "hieu suat",
@@ -109,13 +139,15 @@ class VietnameseIntentService:
             "compare",
             "comparison",
             "top 2",
+            "top 3",
+            "top 5",
             "2 facilities",
             "2 facility",
-            "largest facilities",
-            "highest facilities",
-            "facility lon nhat",
-            "facilities lon nhat",
             "top facilities",
+            "2 tram",
+            "hai tram",
+            "3 tram",
+            "ba tram",
         ),
         ChatTopic.SYSTEM_OVERVIEW: (
             "tong quan",
@@ -151,6 +183,19 @@ class VietnameseIntentService:
             "longitude",
             "cong suat",
             "capacity",
+            "cong suat lap dat",
+            "installed capacity",
+            "largest capacity",
+            "biggest station",
+            "lon nhat",
+            "nho nhat",
+            "tram lon nhat",
+            "nha may lon nhat",
+            "co so lon nhat",
+            "largest facilities",
+            "highest facilities",
+            "facility lon nhat",
+            "facilities lon nhat",
             "thong tin tram",
             "thong tin co so",
             "thong tin nha may",
@@ -160,6 +205,31 @@ class VietnameseIntentService:
             "dat o",
             "tram nao o",
             "co so o",
+            "so tram",
+            "bao nhieu tram",
+            "tong so tram",
+            "how many stations",
+            "station count",
+            "active stations",
+            "list all stations",
+            "liet ke tram",
+            "liet ke tat ca",
+            # Bug #5: facility ID codes and their common short-forms
+            "wrsf1", "wrsf",
+            "avlsf", "avon",
+            "bomensf", "bomen",
+            "yatsf1", "yatpool",
+            "limosf2", "limo",
+            "finleysf", "finley",
+            "emerasf", "emera",
+            "darlsf", "darl",
+            "white rock",
+            "avonlie",
+            "bomen solar",
+            "yatpool",
+            "limondale",
+            "emerald solar",
+            "darlington point",
         ),
     }
 
@@ -185,6 +255,16 @@ class VietnameseIntentService:
         ChatTopic.ML_MODEL: [
             "Thông số mô hình GBT đang dùng bản v4.1 hay v4.2",
             "Mô hình học máy dự báo có độ chính xác R-squared bao nhiêu",
+            # Bug #2/#8: extended canonical phrases
+            "What is the current ML model info? Give me model name, version, R2, skill score, NRMSE",
+            "Champion model performance metrics",
+            "What ML model is currently deployed?",
+            "Show me the current forecast model version and R-squared",
+            "NRMSE and skill score of the current model",
+            "Model quality improving or declining",
+            "Is the system using a fallback model",
+            "Xu hướng chất lượng mô hình đang tốt lên hay xấu đi",
+            "Cho tôi tên mô hình, version và chỉ số R-squared chính xác",
         ],
         ChatTopic.ENERGY_PERFORMANCE: [
             "Cho xem sản lượng cao nhất và thấp nhất hôm nay",
@@ -262,15 +342,7 @@ class VietnameseIntentService:
             return cached
 
         matched_topic, matched_score = self._keyword_match(normalized_message)
-
-        # Fast path: keyword intent already clear, skip remote embedding call.
-        if matched_topic is not None and matched_score >= self._semantic_keyword_score_threshold:
-            result = IntentDetectionResult(
-                topic=matched_topic,
-                confidence=self._keyword_confidence(matched_score),
-            )
-            self._cache_intent(normalized_message, result)
-            return result
+        semantic_result: IntentDetectionResult | None = None
 
         if self._semantic_enabled and self._embedding_client and self._topic_embeddings:
             try:
@@ -286,16 +358,43 @@ class VietnameseIntentService:
                             best_topic = topic
 
                 if max_sim >= self._semantic_min_confidence and best_topic:
-                    result = IntentDetectionResult(
+                    semantic_result = IntentDetectionResult(
                         topic=best_topic,
                         confidence=round(max_sim, 2),
                     )
-                    self._cache_intent(normalized_message, result)
-                    return result
             except Exception as e:
                 logger.warning("Semantic routing failed, fallback to keyword: %s", e)
                 self._embedding_client = None
                 self._topic_embeddings = {}
+
+        # Fast path: strong keyword match, but semantic can still override when signals disagree.
+        if matched_topic is not None and matched_score >= self._semantic_keyword_score_threshold:
+            keyword_result = IntentDetectionResult(
+                topic=matched_topic,
+                confidence=self._keyword_confidence(matched_score),
+            )
+            # Keep strong keyword hits stable; only let semantic override when
+            # keyword evidence is weak.
+            if (
+                semantic_result is not None
+                and semantic_result.topic != keyword_result.topic
+                and keyword_result.confidence < 0.8
+            ):
+                result = semantic_result
+            elif (
+                semantic_result is not None
+                and semantic_result.confidence >= (keyword_result.confidence + 0.08)
+                and keyword_result.confidence < 0.8
+            ):
+                result = semantic_result
+            else:
+                result = keyword_result
+            self._cache_intent(normalized_message, result)
+            return result
+
+        if semantic_result is not None:
+            self._cache_intent(normalized_message, semantic_result)
+            return semantic_result
 
         if matched_topic is None:
             result = IntentDetectionResult(topic=ChatTopic.GENERAL, confidence=0.3)
@@ -313,11 +412,46 @@ class VietnameseIntentService:
         matched_topic: ChatTopic | None = None
         matched_score = 0
 
+        facility_priority_markers = (
+            "installed capacity",
+            "cong suat lap dat",
+            "largest installed",
+            "largest capacity",
+            "station count",
+            "how many stations",
+            "bao nhieu tram",
+            "tong so tram",
+            "list all stations",
+            "liet ke",
+            "timezone of that station",
+            "mui gio cua tram do",
+            "tram do",
+            "we just discussed",
+            "luc dau",
+        )
+        facility_bias = 2 if any(m in normalized_message for m in facility_priority_markers) else 0
+
+        ml_priority_markers = (
+            "fallback",
+            "du phong",
+            "model version",
+            "current version",
+            "forecast model",
+            "r-squared",
+            "skill score",
+            "nrmse",
+        )
+        ml_bias = 2 if any(m in normalized_message for m in ml_priority_markers) else 0
+
         for topic, keywords in self._TOPIC_KEYWORDS.items():
             topic_score = sum(1 for keyword in keywords if keyword in normalized_message)
             if topic is ChatTopic.ENERGY_PERFORMANCE and self._is_energy_comparison_query(normalized_message):
                 # Bias toward ENERGY_PERFORMANCE for facility comparison requests.
                 topic_score += 2
+            if topic is ChatTopic.FACILITY_INFO and facility_bias:
+                topic_score += facility_bias
+            if topic is ChatTopic.ML_MODEL and ml_bias:
+                topic_score += ml_bias
             if topic_score > matched_score:
                 matched_topic = topic
                 matched_score = topic_score
@@ -334,15 +468,29 @@ class VietnameseIntentService:
             "largest",
             "highest",
             "lon nhat",
+            "nho nhat",
             "2 facilities",
             "2 facility",
             "hai tram",
             "hai co so",
+            "2 tram",
         )
+        # Don't fire on AQI/weather metric queries — those belong to data_quality
+        if "aqi" in normalized_message or "chi so aqi" in normalized_message:
+            return False
+        # Don't fire on installed capacity / facility info queries
+        capacity_markers = (
+            "cong suat lap dat", "installed capacity", "capacity mw",
+            "cong suat", "bao nhieu tram", "so tram", "tong so tram",
+            "how many stations", "station count", "liet ke",
+        )
+        if any(m in normalized_message for m in capacity_markers):
+            return False
         has_compare = any(marker in normalized_message for marker in compare_markers)
         has_facility = any(marker in normalized_message for marker in facility_markers)
         has_ranking = any(marker in normalized_message for marker in ranking_markers)
-        return has_compare and has_facility and has_ranking
+        # Fire the bias if: (explicit comparison) OR (facility + ranking together)
+        return has_facility and has_ranking or (has_compare and has_facility)
 
     @staticmethod
     def _keyword_confidence(matched_score: int) -> float:

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,6 +37,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--connect-timeout-seconds", type=float, default=10.0, help="Connection timeout.")
     parser.add_argument("--print-answer", action="store_true", help="Print assistant answer text.")
     parser.add_argument("--print-metrics", action="store_true", help="Print key_metrics JSON from chat response.")
+    parser.add_argument(
+        "--expect-thinking-trace",
+        action="store_true",
+        help="Fail with exit code 1 if response does not include planner thinking_trace steps.",
+    )
+    parser.add_argument(
+        "--output-json",
+        default="",
+        help="Optional path to write raw benchmark results as JSON.",
+    )
     return parser.parse_args()
 
 
@@ -82,6 +94,17 @@ def create_session(client: httpx.Client, role: str, title: str) -> str:
     return session_id
 
 
+def _extract_trace_fields(payload: dict[str, Any]) -> tuple[str, str, int]:
+    trace = payload.get("thinking_trace")
+    if not isinstance(trace, dict):
+        return "", "", 0
+    summary = str(trace.get("summary", "") or "")
+    trace_id = str(trace.get("trace_id", "") or "")
+    raw_steps = trace.get("steps")
+    step_count = len(raw_steps) if isinstance(raw_steps, list) else 0
+    return summary, trace_id, step_count
+
+
 def benchmark_full_once(
     client: httpx.Client,
     role: str,
@@ -105,6 +128,7 @@ def benchmark_full_once(
 
     payload = response.json()
     chat_response = payload.get("response") or {}
+    trace_summary, trace_id, trace_step_count = _extract_trace_fields(chat_response)
 
     return {
         "benchmark_type": str(payload.get("benchmark_type", "full_pipeline")),
@@ -118,6 +142,9 @@ def benchmark_full_once(
         "fallback_used": bool(chat_response.get("fallback_used", False)),
         "warning_message": str(chat_response.get("warning_message", "") or ""),
         "key_metrics": chat_response.get("key_metrics", {}),
+        "thinking_trace_summary": trace_summary,
+        "thinking_trace_id": trace_id,
+        "thinking_step_count": trace_step_count,
     }
 
 
@@ -143,6 +170,7 @@ def chat_once(
         )
 
     payload = response.json()
+    trace_summary, trace_id, trace_step_count = _extract_trace_fields(payload)
     return {
         "benchmark_type": "chat",
         "roundtrip_ms": roundtrip_ms,
@@ -155,6 +183,9 @@ def chat_once(
         "intent_confidence": float(payload.get("intent_confidence", 0.0)),
         "key_metrics": payload.get("key_metrics", {}),
         "sources": payload.get("sources", []),
+        "thinking_trace_summary": trace_summary,
+        "thinking_trace_id": trace_id,
+        "thinking_step_count": trace_step_count,
     }
 
 
@@ -201,7 +232,8 @@ def _p95(values: list[int]) -> int:
     if not values:
         return 0
     ordered = sorted(values)
-    index = int((len(ordered) - 1) * 0.95)
+    # Nearest-rank percentile: ceil(0.95 * N) on 1-indexed positions.
+    index = max(0, min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1))
     return ordered[index]
 
 
@@ -227,6 +259,7 @@ def main() -> int:
         print(f"repeat={repeat}")
 
         results: list[dict[str, Any]] = []
+        trace_violations = 0
         for run_index in range(1, repeat + 1):
             if args.mode == "full":
                 result = benchmark_full_once(
@@ -237,7 +270,8 @@ def main() -> int:
                 )
                 print(
                     "run={run} type={rtype} roundtrip_ms={roundtrip} server_elapsed_ms={server} "
-                    "service_latency_ms={service} route_overhead_ms={overhead} model={model} fallback={fallback}".format(
+                    "service_latency_ms={service} route_overhead_ms={overhead} model={model} fallback={fallback} "
+                    "trace_steps={trace_steps}".format(
                         run=run_index,
                         rtype=result["benchmark_type"],
                         roundtrip=result["roundtrip_ms"],
@@ -246,6 +280,7 @@ def main() -> int:
                         overhead=result["route_overhead_ms"],
                         model=result["model_used"],
                         fallback=result["fallback_used"],
+                        trace_steps=result.get("thinking_step_count", 0),
                     )
                 )
                 if result.get("warning_message"):
@@ -259,7 +294,8 @@ def main() -> int:
                 )
                 print(
                     "run={run} type={rtype} roundtrip_ms={roundtrip} latency_ms={latency} "
-                    "topic={topic} model={model} fallback={fallback} intent_confidence={intent:.2f} source_count={source_count}".format(
+                    "topic={topic} model={model} fallback={fallback} intent_confidence={intent:.2f} "
+                    "source_count={source_count} trace_steps={trace_steps}".format(
                         run=run_index,
                         rtype=result["benchmark_type"],
                         roundtrip=result["roundtrip_ms"],
@@ -269,6 +305,7 @@ def main() -> int:
                         fallback=result["fallback_used"],
                         intent=result["intent_confidence"],
                         source_count=len(result.get("sources", [])),
+                        trace_steps=result.get("thinking_step_count", 0),
                     )
                 )
                 if result.get("warning_message"):
@@ -294,6 +331,11 @@ def main() -> int:
                 )
                 if result["error"]:
                     print(f"  model_error={result['error']}")
+
+            if args.expect_thinking_trace and args.mode in {"chat", "full"}:
+                if int(result.get("thinking_step_count", 0)) <= 0:
+                    trace_violations += 1
+                    print("  trace_check=FAILED expected thinking_trace steps > 0")
 
             results.append(result)
 
@@ -335,12 +377,45 @@ def main() -> int:
             print(f"  model_generation_avg_ms={_mean(model_values)}")
             print(f"  model_generation_p95_ms={_p95(model_values)}")
 
+        if args.mode in {"chat", "full"}:
+            trace_present = sum(1 for item in results if int(item.get("thinking_step_count", 0)) > 0)
+            print(f"  thinking_trace_present={trace_present}/{len(results)}")
+            if args.expect_thinking_trace:
+                print(f"  thinking_trace_violations={trace_violations}")
+
         if args.print_answer and results:
             print("answer:")
             print(results[-1]["answer"])
         if args.print_metrics and results:
             print("key_metrics:")
             print(json.dumps(results[-1].get("key_metrics", {}), ensure_ascii=False, indent=2))
+
+        if args.output_json.strip():
+            output_path = Path(args.output_json).expanduser()
+            if not output_path.is_absolute():
+                output_path = Path.cwd() / output_path
+            payload = {
+                "base_url": base_url,
+                "mode": args.mode,
+                "repeat": repeat,
+                "results": results,
+                "summary": {
+                    "roundtrip_avg_ms": _mean(roundtrip_values),
+                    "roundtrip_p95_ms": _p95(roundtrip_values),
+                    "thinking_trace_present": (
+                        sum(1 for item in results if int(item.get("thinking_step_count", 0)) > 0)
+                        if args.mode in {"chat", "full"}
+                        else None
+                    ),
+                    "thinking_trace_violations": trace_violations if args.expect_thinking_trace else None,
+                },
+            }
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"results_json={output_path}")
+
+    if args.expect_thinking_trace and args.mode in {"chat", "full"} and trace_violations > 0:
+        return 1
 
     return 0
 

@@ -148,6 +148,225 @@ SINGLE_TURN_CASES: tuple[BilingualPromptCase, ...] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Edge-case single-turn test cases
+# Covers: mixed vi+en, multi-intent, vague/open-ended, implicit time,
+#         out-of-domain, compound "?"-separated questions, definition+data,
+#         pronoun reference, and short ambiguous phrasing.
+# ---------------------------------------------------------------------------
+EDGE_CASE_SINGLE_TURN_CASES: tuple[BilingualPromptCase, ...] = (
+    BilingualPromptCase(
+        case_id="mixed_lang_energy_top3",
+        description=(
+            "Mixed Vietnamese/English single message asking for today's MWh AND top 3 producing stations. "
+            "Bot must not ask for clarification and must return energy_performance with top_facilities list."
+        ),
+        vi_prompt="hôm nay bao nhiêu mwh rồi? top 3 tram produce most?",
+        en_prompt="how many mwh produced today? what are the top 3 producing stations?",
+        expected_topic="energy_performance",
+        parity_paths=(
+            "top_facilities[0].facility",
+            "top_facilities[0].energy_mwh",
+        ),
+        databricks_validator="energy_performance",
+    ),
+    BilingualPromptCase(
+        case_id="multi_intent_top_station_location",
+        description=(
+            "Single question with two intents: find top-energy station AND its location. "
+            "Bot must call get_energy_performance and get_facility_info, not ask for clarification."
+        ),
+        vi_prompt="trạm nào sản lượng cao nhất, và trạm đó đang ở đâu?",
+        en_prompt="which station has the highest output, and where is that station located?",
+        expected_topic="energy_performance",
+        parity_paths=(
+            "top_facilities[0].facility",
+        ),
+        databricks_validator="energy_performance",
+    ),
+    BilingualPromptCase(
+        case_id="compound_pipeline_and_forecast",
+        description=(
+            "Compound question (separated by ?) asking pipeline status AND 72h forecast. "
+            "Bot must answer both topics or at minimum not ask for clarification."
+        ),
+        vi_prompt="pipeline có lỗi gì không? và dự báo sản lượng 72 giờ tới là bao nhiêu?",
+        en_prompt="are there any pipeline errors? and what is the 72-hour energy forecast?",
+        expected_topic="pipeline_status",
+        parity_paths=(),
+        databricks_validator=None,
+    ),
+    BilingualPromptCase(
+        case_id="vague_recent_system_health",
+        description=(
+            "Vague/open-ended question with implicit 'recent' time reference. "
+            "Bot must default to system_overview and return production_output_mwh and facility_count."
+        ),
+        vi_prompt="gần đây hệ thống năng lượng mặt trời của mình như thế nào?",
+        en_prompt="how has the solar energy system been doing recently?",
+        expected_topic="system_overview",
+        parity_paths=(
+            "production_output_mwh",
+            "facility_count",
+        ),
+        databricks_validator="system_overview",
+    ),
+    BilingualPromptCase(
+        case_id="definition_plus_ranking",
+        description=(
+            "Definition + data hybrid: asks what performance ratio is AND which station has highest PR. "
+            "Bot should explain PR and return facility rankings, not just web-search."
+        ),
+        vi_prompt="performance ratio là gì và trạm nào đang có performance ratio cao nhất?",
+        en_prompt="what is performance ratio and which station currently has the highest performance ratio?",
+        expected_topic="energy_performance",
+        parity_paths=(),
+        databricks_validator=None,
+    ),
+    BilingualPromptCase(
+        case_id="out_of_domain_graceful",
+        description=(
+            "Out-of-domain question unrelated to solar energy. "
+            "Bot must respond gracefully (not hallucinate), topic must be 'general'."
+        ),
+        vi_prompt="thủ đô của Việt Nam là gì và dân số bao nhiêu?",
+        en_prompt="what is the capital of France and what is its population?",
+        expected_topic="general",
+        parity_paths=(),
+        databricks_validator=None,
+    ),
+    BilingualPromptCase(
+        case_id="implicit_this_station_context",
+        description=(
+            "Short ambiguous question relying on prior session context (but in single turn). "
+            "Without context, bot should still return facility_info with all available stations."
+        ),
+        vi_prompt="thông tin chi tiết về các trạm?",
+        en_prompt="give me details about the stations",
+        expected_topic="facility_info",
+        parity_paths=(
+            "facility_count",
+        ),
+        databricks_validator="facility_info",
+    ),
+    BilingualPromptCase(
+        case_id="weather_impact_on_production",
+        description=(
+            "Query combining weather conditions and energy performance impact analysis. "
+            "Bot should return energy_performance topic with weather-related data or context."
+        ),
+        vi_prompt="thời tiết hôm nay ảnh hưởng như thế nào đến sản lượng điện mặt trời?",
+        en_prompt="how does today's weather affect solar energy production at our facilities?",
+        expected_topic="energy_performance",
+        parity_paths=(),
+        databricks_validator=None,
+    ),
+    BilingualPromptCase(
+        case_id="ml_model_comparison_verbose",
+        description=(
+            "Detailed ML model question mixing Vietnamese and English terms: R2, delta, fallback. "
+            "Bot must return ml_model topic with current vs previous R-squared comparison."
+        ),
+        vi_prompt="mô hình dự báo hiện tại R2 là bao nhiêu, so sánh với version trước và delta là gì?",
+        en_prompt="current forecast model R2 and delta versus the previous version — is the model improving?",
+        expected_topic="ml_model",
+        parity_paths=(
+            "comparison.current_r_squared",
+        ),
+        databricks_validator="ml_model",
+    ),
+    BilingualPromptCase(
+        case_id="very_short_ambiguous_energy",
+        description=(
+            "Very short single-word or two-word query with no context. "
+            "Bot should not crash and should respond with reasonable energy data or ask clarification."
+        ),
+        vi_prompt="sản lượng?",
+        en_prompt="energy output?",
+        expected_topic="energy_performance",
+        parity_paths=(),
+        databricks_validator=None,
+    ),
+    BilingualPromptCase(
+        case_id="data_quality_with_cause",
+        description=(
+            "Data quality question asking for low-score facilities AND their root cause. "
+            "Bot must return data_quality_issues topic with low_score_facilities list."
+        ),
+        vi_prompt="trạm nào có chất lượng dữ liệu thấp và nguyên nhân có thể là gì?",
+        en_prompt="which facilities have low data quality scores and what could be causing it?",
+        expected_topic="data_quality_issues",
+        parity_paths=(
+            "low_score_facilities",
+        ),
+        databricks_validator="data_quality_issues",
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Edge-case long conversation: pronoun resolution + topic switches + summary
+# ---------------------------------------------------------------------------
+EDGE_CASE_CONVERSATION_CASE = LongConversationCase(
+    case_id="edge_context_switches_and_pronouns",
+    description=(
+        "Stress-tests pronoun resolution, mid-conversation topic pivots, "
+        "implicit 'that station' references, and a cross-topic summary at the end."
+    ),
+    turns=(
+        ConversationTurnCase(
+            vi_prompt="Trạm nào có công suất lớn nhất trong hệ thống hiện tại?",
+            en_prompt="Which station has the largest capacity in the current system?",
+            expected_topic="facility_info",
+            parity_paths=("facility_count",),
+            databricks_validator="facility_info",
+        ),
+        ConversationTurnCase(
+            vi_prompt="Trạm đó đang nằm ở đâu, múi giờ là gì?",
+            en_prompt="Where is that station located and what is its timezone?",
+            expected_topic="facility_info",
+            parity_paths=("facility_count",),
+            requires_anchor_station=True,
+        ),
+        ConversationTurnCase(
+            vi_prompt="Bây giờ cho tôi model dự báo hiện tại và chỉ số R2 của nó.",
+            en_prompt="Now show me the current forecast model and its R-squared score.",
+            expected_topic="ml_model",
+            parity_paths=("comparison.current_r_squared",),
+            databricks_validator="ml_model",
+        ),
+        ConversationTurnCase(
+            vi_prompt="R2 của model hiện tại thấp hay cao so với bình thường?",
+            en_prompt="Is the current model's R-squared considered low or high compared to normal?",
+            expected_topic="ml_model",
+            parity_paths=(),
+            databricks_validator=None,
+        ),
+        ConversationTurnCase(
+            vi_prompt="Có trạm nào chất lượng dữ liệu thấp không? Nếu có thì trạm nào?",
+            en_prompt="Are there any facilities with low data quality? If so, which ones?",
+            expected_topic="data_quality_issues",
+            parity_paths=("low_score_facilities",),
+            databricks_validator="data_quality_issues",
+        ),
+        ConversationTurnCase(
+            vi_prompt="pipeline ETL có đang chạy bình thường không, có cảnh báo gì không?",
+            en_prompt="is the ETL pipeline running normally? any warning flags?",
+            expected_topic="pipeline_status",
+            parity_paths=(),
+            databricks_validator=None,
+        ),
+        ConversationTurnCase(
+            vi_prompt="Tóm tắt lại: số trạm, model hiện tại và R2 của nó, và pipeline status.",
+            en_prompt="Summarise: facility count, current model with its R2, and pipeline status.",
+            expected_topic=None,
+            parity_paths=(),
+            databricks_validator=None,
+        ),
+    ),
+)
+
+
 LONG_CONVERSATION_CASE = LongConversationCase(
     case_id="long_context_bilingual",
     description=(
@@ -247,6 +466,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip long multi-turn context scenario.",
     )
     parser.add_argument(
+        "--skip-edge-cases",
+        action="store_true",
+        help="Skip edge-case single-turn and edge-case conversation scenarios.",
+    )
+    parser.add_argument(
         "--strict-exit",
         action="store_true",
         help="Exit with non-zero code when any assertion fails.",
@@ -255,6 +479,11 @@ def parse_args() -> argparse.Namespace:
         "--print-answer-preview",
         action="store_true",
         help="Print assistant answer previews while running.",
+    )
+    parser.add_argument(
+        "--allow-missing-thinking-trace",
+        action="store_true",
+        help="Do not fail assertions when planner thinking_trace is missing in responses.",
     )
     return parser.parse_args()
 
@@ -428,6 +657,60 @@ def query_chat(
     payload = response.json()
     payload["_roundtrip_ms"] = roundtrip_ms
     return payload
+
+
+def _thinking_trace_info(payload: dict[str, Any]) -> tuple[str, int, str]:
+    trace = payload.get("thinking_trace")
+    if not isinstance(trace, dict):
+        return "", 0, ""
+
+    trace_id = str(trace.get("trace_id", "") or "").strip()
+    summary = str(trace.get("summary", "") or "").strip()
+    raw_steps = trace.get("steps")
+    if isinstance(raw_steps, list):
+        step_count = len(raw_steps)
+    else:
+        step_count = 0
+    return trace_id, step_count, summary
+
+
+def _assert_thinking_trace(
+    payload: dict[str, Any],
+    required: bool,
+) -> list[AssertionResult]:
+    trace = payload.get("thinking_trace")
+    if not isinstance(trace, dict):
+        if required:
+            return [
+                _assertion(
+                    "exists",
+                    False,
+                    "thinking_trace is missing from response",
+                )
+            ]
+        return [
+            _assertion(
+                "exists",
+                True,
+                "thinking_trace missing but allowed by --allow-missing-thinking-trace",
+            )
+        ]
+
+    trace_id, step_count, summary = _thinking_trace_info(payload)
+    assertions = [
+        _assertion("exists", True, "thinking_trace payload present"),
+        _assertion("step_count", step_count > 0, f"step_count={step_count}"),
+        _assertion(
+            "summary_mentions_planner",
+            "planner-first" in _normalize_string(summary),
+            f"summary={summary!r}",
+        ),
+    ]
+    if required:
+        assertions.append(
+            _assertion("trace_id_present", bool(trace_id), f"trace_id={trace_id!r}"),
+        )
+    return assertions
 
 
 class DatabricksVerifier:
@@ -888,6 +1171,7 @@ def run_single_turn_case(
     case: BilingualPromptCase,
     verifier: DatabricksVerifier,
     print_answer_preview: bool,
+    require_thinking_trace: bool,
 ) -> dict[str, Any]:
     case_assertions: list[AssertionResult] = []
     vi_session = create_session(client, role, f"suite-{case.case_id}-vi")
@@ -895,6 +1179,9 @@ def run_single_turn_case(
 
     vi_response = query_chat(client, role, vi_session, case.vi_prompt)
     en_response = query_chat(client, role, en_session, case.en_prompt)
+
+    vi_trace_id, vi_step_count, vi_trace_summary = _thinking_trace_info(vi_response)
+    en_trace_id, en_step_count, en_trace_summary = _thinking_trace_info(en_response)
 
     if print_answer_preview:
         print(f"  vi_answer={_short(vi_response.get('answer', ''), 180)}")
@@ -913,6 +1200,18 @@ def run_single_turn_case(
     vi_metrics = vi_response.get("key_metrics") if isinstance(vi_response.get("key_metrics"), dict) else {}
     en_metrics = en_response.get("key_metrics") if isinstance(en_response.get("key_metrics"), dict) else {}
     case_assertions.extend(compare_parity_paths(vi_metrics, en_metrics, case.parity_paths))
+    case_assertions.extend(
+        _prefix_assertions(
+            "vi.trace",
+            _assert_thinking_trace(vi_response, required=require_thinking_trace),
+        )
+    )
+    case_assertions.extend(
+        _prefix_assertions(
+            "en.trace",
+            _assert_thinking_trace(en_response, required=require_thinking_trace),
+        )
+    )
 
     case_assertions.extend(
         _prefix_assertions(
@@ -940,8 +1239,12 @@ def run_single_turn_case(
             "topic": vi_response.get("topic"),
             "latency_ms": vi_response.get("latency_ms"),
             "roundtrip_ms": vi_response.get("_roundtrip_ms"),
+            "model_used": str(vi_response.get("model_used", "") or ""),
             "fallback_used": bool(vi_response.get("fallback_used", False)),
             "warning_message": str(vi_response.get("warning_message", "") or ""),
+            "thinking_trace_id": vi_trace_id,
+            "thinking_step_count": vi_step_count,
+            "thinking_summary": vi_trace_summary,
             "answer_preview": _short(vi_response.get("answer", ""), 320),
             "key_metrics": vi_metrics,
         },
@@ -950,8 +1253,12 @@ def run_single_turn_case(
             "topic": en_response.get("topic"),
             "latency_ms": en_response.get("latency_ms"),
             "roundtrip_ms": en_response.get("_roundtrip_ms"),
+            "model_used": str(en_response.get("model_used", "") or ""),
             "fallback_used": bool(en_response.get("fallback_used", False)),
             "warning_message": str(en_response.get("warning_message", "") or ""),
+            "thinking_trace_id": en_trace_id,
+            "thinking_step_count": en_step_count,
+            "thinking_summary": en_trace_summary,
             "answer_preview": _short(en_response.get("answer", ""), 320),
             "key_metrics": en_metrics,
         },
@@ -964,6 +1271,7 @@ def run_long_conversation_case(
     case: LongConversationCase,
     verifier: DatabricksVerifier,
     print_answer_preview: bool,
+    require_thinking_trace: bool,
 ) -> dict[str, Any]:
     case_assertions: list[AssertionResult] = []
     turn_results: list[dict[str, Any]] = []
@@ -977,6 +1285,9 @@ def run_long_conversation_case(
     for index, turn in enumerate(case.turns, start=1):
         vi_response = query_chat(client, role, vi_session, turn.vi_prompt)
         en_response = query_chat(client, role, en_session, turn.en_prompt)
+
+        vi_trace_id, vi_step_count, vi_trace_summary = _thinking_trace_info(vi_response)
+        en_trace_id, en_step_count, en_trace_summary = _thinking_trace_info(en_response)
 
         vi_metrics = vi_response.get("key_metrics") if isinstance(vi_response.get("key_metrics"), dict) else {}
         en_metrics = en_response.get("key_metrics") if isinstance(en_response.get("key_metrics"), dict) else {}
@@ -1000,6 +1311,18 @@ def run_long_conversation_case(
             _prefix_assertions(
                 f"turn{index}",
                 compare_parity_paths(vi_metrics, en_metrics, turn.parity_paths),
+            )
+        )
+        case_assertions.extend(
+            _prefix_assertions(
+                f"turn{index}.vi.trace",
+                _assert_thinking_trace(vi_response, required=require_thinking_trace),
+            )
+        )
+        case_assertions.extend(
+            _prefix_assertions(
+                f"turn{index}.en.trace",
+                _assert_thinking_trace(en_response, required=require_thinking_trace),
             )
         )
 
@@ -1066,8 +1389,12 @@ def run_long_conversation_case(
                     "topic": vi_response.get("topic"),
                     "latency_ms": vi_response.get("latency_ms"),
                     "roundtrip_ms": vi_response.get("_roundtrip_ms"),
+                    "model_used": str(vi_response.get("model_used", "") or ""),
                     "warning_message": str(vi_response.get("warning_message", "") or ""),
                     "fallback_used": bool(vi_response.get("fallback_used", False)),
+                    "thinking_trace_id": vi_trace_id,
+                    "thinking_step_count": vi_step_count,
+                    "thinking_summary": vi_trace_summary,
                     "answer_preview": _short(vi_response.get("answer", ""), 240),
                     "key_metrics": vi_metrics,
                 },
@@ -1076,8 +1403,12 @@ def run_long_conversation_case(
                     "topic": en_response.get("topic"),
                     "latency_ms": en_response.get("latency_ms"),
                     "roundtrip_ms": en_response.get("_roundtrip_ms"),
+                    "model_used": str(en_response.get("model_used", "") or ""),
                     "warning_message": str(en_response.get("warning_message", "") or ""),
                     "fallback_used": bool(en_response.get("fallback_used", False)),
+                    "thinking_trace_id": en_trace_id,
+                    "thinking_step_count": en_step_count,
+                    "thinking_summary": en_trace_summary,
                     "answer_preview": _short(en_response.get("answer", ""), 240),
                     "key_metrics": en_metrics,
                 },
@@ -1118,6 +1449,7 @@ def build_markdown_report(
     lines.append(f"- Generated UTC: {run_info.get('generated_utc', '')}")
     lines.append(f"- Base URL: {run_info.get('base_url', '')}")
     lines.append(f"- Databricks validation enabled: {run_info.get('databricks_enabled', False)}")
+    lines.append(f"- Require thinking trace: {run_info.get('require_thinking_trace', True)}")
     lines.append(f"- Single-turn cases: {run_info.get('single_turn_cases', 0)}")
     lines.append(f"- Long conversation cases: {run_info.get('long_conversation_cases', 0)}")
     lines.append("")
@@ -1170,11 +1502,18 @@ def build_markdown_report(
             lines.append(f"- VI prompt: {vi.get('prompt', '')}")
             lines.append(f"- EN prompt: {en.get('prompt', '')}")
             lines.append(f"- VI topic: {vi.get('topic', '')}; EN topic: {en.get('topic', '')}")
+            lines.append(f"- VI model: {vi.get('model_used', '')}; EN model: {en.get('model_used', '')}")
             lines.append(
                 f"- VI latency/roundtrip: {vi.get('latency_ms', -1)}/{vi.get('roundtrip_ms', -1)} ms"
             )
             lines.append(
                 f"- EN latency/roundtrip: {en.get('latency_ms', -1)}/{en.get('roundtrip_ms', -1)} ms"
+            )
+            lines.append(
+                f"- VI trace: id={vi.get('thinking_trace_id', '') or 'n/a'}, steps={vi.get('thinking_step_count', 0)}"
+            )
+            lines.append(
+                f"- EN trace: id={en.get('thinking_trace_id', '') or 'n/a'}, steps={en.get('thinking_step_count', 0)}"
             )
             lines.append(f"- VI warning: {vi.get('warning_message', '') or 'none'}")
             lines.append(f"- EN warning: {en.get('warning_message', '') or 'none'}")
@@ -1194,6 +1533,14 @@ def build_markdown_report(
                 lines.append(
                     f"  - Turn {turn_index}: VI topic={vi.get('topic', '')}, EN topic={en.get('topic', '')}, "
                     f"VI latency={vi.get('latency_ms', -1)} ms, EN latency={en.get('latency_ms', -1)} ms"
+                )
+                lines.append(
+                    f"    VI model/trace: model={vi.get('model_used', '')}, "
+                    f"trace_id={vi.get('thinking_trace_id', '') or 'n/a'}, steps={vi.get('thinking_step_count', 0)}"
+                )
+                lines.append(
+                    f"    EN model/trace: model={en.get('model_used', '')}, "
+                    f"trace_id={en.get('thinking_trace_id', '') or 'n/a'}, steps={en.get('thinking_step_count', 0)}"
                 )
                 lines.append(f"    VI prompt: {vi.get('prompt', '')}")
                 lines.append(f"    EN prompt: {en.get('prompt', '')}")
@@ -1258,9 +1605,15 @@ def main() -> int:
     if args.max_single_cases and args.max_single_cases > 0:
         single_cases = single_cases[: args.max_single_cases]
 
+    edge_single_cases: list[BilingualPromptCase] = []
+    if not args.skip_edge_cases:
+        edge_single_cases = list(EDGE_CASE_SINGLE_TURN_CASES)
+
     long_cases: list[LongConversationCase] = []
     if not args.skip_long_conversation:
         long_cases.append(LONG_CONVERSATION_CASE)
+    if not args.skip_edge_cases and not args.skip_long_conversation:
+        long_cases.append(EDGE_CASE_CONVERSATION_CASE)
 
     verifier = DatabricksVerifier(disabled=bool(args.skip_databricks))
 
@@ -1280,6 +1633,7 @@ def main() -> int:
             print(f"[INFO] base_url={base_url}")
             print(f"[INFO] databricks_validation={'off' if args.skip_databricks else 'on'}")
             print(f"[INFO] single_turn_cases={len(single_cases)}")
+            print(f"[INFO] edge_single_cases={len(edge_single_cases)}")
             print(f"[INFO] long_conversation_cases={len(long_cases)}")
 
             for index, case in enumerate(single_cases, start=1):
@@ -1291,6 +1645,32 @@ def main() -> int:
                         case=case,
                         verifier=verifier,
                         print_answer_preview=bool(args.print_answer_preview),
+                        require_thinking_trace=not bool(args.allow_missing_thinking_trace),
+                    )
+                except Exception as exc:
+                    case_result = {
+                        "case_id": case.case_id,
+                        "case_type": "single_turn",
+                        "description": case.description,
+                        "passed": False,
+                        "assertions": [
+                            _assertion("runtime", False, str(exc)).as_dict(),
+                        ],
+                    }
+                all_case_results.append(case_result)
+                passed, total = _case_assertion_counts(case_result)
+                print(f"[DONE] case_id={case.case_id} passed={case_result.get('passed')} assertions={passed}/{total}")
+
+            for index, case in enumerate(edge_single_cases, start=1):
+                print(f"[RUN] edge_single_turn {index}/{len(edge_single_cases)} case_id={case.case_id}")
+                try:
+                    case_result = run_single_turn_case(
+                        client=client,
+                        role=args.role,
+                        case=case,
+                        verifier=verifier,
+                        print_answer_preview=bool(args.print_answer_preview),
+                        require_thinking_trace=not bool(args.allow_missing_thinking_trace),
                     )
                 except Exception as exc:
                     case_result = {
@@ -1315,6 +1695,7 @@ def main() -> int:
                         case=case,
                         verifier=verifier,
                         print_answer_preview=bool(args.print_answer_preview),
+                        require_thinking_trace=not bool(args.allow_missing_thinking_trace),
                     )
                 except Exception as exc:
                     case_result = {
@@ -1352,7 +1733,9 @@ def main() -> int:
             "generated_utc": _utc_now_iso(),
             "base_url": base_url,
             "databricks_enabled": not args.skip_databricks,
+            "require_thinking_trace": not args.allow_missing_thinking_trace,
             "single_turn_cases": len(single_cases),
+            "edge_single_turn_cases": len(edge_single_cases),
             "long_conversation_cases": len(long_cases),
             "role": args.role,
         },

@@ -1,19 +1,26 @@
 """Solar AI Chat service — orchestration layer.
 
-Coordinates intent detection, RBAC, data retrieval, LLM generation,
-and response finalization. NLP parsing is in nlp_parser.py and
-prompt/summary building is in prompt_builder.py.
+Coordinates agentic tool-calling, RBAC, data retrieval, LLM response generation,
+and response finalization.  NLP parsing is in nlp_parser.py; prompt and
+architecture context is in prompt_builder.py.
+
+Architecture: Native LLM tool-calling (ReAct pattern)
+------------------------------------------------------
+1. build_agentic_messages() injects the full Lakehouse architecture context.
+2. The LLM (generate_with_tools) decides which tools to call.
+3. Each tool response is appended to the conversation thread.
+4. The LLM synthesises the final answer after collecting all tool results.
 """
 from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
 from unicodedata import normalize
 
+from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.schemas.solar_ai_chat import (
     ChatMessage,
@@ -31,27 +38,33 @@ from app.services.solar_ai_chat.llm_client import (
     ModelUnavailableError,
     ToolCallNotSupportedError,
 )
-from app.services.solar_ai_chat.intent_service import IntentDetectionResult, VietnameseIntentService
+from app.services.solar_ai_chat.intent_service import (
+    VietnameseIntentService,
+    normalize_vietnamese_text,
+)
 from app.services.solar_ai_chat.nlp_parser import (
     ExtremeMetricQuery,
     extract_extreme_metric_query,
     extract_query_date,
-    resolve_weather_metric,
-    topic_for_extreme_metric,
+    extract_timeframe,
+    expand_facility_codes_in_message,
 )
-from app.services.solar_ai_chat.permissions import ROLE_TOPIC_PERMISSIONS
+from app.services.solar_ai_chat.permissions import ROLE_TOPIC_PERMISSIONS, ROLE_TOOL_PERMISSIONS
 from app.services.solar_ai_chat.prompt_builder import (
-    build_fallback_summary,
-    build_prompt,
-    build_tool_messages,
+    build_agentic_messages,
+    build_data_only_summary,
+    build_synthesis_prompt,
+    build_insufficient_data_response,
     format_source_text,
 )
+from app.services.solar_ai_chat.query_rewriter import QueryRewriter
 from app.services.solar_ai_chat.tool_executor import ToolExecutor
+from app.services.solar_ai_chat.answer_verifier import AnswerVerifier
 
 if TYPE_CHECKING:
     from app.repositories.solar_ai_chat.vector_repository import VectorRepository
     from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
-    from app.services.solar_ai_chat.web_search_client import WebSearchClient, WebSearchResult
+    from app.services.solar_ai_chat.web_search_client import WebSearchClient
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -63,81 +76,240 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 logger.propagate = False
 
-# Intent confidence levels for response metadata
 TOOL_PATH_CONFIDENCE = 0.95
-TEXT_ONLY_CONFIDENCE = 0.85
-REGEX_EXTREME_CONFIDENCE = 0.92
-MAX_TOOL_STEPS = 2
-LLM_PLANNER_MIN_CONFIDENCE = 0.55
-LLM_PLANNER_HISTORY_LIMIT = 4
-WEBSEARCH_DEFINITION_MARKERS = (
-    "la gi",
-    "nghia la gi",
-    "dinh nghia",
-    "giai thich",
-    "what is",
-    "define",
-    "definition",
-    "meaning",
+MAX_TOOL_STEPS = 6  # Increased from 2 to allow multi-tool agentic queries
+
+# Keywords that signal the user explicitly wants a live web search.
+_WEB_SEARCH_KEYWORDS = (
+    "internet", "web", "google", "tìm kiếm", "search", "tra cứu",
+    "tìm trên", "online",
 )
-WEBSEARCH_EXTERNAL_REQUEST_MARKERS = (
-    "tren internet",
-    "internet",
-    "web",
-    "online",
-    "google",
-    "search",
-    "tra cuu",
-    "tham khao ben ngoai",
-    "external source",
+
+# Prefixes to strip when extracting the actual search query (longest first).
+_WEB_SEARCH_STRIP_PREFIXES: tuple[str, ...] = (
+    "search internet", "tìm trên internet", "tim tren internet",
+    "tìm kiếm trên internet", "tim kiem tren internet",
+    "tìm kiếm trên web", "tim kiem tren web",
+    "search web", "tìm trên web", "tim tren web",
+    "google search", "tra cứu trên web", "tìm online", "tim online",
+    "tìm kiếm", "tim kiem", "google", "tra cứu", "search",
 )
-WEBSEARCH_DATA_REQUEST_MARKERS = (
-    "top",
-    "xep hang",
-    "rank",
-    "cao nhat",
-    "thap nhat",
-    "bao nhieu",
-    "how much",
-    "bao cao",
-    "report",
+
+# Vietnamese filler words to strip from the front of the extracted query.
+# Ordered longest-first so compound forms match before their fragments.
+_QUERY_FILLER_PREFIXES: tuple[str, ...] = (
+    "để cho tôi", "de cho toi", "để tôi xem", "de toi xem",
+    "để tôi", "de toi", "xem về", "xem",
+    "về", "cho tôi", "cho toi", "cho mình", "cho minh",
+    "để", "de",
 )
-WEBSEARCH_SYSTEM_KEYWORDS = (
-    "solar",
-    "pv",
-    "photovoltaic",
-    "facility",
-    "station",
-    "tram",
-    "nha may",
-    "capacity",
-    "cong suat",
-    "timezone",
-    "location",
-    "nang luong",
-    "energy",
-    "performance ratio",
-    "capacity factor",
-    "forecast",
-    "inverter",
-    "irradiance",
-    "aqi",
-    "weather",
-    "lakehouse",
+
+_PROMPT_INJECTION_MARKERS: tuple[str, ...] = (
+    "ignore previous", "ignore all", "bo qua huong dan", "bo qua chi dan",
+    "reveal system", "system prompt", "developer prompt", "secret key",
+    "api key", "token", "jailbreak", "override instructions",
 )
-WEBSEARCH_TRUSTED_DOMAIN_HINTS = (
-    "nrel.gov",
-    "energy.gov",
-    "iea.org",
-    "wikipedia.org",
-    "sandia.gov",
-    "pvpmc.sandia.gov",
-    "irena.org",
-)
+
+
+def _needs_web_search(message: str) -> bool:
+    """Return True if the user's message explicitly requests a web search."""
+    lowered = message.lower()
+    return any(kw in lowered for kw in _WEB_SEARCH_KEYWORDS)
+
+
+def _has_any_marker(message: str, markers: tuple[str, ...]) -> bool:
+    normalized = normalize_vietnamese_text(message)
+    return any(normalize_vietnamese_text(m) in normalized for m in markers)
+
+
+def _contains_scope_refusal_signal(text: str) -> bool:
+    normalized = normalize_vietnamese_text(text)
+    markers = (
+        "toi chi",
+        "i can only",
+        "solar",
+        "solar energy",
+        "nang luong mat troi",
+        "outside",
+    )
+    return any(m in normalized for m in markers)
+
+
+def _is_prompt_injection_request(message: str) -> bool:
+    normalized = normalize_vietnamese_text(message)
+    token_groups: tuple[tuple[str, ...], ...] = (
+        ("ignore", "previous"),
+        ("ignore", "instructions"),
+        ("bo qua", "huong dan"),
+        ("bo qua", "chi dan"),
+        ("reveal", "system"),
+        ("system", "prompt"),
+        ("developer", "prompt"),
+        ("authentication", "token"),
+    )
+    if any(all(tok in normalized for tok in group) for group in token_groups):
+        return True
+    return _has_any_marker(message, _PROMPT_INJECTION_MARKERS)
+
+
+def _build_scope_refusal(language: str) -> str:
+    if language == "vi":
+        return (
+            "Tôi chỉ hỗ trợ các câu hỏi liên quan đến hệ thống năng lượng mặt trời "
+            "(solar energy). Vui lòng đặt câu hỏi về dữ liệu, dự báo, hoặc hiệu suất "
+            "năng lượng mặt trời."
+        )
+    return (
+        "I can only assist with questions related to solar energy systems and "
+        "the PV Lakehouse platform. Please ask about solar energy data or "
+        "solar system performance."
+    )
+
+
+def _last_assistant_topic(history: list[ChatMessage]) -> ChatTopic | None:
+    for msg in reversed(history):
+        if str(getattr(msg, "sender", "")).lower() == "assistant" and getattr(msg, "topic", None):
+            return msg.topic
+    return None
+
+
+def _is_capacity_or_station_query(message: str) -> bool:
+    norm = normalize_vietnamese_text(message)
+    markers = (
+        "cong suat lap dat",
+        "installed capacity",
+        "largest capacity",
+        "largest installed",
+        "capacity of the station",
+        "bao nhieu tram",
+        "so tram",
+        "tong so tram",
+        "how many stations",
+        "station count",
+        "list all stations",
+        "liet ke",
+        "mui gio cua tram do",
+        "timezone of that station",
+        "we just discussed",
+        "luc dau",
+        "nhac lai chinh xac cong suat",
+        "vua noi den",
+    )
+    return any(marker in norm for marker in markers)
+
+
+def _is_implicit_followup(message: str) -> bool:
+    norm = normalize_vietnamese_text(message)
+    markers = (
+        "chi so do",
+        "chi so do tinh theo",
+        "that figure",
+        "that metric",
+        "that number",
+        "cai do",
+        "thong so do",
+        "chi so o",
+        "chi so o tinh theo",
+    )
+    return any(marker in norm for marker in markers)
+
+
+def _is_cross_topic_summary_query(message: str) -> bool:
+    norm = normalize_vietnamese_text(message)
+    markers = ("tom tat", "tom tat lai", "summarise", "summarize", "summary")
+    return any(marker in norm for marker in markers)
+
+
+def _extract_search_query(
+    message: str,
+    history: "list | None",
+) -> str:
+    """Extract a focused search query from a web-search request.
+
+    Strips trigger prefixes and Vietnamese filler words, then enriches
+    short/vague queries with context from recent history.  The enrichment
+    scans both user and assistant turns, skipping trivial header lines
+    (e.g. "Definitions:") to find actionable topic text.
+    """
+    query = message.strip()
+    lower = query.lower()
+
+    # Remove leading web-search trigger phrase (longest match first)
+    for prefix in _WEB_SEARCH_STRIP_PREFIXES:
+        if lower.startswith(prefix):
+            query = query[len(prefix):].lstrip(" ,;:").strip()
+            lower = query.lower()
+            break
+
+    # Remove leading filler words (longest compound forms first)
+    for filler in _QUERY_FILLER_PREFIXES:
+        if lower.startswith(filler + " ") or lower == filler:
+            query = query[len(filler):].lstrip(" ,;:").strip()
+            lower = query.lower()
+            break
+
+    # Enrich short/vague queries with topic context from recent history.
+    # Scans the last 6 messages (both roles) for the first non-trivial
+    # line (>= 20 chars) — this skips short headers like "Definitions:"
+    # and picks up meaningful topic text like "Performance Ratio (PR) la..."
+    if len(query) < 50 and history:
+        for msg in reversed(history[-6:]):
+            content = (getattr(msg, "content", "") or "")
+            for line in content.strip().split("\n"):
+                cleaned = line.strip().lstrip("#*-•$`> ").strip()
+                if len(cleaned) >= 20:
+                    query = f"{query} {cleaned[:120]}"
+                    break
+            else:
+                continue
+            break
+
+    return query.strip() or message.strip()
+
+
+def _extract_top_facility_names(metrics: dict[str, Any], top_n: int = 2) -> list[str]:
+    """Return top N facility names by capacity from pre-fetched get_facility_info data.
+
+    Only uses the ``facilities`` key (from get_facility_info) — not
+    ``top_facilities`` (from get_energy_performance) — to avoid replacing
+    unrelated search queries (e.g. "how to calculate PR") with facility names.
+    """
+    facilities = metrics.get("facilities", [])
+    if not isinstance(facilities, list) or not facilities:
+        return []
+    try:
+        sorted_f = sorted(
+            [f for f in facilities if isinstance(f, dict)],
+            key=lambda x: float(x.get("capacity_mw") or x.get("total_capacity_mw") or 0),
+            reverse=True,
+        )
+        names = [
+            f.get("facility_name") or f.get("name") or ""
+            for f in sorted_f[:top_n]
+        ]
+        return [n for n in names if n]
+    except Exception:
+        return []
+
+
+# Primary tool to pre-execute when intent is clear and the LLM does not call tools
+_TOPIC_TO_PRIMARY_TOOL: dict[ChatTopic, str] = {
+    ChatTopic.SYSTEM_OVERVIEW: "get_system_overview",
+    ChatTopic.ENERGY_PERFORMANCE: "get_energy_performance",
+    ChatTopic.ML_MODEL: "get_ml_model_info",
+    ChatTopic.PIPELINE_STATUS: "get_pipeline_status",
+    ChatTopic.FORECAST_72H: "get_forecast_72h",
+    ChatTopic.DATA_QUALITY_ISSUES: "get_data_quality_issues",
+    ChatTopic.FACILITY_INFO: "get_facility_info",
+}
 
 
 class SolarAIChatService:
-    """Orchestrates intent routing, RBAC, data retrieval, and LLM response."""
+    """Solar AI Chat — agentic tool-calling architecture.
+
+    The LLM receives the full Lakehouse architecture context and reasons
+    about which tools to call.  Python contains no query-routing heuristics.
+    """
 
     def __init__(
         self,
@@ -148,6 +320,16 @@ class SolarAIChatService:
         vector_repo: "VectorRepository | None" = None,
         embedding_client: "GeminiEmbeddingClient | None" = None,
         web_search_client: "WebSearchClient | None" = None,
+        *,
+        planner_enabled: bool = True,           # kept for route-compat, ignored
+        orchestrator_enabled: bool = True,       # kept for route-compat, ignored
+        verifier_enabled: bool = True,
+        hybrid_retrieval_enabled: bool = True,   # kept for route-compat, ignored
+        max_tool_steps: int = MAX_TOOL_STEPS,
+        legacy_router_enabled: bool = False,     # kept for route-compat, ignored
+        planner_max_output_tokens: int | None = None,    # ignored
+        synthesis_max_output_tokens: int | None = None,
+        verifier_max_output_tokens: int | None = None,
     ) -> None:
         self._repository = repository
         self._intent_service = intent_service
@@ -159,9 +341,19 @@ class SolarAIChatService:
             embedding_client=embedding_client,
         )
         self._web_search_client = web_search_client
-        # Learns at runtime whether the current model stack can reliably call tools.
-        # Once disabled, requests go straight to deterministic data path for lower latency.
-        self._tool_path_supported: bool | None = None
+        self._verifier_enabled = verifier_enabled
+        self._max_tool_steps = max(1, max_tool_steps)
+        self._synthesis_max_output_tokens = synthesis_max_output_tokens
+        self._query_rewriter = QueryRewriter()
+        self._answer_verifier = (
+            AnswerVerifier(model_router, max_output_tokens=verifier_max_output_tokens)
+            if verifier_enabled and model_router is not None
+            else AnswerVerifier(None)
+        )
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def handle_query(self, request: SolarChatRequest) -> SolarChatResponse:
         started = time.perf_counter()
@@ -179,703 +371,695 @@ class SolarAIChatService:
             trace_id,
             len(history_messages),
         )
-
-        if self._model_router is not None and self._tool_path_supported is not False:
-            try:
-                return self._handle_with_tools(request, started, history_messages, trace_id)
-            except ToolCallNotSupportedError as tool_error:
-                self._tool_path_supported = False
-                logger.warning(
-                    "solar_chat_tool_path_tooling_unsupported trace_id=%s error=%s, falling back to regex intent",
-                    trace_id,
-                    tool_error,
-                )
-                return self._handle_with_regex_fallback(
-                    request,
-                    started,
-                    history_messages,
-                    trace_id=trace_id,
-                    skip_model_generation=True,
-                    allow_llm_planner=True,
-                    warning_message=(
-                        "Current model does not support reliable tool-calling. "
-                        "Returned a deterministic data-backed summary."
-                    ),
-                )
-            except ModelUnavailableError as model_error:
-                logger.warning(
-                    "solar_chat_tool_path_unavailable trace_id=%s error=%s, falling back to regex intent",
-                    trace_id,
-                    model_error,
-                )
-                return self._handle_with_regex_fallback(
-                    request,
-                    started,
-                    history_messages,
-                    trace_id=trace_id,
-                    skip_model_generation=True,
-                    warning_message=(
-                        "LLM service is temporarily unavailable (429/503). "
-                        "Returned a data-backed summary."
-                    ),
-                )
-            except Exception as tool_err:
-                logger.exception(
-                    "solar_chat_tool_path_failed trace_id=%s error_type=%s error=%s, falling back to regex intent",
-                    trace_id,
-                    type(tool_err).__name__,
-                    tool_err,
-                )
-
-        if self._model_router is not None and self._tool_path_supported is False:
-            logger.info("solar_chat_tool_path_bypassed trace_id=%s reason=unsupported_cached", trace_id)
-            try:
-                cached_extreme = extract_extreme_metric_query(request.message)
-                if cached_extreme is not None:
-                    cached_topic = topic_for_extreme_metric(cached_extreme.metric_name)
-                else:
-                    cached_topic = self._intent_service.detect_intent(request.message).topic
-            except Exception:
-                cached_topic = ChatTopic.GENERAL
-
-            skip_model_generation = cached_topic is not ChatTopic.GENERAL
-            logger.info(
-                "solar_chat_trace_cached_route trace_id=%s topic=%s skip_model_generation=%s",
+        try:
+            return self._handle_with_agentic_loop(request, started, history_messages, trace_id)
+        except DatabricksDataUnavailableError:
+            raise
+        except Exception as err:
+            logger.exception(
+                "solar_chat_agentic_path_failed trace_id=%s error=%s",
                 trace_id,
-                cached_topic.value,
-                skip_model_generation,
+                err,
             )
-            return self._handle_with_regex_fallback(
+            language = self._query_rewriter.rewrite(request.message).language
+            return self._finalize_response(
                 request=request,
+                answer=build_insufficient_data_response(language),
+                topic=ChatTopic.GENERAL,
+                metrics={},
+                sources=[],
+                model_used="agentic-error",
+                fallback_used=True,
                 started=started,
-                history_messages=history_messages,
                 trace_id=trace_id,
-                skip_model_generation=skip_model_generation,
-                allow_llm_planner=skip_model_generation,
-                warning_message=(
-                    "Tool-calling is unavailable for current model stack. "
-                    "Returned deterministic data-backed summary."
-                ) if skip_model_generation else None,
+                intent_confidence=0.0,
+                warning_message="Agentic loop failed unexpectedly.",
+                thinking_trace=ThinkingTrace(
+                    summary="Agentic loop failed. Returned unavailability notice.",
+                    steps=[ThinkingStep(step="Loop failure", detail=str(err), status="warning")],
+                    trace_id=trace_id,
+                ),
             )
 
-        return self._handle_with_regex_fallback(
-            request,
-            started,
-            history_messages,
-            trace_id=trace_id,
-        )
+    # ------------------------------------------------------------------
+    # Agentic tool-calling loop
+    # ------------------------------------------------------------------
 
-    def _handle_with_tools(
+    def _handle_with_agentic_loop(
         self,
         request: SolarChatRequest,
         started: float,
         history_messages: list[ChatMessage],
         trace_id: str,
     ) -> SolarChatResponse:
-        messages = build_tool_messages(
-            request_message=request.message,
-            role_value=request.role.value,
-            history=history_messages,
-        )
-        
+        """Native LLM tool-calling loop (ReAct pattern).
+
+        The LLM:
+         * Receives the full Lakehouse architecture context
+         * Decides which tools to call and in what sequence
+         * Synthesises the final answer after collecting all tool results
+        """
+        # Bug #5: Expand facility ID codes (e.g. WRSF1 → "White Rock Solar Farm")
+        # BEFORE language detection and intent classification so the LLM and
+        # intent service receive meaningful station names, not opaque codes.
+        expanded_message = expand_facility_codes_in_message(request.message)
+        if expanded_message != request.message:
+            logger.info(
+                "solar_chat_facility_code_expand trace_id=%s original=%r expanded=%r",
+                trace_id,
+                request.message,
+                expanded_message,
+            )
+            request = request.model_copy(update={"message": expanded_message})
+
+        language = self._query_rewriter.rewrite(request.message).language
+
+        # No LLM -> cannot do agentic reasoning
+        if self._model_router is None:
+            return self._finalize_response(
+                request=request,
+                answer=build_insufficient_data_response(language),
+                topic=ChatTopic.GENERAL,
+                metrics={},
+                sources=[],
+                model_used="none",
+                fallback_used=True,
+                started=started,
+                trace_id=trace_id,
+                intent_confidence=0.0,
+                warning_message="No LLM configured. Agentic tool calling requires a model.",
+                thinking_trace=ThinkingTrace(
+                    summary="No LLM configured.",
+                    steps=[ThinkingStep(step="No LLM", detail="model_router is None", status="warning")],
+                    trace_id=trace_id,
+                ),
+            )
+
+        messages = build_agentic_messages(request.message, language, history_messages)
+        all_sources: list[dict[str, str]] = []
         all_metrics: dict[str, Any] = {}
-        all_sources: list[SourceMetadata] = []
         topic = ChatTopic.GENERAL
-        last_model_used = ""
-        last_fallback_used = False
-        tool_failures = 0
-        trace_steps: list[ThinkingStep] = [
-            ThinkingStep(
-                step="Routing mode",
-                detail="Started tool-assisted routing with structured function-calling.",
-                status="info",
-            )
-        ]
+        step_events: list[dict[str, Any]] = []
+        answer: str | None = None
+        model_used = "llm-agentic"
+        fallback_used = False
+        locked_topic: ChatTopic | None = None
 
-        logger.info("solar_chat_trace_tool_loop_start trace_id=%s max_steps=%d", trace_id, MAX_TOOL_STEPS)
-        for step_idx in range(1, MAX_TOOL_STEPS + 1):
-            tool_result = self._model_router.generate_with_tools(messages, TOOL_DECLARATIONS)
-            last_model_used = tool_result.model_used
-            last_fallback_used = tool_result.fallback_used
+        # ------------------------------------------------------------------
+        # Intent-based pre-fetch: if the query topic is clear, execute the
+        # primary tool immediately and inject the result into the message
+        # thread BEFORE the first LLM call.  This makes the chatbot robust
+        # against models that ignore tool_choice or system prompts.
+        # ------------------------------------------------------------------
+        intent_result = self._intent_service.detect_intent(request.message)
+        try:
+            intent_confidence = float(intent_result.confidence)
+        except (TypeError, ValueError):
+            intent_confidence = 0.0
+        intent_topic = intent_result.topic
+
+        # Context-aware disambiguation for known weak spots in deep validation.
+        if _is_cross_topic_summary_query(request.message):
+            intent_topic = ChatTopic.SYSTEM_OVERVIEW
+            intent_confidence = max(intent_confidence, 0.8)
+        elif _is_capacity_or_station_query(request.message):
+            intent_topic = ChatTopic.FACILITY_INFO
+            intent_confidence = max(intent_confidence, 0.85)
+        elif _is_implicit_followup(request.message):
+            previous_topic = _last_assistant_topic(history_messages)
+            if previous_topic:
+                intent_topic = previous_topic
+                intent_confidence = max(intent_confidence, 0.8)
+                locked_topic = previous_topic
+            else:
+                # Very short follow-ups like "chi so do..." in this app almost
+                # always refer back to energy KPI context.
+                intent_topic = ChatTopic.ENERGY_PERFORMANCE
+                intent_confidence = max(intent_confidence, 0.8)
+                locked_topic = ChatTopic.ENERGY_PERFORMANCE
+
+        logger.info(
+            "solar_chat_intent trace_id=%s topic=%s confidence=%.2f",
+            trace_id,
+            getattr(intent_topic, "value", str(intent_topic)),
+            intent_confidence,
+        )
+
+        is_prompt_injection = _is_prompt_injection_request(request.message)
+
+        if is_prompt_injection:
+            refusal_answer = _build_scope_refusal(language)
+            reason = "prompt_injection"
             logger.info(
-                "solar_chat_trace_tool_step trace_id=%s step=%d model=%s fallback=%s has_text=%s has_function_call=%s",
+                "solar_chat_scope_guard_refusal trace_id=%s reason=%s",
                 trace_id,
-                step_idx,
-                last_model_used,
-                last_fallback_used,
-                tool_result.text is not None,
-                tool_result.function_call is not None,
+                reason,
             )
-
-            if tool_result.text is not None:
-                if not all_metrics:
-                    inferred_topic = self._detect_topic_from_text(request.message)
-                    if inferred_topic is not ChatTopic.GENERAL:
-                        self._tool_path_supported = False
-                        logger.warning(
-                            "solar_chat_tool_path_text_without_data trace_id=%s topic=%s model=%s; forcing deterministic regex fallback",
-                            trace_id,
-                            inferred_topic.value,
-                            last_model_used,
-                        )
-                        return self._handle_with_regex_fallback(
-                            request=request,
-                            started=started,
-                            history_messages=history_messages,
-                            trace_id=trace_id,
-                            skip_model_generation=True,
-                            warning_message=(
-                                "Primary model response did not include tool calls. "
-                                "Switched to deterministic data-backed route."
-                            ),
-                            trace_steps_seed=trace_steps
-                            + [
-                                ThinkingStep(
-                                    step="Tool-calling unavailable",
-                                    detail=(
-                                        "Primary model returned plain text without function calls, "
-                                        "so the service switched to deterministic data route."
-                                    ),
-                                    status="warning",
-                                )
-                            ],
-                        )
-                    topic = inferred_topic
-                    logger.info(
-                        "solar_chat_trace_text_only_response trace_id=%s inferred_topic=%s",
-                        trace_id,
-                        topic.value,
-                    )
-                trace_steps.append(
-                    ThinkingStep(
-                        step="Model response",
-                        detail="Model returned final text response.",
-                        status="success",
-                    )
-                )
-                self._tool_path_supported = True
-                thinking_trace = self._build_thinking_trace(
-                    trace_id=trace_id,
-                    topic=topic,
-                    model_used=last_model_used,
-                    fallback_used=last_fallback_used,
-                    intent_confidence=(
-                        TOOL_PATH_CONFIDENCE if all_metrics else TEXT_ONLY_CONFIDENCE
-                    ),
-                    sources=all_sources,
-                    warning_message=None,
-                    steps=trace_steps,
-                )
-                return self._finalize_response(
-                    request=request,
-                    answer=tool_result.text,
-                    topic=topic,
-                    metrics=all_metrics,
-                    sources=all_sources,
-                    model_used=last_model_used,
-                    fallback_used=last_fallback_used,
-                    started=started,
-                    trace_id=trace_id,
-                    intent_confidence=TOOL_PATH_CONFIDENCE if all_metrics else TEXT_ONLY_CONFIDENCE,
-                    thinking_trace=thinking_trace,
-                )
-
-            fc = tool_result.function_call
-            if fc is None:
-                logger.info("solar_chat_trace_tool_loop_break trace_id=%s reason=no_function_call", trace_id)
-                break
-
-            logger.info(
-                "solar_chat_trace_tool_call trace_id=%s step=%d tool=%s args=%s",
-                trace_id,
-                step_idx,
-                fc.name,
-                self._short(fc.arguments, 400),
-            )
-            trace_steps.append(
-                ThinkingStep(
-                    step=f"Tool call {step_idx}",
-                    detail=f"Requested tool '{fc.name}'.",
-                    status="info",
-                )
-            )
-                
-            try:
-                metrics, source_rows = self._tool_executor.execute(fc.name, fc.arguments, request.role)
-                self._tool_path_supported = True
-                all_metrics.update(metrics)
-                for row in source_rows:
-                    sm = SourceMetadata(**row)
-                    if sm not in all_sources:
-                        all_sources.append(sm)
-
-                if topic == ChatTopic.GENERAL:
-                    topic = ChatTopic(TOOL_NAME_TO_TOPIC.get(fc.name, "general"))
-
-                logger.info(
-                    "solar_chat_trace_tool_result trace_id=%s step=%d tool=%s topic=%s metric_keys=%s source_count=%d",
-                    trace_id,
-                    step_idx,
-                    fc.name,
-                    topic.value,
-                    sorted(list(metrics.keys())),
-                    len(source_rows),
-                )
-                trace_steps.append(
-                    ThinkingStep(
-                        step=f"Tool result {step_idx}",
-                        detail=(
-                            f"Tool '{fc.name}' returned {len(metrics)} metric group(s) "
-                            f"and {len(source_rows)} source row(s)."
-                        ),
-                        status="success",
-                    )
-                )
-
-                if self._is_station_daily_report_no_data(fc.name, metrics):
-                    answer = self._build_station_report_no_data_answer(metrics)
-                    logger.info("station_daily_report_no_data_guard trace_id=%s triggered", trace_id)
-                    trace_steps.append(
+            return self._finalize_response(
+                request=request,
+                answer=refusal_answer,
+                topic=ChatTopic.GENERAL,
+                metrics={},
+                sources=[],
+                model_used="scope-guard",
+                fallback_used=True,
+                started=started,
+                trace_id=trace_id,
+                intent_confidence=intent_confidence,
+                warning_message="Prompt-injection request refused.",
+                thinking_trace=ThinkingTrace(
+                    summary="Scope guard refused an unsafe prompt-injection request.",
+                    steps=[
                         ThinkingStep(
-                            step="No-data guard",
-                            detail="Applied deterministic no-data guard for station daily report.",
+                            step="Scope guard",
+                            detail=reason,
                             status="warning",
                         )
-                    )
-                    thinking_trace = self._build_thinking_trace(
-                        trace_id=trace_id,
-                        topic=topic,
-                        model_used="deterministic-summary",
-                        fallback_used=True,
-                        intent_confidence=TOOL_PATH_CONFIDENCE,
-                        sources=all_sources,
-                        warning_message=None,
-                        steps=trace_steps,
-                    )
-                    return self._finalize_response(
-                        request=request,
-                        answer=answer,
-                        topic=topic,
-                        metrics=all_metrics,
-                        sources=all_sources,
-                        model_used="deterministic-summary",
-                        fallback_used=True,
-                        started=started,
-                        trace_id=trace_id,
-                        intent_confidence=TOOL_PATH_CONFIDENCE,
-                        thinking_trace=thinking_trace,
-                    )
-
-                messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
-                messages.append({
-                    "role": "user",
-                    "parts": [{"functionResponse": {"name": fc.name, "response": {"result": metrics}}}],
-                })
-            except Exception as e:
-                tool_failures += 1
-                logger.exception(
-                    "solar_chat_trace_tool_error trace_id=%s step=%d tool=%s error=%s",
-                    trace_id,
-                    step_idx,
-                    fc.name,
-                    e,
-                )
-                trace_steps.append(
-                    ThinkingStep(
-                        step=f"Tool error {step_idx}",
-                        detail=f"Tool '{fc.name}' failed, switching strategy.",
-                        status="warning",
-                    )
-                )
-                messages.append({"role": "model", "parts": [{"functionCall": {"name": fc.name, "args": fc.arguments}}]})
-                messages.append({
-                    "role": "user",
-                    "parts": [{"functionResponse": {"name": fc.name, "response": {"error": str(e)}}}],
-                })
-                if tool_failures >= 1:
-                    logger.info("solar_chat_trace_tool_loop_break trace_id=%s reason=tool_failure", trace_id)
-                    break
-
-        if not all_metrics:
-            self._tool_path_supported = False
-            logger.warning(
-                "solar_chat_tool_path_no_metrics trace_id=%s model=%s; forcing deterministic regex fallback",
-                trace_id,
-                last_model_used,
-            )
-            return self._handle_with_regex_fallback(
-                request=request,
-                started=started,
-                history_messages=history_messages,
-                trace_id=trace_id,
-                skip_model_generation=True,
-                warning_message=(
-                    "Tool-calling produced no tool-backed metrics. "
-                    "Switched to deterministic data-backed route."
+                    ],
+                    trace_id=trace_id,
                 ),
-                trace_steps_seed=trace_steps
-                + [
-                    ThinkingStep(
-                        step="Tool-calling unavailable",
-                        detail=(
-                            "No tool-backed metrics were collected, so the service "
-                            "switched to deterministic data route."
-                        ),
-                        status="warning",
-                    )
-                ],
             )
 
-        answer = build_fallback_summary(
-            topic,
-            all_metrics,
-            all_sources,
-            user_message=request.message,
-        )
-        logger.info(
-            "solar_chat_trace_tool_loop_complete trace_id=%s final_topic=%s collected_metric_keys=%s",
-            trace_id,
-            topic.value,
-            sorted(list(all_metrics.keys())),
-        )
-        trace_steps.append(
-            ThinkingStep(
-                step="Summary generation",
-                detail="Generated deterministic summary from collected tool outputs.",
-                status="success",
+        # For general intent, avoid agentic tool-calling entirely.
+        # Let model follow scope-guard instructions from system prompt.
+        if intent_topic == ChatTopic.GENERAL and not _needs_web_search(request.message):
+            return self._finalize_response(
+                request=request,
+                answer=_build_scope_refusal(language),
+                topic=ChatTopic.GENERAL,
+                metrics={},
+                sources=[],
+                model_used="scope-guard",
+                fallback_used=True,
+                started=started,
+                trace_id=trace_id,
+                intent_confidence=intent_confidence,
+                warning_message="General query handled with deterministic scope refusal.",
+                thinking_trace=ThinkingTrace(
+                    summary="General intent deterministic scope refusal.",
+                    steps=[
+                        ThinkingStep(
+                            step="General scope guard",
+                            detail="Tool-calling bypassed for general intent.",
+                            status="success",
+                        )
+                    ],
+                    trace_id=trace_id,
+                ),
             )
-        )
-        thinking_trace = self._build_thinking_trace(
+
+        # Skip intent pre-fetch when the user message references a specific
+        # date (e.g. "ngày 10/4/2026").  Pre-fetch tools like
+        # get_energy_performance don't accept date parameters, so their
+        # results would be irrelevant.  Instead, directly pre-fetch
+        # get_station_daily_report with the extracted anchor_date.
+        user_query_date = extract_query_date(request.message)
+
+        if user_query_date is not None:
+            # Date-specific query: pre-fetch station daily report with the
+            # extracted date so the LLM has real data to synthesise from.
+            prefetch_tool = "get_station_daily_report"
+            allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+            if prefetch_tool in allowed_tools:
+                try:
+                    tool_args = {"anchor_date": user_query_date.isoformat()}
+                    data, sources = self._tool_executor.execute(
+                        prefetch_tool, tool_args, request.role
+                    )
+                    all_metrics.update(data)
+                    all_sources.extend(sources)
+                    topic = ChatTopic.ENERGY_PERFORMANCE
+                    messages.append({
+                        "role": "model",
+                        "parts": [{"functionCall": {"name": prefetch_tool, "args": tool_args}}],
+                    })
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {
+                            "name": prefetch_tool,
+                            "response": data,
+                        }}],
+                    })
+                    step_events.append({
+                        "step": 0,
+                        "tool": prefetch_tool,
+                        "status": "ok",
+                        "metric_keys": sorted(data.keys()),
+                        "source_count": len(sources),
+                    })
+                    logger.info(
+                        "solar_chat_date_prefetch trace_id=%s tool=%s date=%s metric_keys=%s",
+                        trace_id,
+                        prefetch_tool,
+                        user_query_date.isoformat(),
+                        sorted(data.keys()),
+                    )
+                except DatabricksDataUnavailableError as db_err:
+                    logger.error(
+                        "solar_chat_date_prefetch_databricks_unavailable trace_id=%s error=%s",
+                        trace_id,
+                        db_err,
+                    )
+                    raise
+                except Exception as prefetch_err:
+                    logger.warning(
+                        "solar_chat_date_prefetch_failed trace_id=%s error=%s",
+                        trace_id,
+                        prefetch_err,
+                    )
+        elif (
+            intent_topic != ChatTopic.GENERAL
+            and intent_confidence >= 0.6
+        ):
+            primary_tool = _TOPIC_TO_PRIMARY_TOOL.get(intent_topic)
+            allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+            if primary_tool and primary_tool in allowed_tools:
+                try:
+                    data, sources = self._tool_executor.execute(
+                        primary_tool, {}, request.role
+                    )
+                    all_metrics.update(data)
+                    all_sources.extend(sources)
+                    topic = intent_topic
+                    # Inject as a completed tool call in the message thread
+                    messages.append({
+                        "role": "model",
+                        "parts": [{"functionCall": {"name": primary_tool, "args": {}}}],
+                    })
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {
+                            "name": primary_tool,
+                            "response": data,
+                        }}],
+                    })
+                    step_events.append({
+                        "step": 0,
+                        "tool": primary_tool,
+                        "status": "ok",
+                        "metric_keys": sorted(data.keys()),
+                        "source_count": len(sources),
+                    })
+                    logger.info(
+                        "solar_chat_intent_prefetch trace_id=%s tool=%s metric_keys=%s",
+                        trace_id,
+                        primary_tool,
+                        sorted(data.keys()),
+                    )
+                except DatabricksDataUnavailableError as db_err:
+                    logger.error(
+                        "solar_chat_intent_prefetch_databricks_unavailable trace_id=%s tool=%s error=%s",
+                        trace_id,
+                        primary_tool,
+                        db_err,
+                    )
+                    raise
+                except Exception as prefetch_err:
+                    logger.warning(
+                        "solar_chat_intent_prefetch_failed trace_id=%s tool=%s error=%s",
+                        trace_id,
+                        primary_tool,
+                        prefetch_err,
+                    )
+
+        # ------------------------------------------------------------------
+        # Fast-path synthesis: if the intent pre-fetch already loaded data,
+        # pass it directly as evidence to the LLM so even models that ignore
+        # tool_call messages still produce a data-grounded answer.
+        # Skipped when the user explicitly requests a web search (handled
+        # by the direct web-search path below).
+        # ------------------------------------------------------------------
+        if all_metrics and not _needs_web_search(request.message):
+            evidence_text = json.dumps(all_metrics, ensure_ascii=False)
+            synthesis_prompt = build_synthesis_prompt(
+                user_message=request.message,
+                evidence_text=evidence_text,
+                language=language,
+                history=history_messages or None,
+            )
+            logger.info(
+                "solar_chat_prefetch_synthesis trace_id=%s topic=%s evidence_keys=%s",
+                trace_id,
+                topic.value,
+                sorted(all_metrics.keys()),
+            )
+            try:
+                gen = self._model_router.generate(
+                    synthesis_prompt,
+                    max_output_tokens=self._synthesis_max_output_tokens,
+                    temperature=0.1,
+                )
+                answer = gen.text
+                model_used = gen.model_used
+                fallback_used = gen.fallback_used
+            except Exception:
+                answer = build_data_only_summary(all_metrics, all_sources, language)
+                fallback_used = True
+
+        # ------------------------------------------------------------------
+        # Direct web-search path: when the user explicitly requests an
+        # internet lookup, call web_search_client directly (bypassing
+        # generate_with_tools, which gpt-5-mini ignores for tool calls).
+        # Combines web snippets with any pre-fetched system data and
+        # synthesises via generate() that includes conversation history.
+        # ------------------------------------------------------------------
+        elif _needs_web_search(request.message):
+            search_query = _extract_search_query(request.message, history_messages)
+            # If pre-fetched data has specific facility names not already in the
+            # extracted query, use them to build a targeted search query.
+            if all_metrics:
+                top_names = _extract_top_facility_names(all_metrics)
+                if top_names and not any(
+                    name.lower() in search_query.lower() for name in top_names
+                ):
+                    search_query = " ".join(top_names) + " solar farm"
+            logger.info(
+                "solar_chat_web_search_direct trace_id=%s query=%r",
+                trace_id,
+                search_query,
+            )
+            web_response = self._execute_web_lookup({"query": search_query})
+
+            # Build combined evidence: system data (if any) + web results
+            evidence_parts: list[str] = []
+            if all_metrics:
+                evidence_parts.append(
+                    "## Dữ liệu hệ thống (30 ngày gần nhất)\n"
+                    + json.dumps(all_metrics, ensure_ascii=False)[:2000]
+                )
+            web_results = web_response.get("results", [])
+            if web_results:
+                snippets = "\n".join(
+                    f"- [{r.get('title', '')}]({r.get('url', '')}): "
+                    f"{r.get('snippet', '')[:300]}"
+                    for r in web_results
+                )
+                evidence_parts.append(
+                    f"## Kết quả tìm kiếm web ({len(web_results)} nguồn)\n{snippets}"
+                )
+            elif "error" in web_response:
+                evidence_parts.append(
+                    f"## Web search: {web_response['error']}\n"
+                    "Trả lời từ kiến thức tích hợp nếu có."
+                )
+            evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "(không có dữ liệu)"
+            synthesis_prompt = build_synthesis_prompt(
+                user_message=request.message,
+                evidence_text=evidence_text,
+                language=language,
+                history=history_messages or None,
+                cite_web_sources=bool(web_results),
+            )
+            step_events.append({
+                "step": 0,
+                "tool": "web_lookup_direct",
+                "status": "ok" if web_results else "no_results",
+                "result_count": len(web_results),
+            })
+            # Propagate web URLs into sources so they appear in the response
+            for wr in web_results:
+                wr_url = wr.get("url", "")
+                if wr_url:
+                    all_sources.append({
+                        "layer": "Web",
+                        "dataset": wr.get("title", wr_url),
+                        "data_source": "web_search",
+                        "url": wr_url,
+                    })
+            try:
+                gen = self._model_router.generate(
+                    synthesis_prompt,
+                    max_output_tokens=self._synthesis_max_output_tokens,
+                    temperature=0.1,
+                )
+                answer = gen.text
+                model_used = gen.model_used
+                fallback_used = gen.fallback_used
+                logger.info(
+                    "solar_chat_web_synthesis_done trace_id=%s model=%s web_results=%d",
+                    trace_id,
+                    model_used,
+                    len(web_results),
+                )
+            except Exception:
+                answer = build_data_only_summary(all_metrics, all_sources, language)
+                fallback_used = True
+
+        # ------------------------------------------------------------------
+        # Agentic loop — LLM may call additional tools or synthesise directly
+        # (only entered if neither fast-path nor direct web-search set answer)
+        # ------------------------------------------------------------------
+        for step_num in range(1, self._max_tool_steps + 1):
+            if answer is not None:
+                break
+            try:
+                result = self._model_router.generate_with_tools(
+                    messages,
+                    TOOL_DECLARATIONS,
+                    max_output_tokens=self._synthesis_max_output_tokens,
+                    require_function_call=(step_num == 1 and not all_metrics),
+                )
+            except ToolCallNotSupportedError:
+                # Model does not support native tool calling -> evidence-in-prompt fallback
+                evidence_text = json.dumps(all_metrics, ensure_ascii=False)
+                synthesis_prompt = build_synthesis_prompt(
+                    user_message=request.message,
+                    evidence_text=evidence_text,
+                    language=language,
+                    history=history_messages or None,
+                )
+                try:
+                    gen = self._model_router.generate(
+                        synthesis_prompt,
+                        max_output_tokens=self._synthesis_max_output_tokens,
+                        temperature=0.1,
+                    )
+                    answer = gen.text
+                    model_used = gen.model_used
+                    fallback_used = gen.fallback_used
+                except Exception:
+                    answer = build_data_only_summary(all_metrics, all_sources, language)
+                    fallback_used = True
+                break
+            except ModelUnavailableError:
+                raise
+
+            if result.function_call is None:
+                # LLM produced a final text response
+                answer = result.text or build_data_only_summary(all_metrics, all_sources, language)
+                model_used = result.model_used
+                fallback_used = result.fallback_used
+                break
+
+            # LLM requested a tool call
+            tool_name = result.function_call.name
+            tool_args = dict(result.function_call.arguments or {})
+            logger.info(
+                "solar_chat_agentic_tool_call trace_id=%s step=%d tool=%s",
+                trace_id,
+                step_num,
+                tool_name,
+            )
+
+            # Append the model's tool call to the conversation
+            messages.append({
+                "role": "model",
+                "parts": [{"functionCall": {"name": tool_name, "args": tool_args}}],
+            })
+
+            # Handle answer_directly (LLM will produce text on the next turn)
+            if tool_name == "answer_directly":
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": tool_name, "response": {"status": "ok"}}}],
+                })
+                step_events.append({"step": step_num, "tool": tool_name, "status": "skipped"})
+                continue
+
+            # Handle web_lookup
+            if tool_name == "web_lookup":
+                web_response = self._execute_web_lookup(tool_args)
+                # Propagate web URLs into sources
+                for wr in web_response.get("results", []):
+                    wr_url = wr.get("url", "")
+                    if wr_url:
+                        all_sources.append({
+                            "layer": "Web",
+                            "dataset": wr.get("title", wr_url),
+                            "data_source": "web_search",
+                            "url": wr_url,
+                        })
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": tool_name, "response": web_response}}],
+                })
+                step_events.append({
+                    "step": step_num,
+                    "tool": tool_name,
+                    "status": "ok",
+                    "result_count": len(web_response.get("results", [])),
+                })
+                continue
+
+            # RBAC check
+            allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+            if tool_name not in allowed_tools:
+                logger.info(
+                    "solar_chat_agentic_permission_denied trace_id=%s role=%s tool=%s",
+                    trace_id,
+                    request.role.value,
+                    tool_name,
+                )
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {
+                        "name": tool_name,
+                        "response": {"error": f"Access denied for role '{request.role.value}'."},
+                    }}],
+                })
+                step_events.append({"step": step_num, "tool": tool_name, "status": "denied"})
+                continue
+
+            # Execute data tool
+            try:
+                data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
+                all_sources.extend(sources)
+                all_metrics.update(data)
+                if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
+                    topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": tool_name, "response": data}}],
+                })
+                step_events.append({
+                    "step": step_num,
+                    "tool": tool_name,
+                    "status": "ok",
+                    "metric_keys": sorted(data.keys()),
+                    "source_count": len(sources),
+                })
+                logger.info(
+                    "solar_chat_agentic_tool_done trace_id=%s step=%d tool=%s metric_keys=%s sources=%d",
+                    trace_id,
+                    step_num,
+                    tool_name,
+                    sorted(data.keys()),
+                    len(sources),
+                )
+            except DatabricksDataUnavailableError:
+                raise
+            except Exception as tool_err:
+                logger.warning(
+                    "solar_chat_agentic_tool_error trace_id=%s step=%d tool=%s error=%s",
+                    trace_id,
+                    step_num,
+                    tool_name,
+                    tool_err,
+                )
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {
+                        "name": tool_name,
+                        "response": {"error": str(tool_err)},
+                    }}],
+                })
+                step_events.append({
+                    "step": step_num,
+                    "tool": tool_name,
+                    "status": "error",
+                    "detail": str(tool_err),
+                })
+
+        # Force final synthesis if loop ran out of steps without a text answer
+        if answer is None:
+            logger.info("solar_chat_agentic_force_synthesis trace_id=%s", trace_id)
+            try:
+                force_result = self._model_router.generate_with_tools(
+                    messages,
+                    [],  # No tools -> LLM must produce text
+                    max_output_tokens=self._synthesis_max_output_tokens,
+                )
+                answer = force_result.text or build_data_only_summary(all_metrics, all_sources, language)
+                model_used = force_result.model_used
+                fallback_used = force_result.fallback_used
+            except Exception:
+                answer = build_data_only_summary(all_metrics, all_sources, language)
+                fallback_used = True
+
+        thinking_trace = ThinkingTrace(
+            summary=(
+                f"Agentic loop: {len(step_events)} tool step(s), "
+                f"model='{model_used}', fallback={fallback_used}, topic='{topic.value}'."
+            ),
+            steps=[
+                ThinkingStep(
+                    step=f"Step {ev['step']}: {ev['tool']}",
+                    detail=str(
+                        ev.get("metric_keys",
+                        ev.get("result_count",
+                        ev.get("detail", ev.get("status", ""))))
+                    ),
+                    status="success" if ev.get("status") in ("ok", "skipped") else "warning",
+                )
+                for ev in step_events
+            ],
             trace_id=trace_id,
-            topic=topic,
-            model_used=last_model_used,
-            fallback_used=last_fallback_used,
-            intent_confidence=TOOL_PATH_CONFIDENCE,
-            sources=all_sources,
-            warning_message=None,
-            steps=trace_steps,
         )
+
+        source_objects: list[SourceMetadata] = [
+            SourceMetadata(**s) if isinstance(s, dict) else s
+            for s in all_sources
+        ]
+
+        if locked_topic is not None:
+            topic = locked_topic
+
         return self._finalize_response(
             request=request,
             answer=answer,
             topic=topic,
             metrics=all_metrics,
-            sources=all_sources,
-            model_used=last_model_used,
-            fallback_used=last_fallback_used,
+            sources=source_objects,
+            model_used=model_used,
+            fallback_used=fallback_used,
             started=started,
             trace_id=trace_id,
             intent_confidence=TOOL_PATH_CONFIDENCE,
             thinking_trace=thinking_trace,
         )
 
-    def _handle_with_regex_fallback(
-        self,
-        request: SolarChatRequest,
-        started: float,
-        history_messages: list[ChatMessage],
-        trace_id: str,
-        skip_model_generation: bool = False,
-        allow_llm_planner: bool = False,
-        warning_message: str | None = None,
-        trace_steps_seed: list[ThinkingStep] | None = None,
-    ) -> SolarChatResponse:
-        trace_steps = list(trace_steps_seed or [])
-        extreme_query = extract_extreme_metric_query(request.message)
-        if extreme_query is not None:
-            response_topic = topic_for_extreme_metric(extreme_query.metric_name)
-            self._validate_role(topic=response_topic, role=request.role)
-            query_date = extract_query_date(request.message)
-            metrics, source_rows = self._fetch_extreme_metrics(
-                extreme_query=extreme_query,
-                query_date=query_date,
-                message=request.message,
-            )
-            intent_confidence = REGEX_EXTREME_CONFIDENCE
-            logger.info(
-                "solar_chat_trace_intent trace_id=%s mode=extreme metric=%s query_type=%s timeframe=%s",
-                trace_id,
-                extreme_query.metric_name,
-                extreme_query.query_type,
-                extreme_query.timeframe,
-            )
-            trace_steps.append(
-                ThinkingStep(
-                    step="Intent parsing",
-                    detail=(
-                        f"Detected extreme-metric query ({extreme_query.metric_name}, "
-                        f"{extreme_query.query_type}, timeframe={extreme_query.timeframe})."
-                    ),
-                    status="info",
-                )
-            )
-        else:
-            detection: IntentDetectionResult | None = None
-            if allow_llm_planner and self._model_router is not None:
-                detection = self._plan_topic_with_llm(
-                    message=request.message,
-                    history_messages=history_messages,
-                )
+    def _execute_web_lookup(self, tool_args: dict[str, Any]) -> dict[str, Any]:
+        """Execute a web_lookup tool call and return structured search results."""
+        if self._web_search_client is None or not getattr(self._web_search_client, "enabled", False):
+            return {"error": "Web search is not configured or is disabled."}
 
-            if detection is None:
-                detection = self._intent_service.detect_intent(request.message)
-                routing_mode = "intent"
-            else:
-                routing_mode = "llm_planner"
+        query = str(tool_args.get("query") or "").strip()
+        if not query:
+            return {"error": "No search query was provided."}
 
-            response_topic = detection.topic
-            intent_confidence = detection.confidence
-            normalized_message = self._normalize_for_matching(request.message)
-            if self._is_top_facility_comparison_query(normalized_message):
-                response_topic = ChatTopic.ENERGY_PERFORMANCE
-                intent_confidence = max(intent_confidence, 0.9)
-            self._validate_role(topic=response_topic, role=request.role)
-            metrics, source_rows = self._repository.fetch_topic_metrics(response_topic)
-            logger.info(
-                "solar_chat_trace_intent trace_id=%s mode=%s topic=%s confidence=%.2f",
-                trace_id,
-                routing_mode,
-                response_topic.value,
-                intent_confidence,
-            )
-            trace_steps.append(
-                ThinkingStep(
-                    step="Intent routing" if routing_mode == "intent" else "LLM planner routing",
-                    detail=(
-                        f"Routed request to topic '{response_topic.value}' via {routing_mode} "
-                        f"with confidence {intent_confidence:.2f}."
-                    ),
-                    status="info",
-                )
-            )
-
-        sources = [SourceMetadata(**row) for row in source_rows]
-        logger.info(
-            "solar_chat_trace_data_fetch trace_id=%s topic=%s metric_keys=%s source_count=%d",
-            trace_id,
-            response_topic.value,
-            sorted(list(metrics.keys())),
-            len(sources),
-        )
-        trace_steps.append(
-            ThinkingStep(
-                step="Data retrieval",
-                detail=(
-                    f"Fetched {len(metrics)} metric group(s) from {len(sources)} source(s) "
-                    f"for topic '{response_topic.value}'."
-                ),
-                status="success",
-            )
-        )
-
-        web_search_result = self._maybe_build_web_search_answer(
-            message=request.message,
-            topic=response_topic,
-            skip_model_generation=skip_model_generation,
-            metrics=metrics,
-        )
-        if web_search_result is not None:
-            answer, citation_count, external_requested = web_search_result
-            response_metrics = dict(metrics)
-            response_metrics["web_search_used"] = True
-            response_metrics["web_search_source_count"] = citation_count
-            if external_requested:
-                web_warning = (
-                    "Used vetted external web references because you explicitly requested internet lookup."
-                )
-            else:
-                web_warning = (
-                    "Used vetted external web references because internal data did not directly cover this concept."
-                )
-            if warning_message:
-                web_warning = f"{warning_message} {web_warning}"
-            warning_message = web_warning
-            trace_steps.append(
-                ThinkingStep(
-                    step="Web grounding",
-                    detail=(
-                        f"Retrieved and filtered {citation_count} external source(s) "
-                        f"for {'an internet-requested' if external_requested else 'a definition-style'} query."
-                    ),
-                    status="warning",
-                )
-            )
-            thinking_trace = self._build_thinking_trace(
-                trace_id=trace_id,
-                topic=response_topic,
-                model_used="web-search-fallback",
-                fallback_used=True,
-                intent_confidence=intent_confidence,
-                sources=sources,
-                warning_message=warning_message,
-                steps=trace_steps,
-            )
-            return self._finalize_response(
-                request=request,
-                answer=answer,
-                topic=response_topic,
-                metrics=response_metrics,
-                sources=sources,
-                model_used="web-search-fallback",
-                fallback_used=True,
-                started=started,
-                trace_id=trace_id,
-                intent_confidence=intent_confidence,
-                warning_message=warning_message,
-                thinking_trace=thinking_trace,
-            )
-
-        model_used = "deterministic-summary"
-        fallback_used = skip_model_generation
-
-        prompt = build_prompt(
-            user_message=request.message,
-            role=request.role,
-            topic=response_topic,
-            metrics=metrics,
-            sources=sources,
-            history=history_messages,
-        )
-
-        if skip_model_generation:
-            answer = build_fallback_summary(
-                response_topic,
-                metrics,
-                sources,
-                user_message=request.message,
-            )
-            logger.info("solar_chat_trace_generation trace_id=%s mode=deterministic", trace_id)
-            trace_steps.append(
-                ThinkingStep(
-                    step="Answer generation",
-                    detail="Skipped model generation and returned deterministic data-backed summary.",
-                    status="warning",
-                )
-            )
-        elif self._model_router is not None:
-            try:
-                model_result = self._model_router.generate(prompt)
-                answer = model_result.text
-                fallback_used = model_result.fallback_used
-                model_used = model_result.model_used
-                logger.info(
-                    "solar_chat_trace_generation trace_id=%s mode=llm model=%s fallback=%s",
-                    trace_id,
-                    model_used,
-                    fallback_used,
-                )
-                trace_steps.append(
-                    ThinkingStep(
-                        step="Answer generation",
-                        detail=f"Generated answer with model '{model_used}' (fallback={fallback_used}).",
-                        status="success",
-                    )
-                )
-            except ModelUnavailableError:
-                answer = build_fallback_summary(
-                    response_topic,
-                    metrics,
-                    sources,
-                    user_message=request.message,
-                )
-                warning_message = "The AI model is temporarily unavailable. Returned a data-backed summary instead."
-                fallback_used = True
-                logger.warning("solar_chat_trace_generation trace_id=%s mode=llm_unavailable", trace_id)
-                trace_steps.append(
-                    ThinkingStep(
-                        step="Answer generation",
-                        detail="Model unavailable, switched to deterministic data-backed summary.",
-                        status="warning",
-                    )
-                )
-            except Exception as model_error:
-                logger.exception(
-                    "solar_chat_generation_failed trace_id=%s error_type=%s error=%s",
-                    trace_id,
-                    type(model_error).__name__,
-                    model_error,
-                )
-                answer = build_fallback_summary(
-                    response_topic,
-                    metrics,
-                    sources,
-                    user_message=request.message,
-                )
-                warning_message = "The AI model request failed. Returned a data-backed summary instead."
-                fallback_used = True
-                trace_steps.append(
-                    ThinkingStep(
-                        step="Answer generation",
-                        detail="Model request failed, switched to deterministic data-backed summary.",
-                        status="warning",
-                    )
-                )
-        else:
-            answer = build_fallback_summary(
-                response_topic,
-                metrics,
-                sources,
-                user_message=request.message,
-            )
-            warning_message = "Gemini API key is not configured. Returned a data-backed summary."
-            logger.warning("solar_chat_trace_generation trace_id=%s mode=no_model_router", trace_id)
-            trace_steps.append(
-                ThinkingStep(
-                    step="Answer generation",
-                    detail="Model router unavailable, returned deterministic data-backed summary.",
-                    status="warning",
-                )
-            )
-
-        thinking_trace = self._build_thinking_trace(
-            trace_id=trace_id,
-            topic=response_topic,
-            model_used=model_used,
-            fallback_used=fallback_used,
-            intent_confidence=intent_confidence,
-            sources=sources,
-            warning_message=warning_message,
-            steps=trace_steps,
-        )
-
-        return self._finalize_response(
-            request=request,
-            answer=answer,
-            topic=response_topic,
-            metrics=metrics,
-            sources=sources,
-            model_used=model_used,
-            fallback_used=fallback_used,
-            started=started,
-            trace_id=trace_id,
-            intent_confidence=intent_confidence,
-            warning_message=warning_message,
-            thinking_trace=thinking_trace,
-        )
-
-    @staticmethod
-    def _is_station_daily_report_no_data(function_name: str, metrics: dict[str, Any]) -> bool:
-        if function_name != "get_station_daily_report":
-            return False
-        station_count = metrics.get("station_count")
         try:
-            return int(station_count or 0) == 0
-        except (TypeError, ValueError):
-            return False
+            results = self._web_search_client.search(query, max_results=5)
+        except Exception as exc:
+            return {"error": str(exc)}
 
-    @staticmethod
-    def _build_station_report_no_data_answer(metrics: dict[str, Any]) -> str:
-        report_date = str(metrics.get("report_date", "N/A"))
-        available_min = metrics.get("available_date_min")
-        available_max = metrics.get("available_date_max")
+        if not results:
+            return {"results": [], "message": "No external results found for this query."}
 
-        if available_min and available_max:
-            return (
-                f"Không có dữ liệu cho ngày {report_date}. "
-                f"Khoảng ngày dữ liệu hiện có là từ {available_min} đến {available_max}."
-            )
+        return {
+            "results": [
+                {
+                    "title": getattr(r, "title", ""),
+                    "snippet": getattr(r, "snippet", ""),
+                    "url": getattr(r, "url", ""),
+                    "score": getattr(r, "score", None),
+                }
+                for r in results[:5]
+            ]
+        }
 
-        return f"Không có dữ liệu cho ngày {report_date}."
+    # ------------------------------------------------------------------
+    # Response finalization
+    # ------------------------------------------------------------------
 
     def _finalize_response(
         self,
@@ -934,641 +1118,9 @@ class SolarAIChatService:
             thinking_trace=thinking_trace,
         )
 
-    def _build_thinking_trace(
-        self,
-        *,
-        trace_id: str,
-        topic: ChatTopic,
-        model_used: str,
-        fallback_used: bool,
-        intent_confidence: float,
-        sources: list[SourceMetadata],
-        warning_message: str | None,
-        steps: list[ThinkingStep],
-    ) -> ThinkingTrace:
-        route_mode = (
-            "deterministic data-backed"
-            if model_used == "deterministic-summary" or fallback_used
-            else "tool-assisted model"
-        )
-        summary = (
-            f"Routed to topic '{topic.value}' (confidence {intent_confidence:.2f}), "
-            f"used {len(sources)} data source(s), and generated answer via {route_mode} path "
-            f"with model '{model_used}'."
-        )
-        if warning_message:
-            summary = f"{summary} Warning: {warning_message}"
-        return ThinkingTrace(
-            summary=summary,
-            steps=steps,
-            trace_id=trace_id,
-        )
-
-    @staticmethod
-    def _short(value: Any, limit: int = 300) -> str:
-        text = str(value)
-        if len(text) <= limit:
-            return text
-        return text[: limit - 3] + "..."
-
-    def _validate_role(self, topic: ChatTopic, role: ChatRole) -> None:
-        allowed_topics = ROLE_TOPIC_PERMISSIONS.get(role, set())
-        if topic not in allowed_topics:
-            raise PermissionError(
-                f"Role '{role.value}' is not allowed to access topic '{topic.value}'."
-            )
-
-    def _fetch_extreme_metrics(
-        self,
-        extreme_query: ExtremeMetricQuery,
-        query_date: Any,
-        message: str,
-    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        if extreme_query.metric_name == "aqi":
-            return self._repository.fetch_extreme_aqi(
-                query_type=extreme_query.query_type,
-                timeframe=extreme_query.timeframe,
-                anchor_date=query_date,
-                specific_hour=extreme_query.specific_hour,
-            )
-        if extreme_query.metric_name == "energy":
-            return self._repository.fetch_extreme_energy(
-                query_type=extreme_query.query_type,
-                timeframe=extreme_query.timeframe,
-                anchor_date=query_date,
-                specific_hour=extreme_query.specific_hour,
-            )
-        weather_metric = resolve_weather_metric(message)
-        return self._repository.fetch_extreme_weather(
-            query_type=extreme_query.query_type,
-            timeframe=extreme_query.timeframe,
-            anchor_date=query_date,
-            specific_hour=extreme_query.specific_hour,
-            weather_metric=weather_metric["key"],
-            weather_metric_label=weather_metric["label"],
-            weather_unit=weather_metric["unit"],
-        )
-
-    def _maybe_build_web_search_answer(
-        self,
-        message: str,
-        topic: ChatTopic,
-        skip_model_generation: bool,
-        metrics: dict[str, Any],
-    ) -> tuple[str, int, bool] | None:
-        if self._web_search_client is None or not self._web_search_client.enabled:
-            return None
-
-        normalized = self._normalize_for_matching(message)
-        if not normalized:
-            return None
-
-        external_requested = self._is_external_search_request(normalized)
-        definition_style = self._is_definition_style_query(normalized)
-
-        if not definition_style and not external_requested:
-            return None
-
-        if self._is_data_request_query(normalized) and not external_requested:
-            return None
-
-        if not self._is_system_related_query(normalized) and not external_requested:
-            return None
-
-        if topic not in {
-            ChatTopic.GENERAL,
-            ChatTopic.ENERGY_PERFORMANCE,
-            ChatTopic.ML_MODEL,
-            ChatTopic.SYSTEM_OVERVIEW,
-            ChatTopic.FACILITY_INFO,
-        }:
-            return None
-
-        if (
-            not external_requested
-            and not skip_model_generation
-            and topic is not ChatTopic.GENERAL
-        ):
-            return None
-
-        station_name: str | None = None
-        station_capacity_mw: float | None = None
-        search_query = message
-        if topic is ChatTopic.FACILITY_INFO:
-            station_name, station_capacity_mw = self._resolve_facility_station_context(
-                normalized_message=normalized,
-                metrics=metrics,
-            )
-            if external_requested and station_name:
-                search_query = f"{station_name} solar farm capacity location timezone"
-            elif external_requested and not station_name:
-                # Avoid broad/keyword-only web answers when the target station is unknown.
-                return None
-
-        search_results = self._web_search_client.search(search_query)
-        if not search_results:
-            return None
-
-        focus_terms = self._extract_web_focus_terms(
-            normalized,
-            topic,
-            station_name=station_name,
-        )
-        filtered_results = [
-            row for row in search_results
-            if self._is_web_result_relevant(row=row, focus_terms=focus_terms)
-        ]
-        if topic is ChatTopic.FACILITY_INFO and station_name:
-            filtered_results = [
-                row
-                for row in filtered_results
-                if self._is_facility_result_station_aligned(
-                    row=row,
-                    station_name=station_name,
-                )
-            ]
-        if not filtered_results:
-            return None
-
-        filtered_results.sort(
-            key=lambda row: (
-                self._trusted_domain_score(row.url),
-                float(row.score or 0.0),
-            ),
-            reverse=True,
-        )
-        selected = filtered_results[:3]
-        answer = self._build_web_search_answer(
-            message=message,
-            selected_results=selected,
-            topic=topic,
-            external_requested=external_requested,
-            station_name=station_name,
-            station_capacity_mw=station_capacity_mw,
-        )
-        return answer, len(selected), external_requested
-
-    @staticmethod
-    def _normalize_for_matching(value: str) -> str:
-        lowered = str(value or "").strip().lower()
-        without_marks = normalize("NFD", lowered)
-        return "".join(character for character in without_marks if ord(character) < 128)
-
-    @staticmethod
-    def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
-        return any(marker in text for marker in markers)
-
-    def _is_definition_style_query(self, normalized_message: str) -> bool:
-        return self._contains_any(normalized_message, WEBSEARCH_DEFINITION_MARKERS)
-
-    def _is_external_search_request(self, normalized_message: str) -> bool:
-        return self._contains_any(normalized_message, WEBSEARCH_EXTERNAL_REQUEST_MARKERS)
-
-    def _is_data_request_query(self, normalized_message: str) -> bool:
-        return self._contains_any(normalized_message, WEBSEARCH_DATA_REQUEST_MARKERS)
-
-    def _is_system_related_query(self, normalized_message: str) -> bool:
-        return self._contains_any(normalized_message, WEBSEARCH_SYSTEM_KEYWORDS)
-
-    def _extract_web_focus_terms(
-        self,
-        normalized_message: str,
-        topic: ChatTopic,
-        station_name: str | None = None,
-    ) -> tuple[str, ...]:
-        terms: set[str] = {"solar", "pv", "photovoltaic", "energy"}
-
-        if (
-            "performance ratio" in normalized_message
-            or "capacity factor" in normalized_message
-            or "he so cong suat" in normalized_message
-            or "ti le hieu suat" in normalized_message
-        ):
-            terms.update({"performance ratio", "capacity factor"})
-
-        if topic is ChatTopic.ML_MODEL:
-            terms.update({"forecast", "model", "solar forecasting"})
-        if topic is ChatTopic.SYSTEM_OVERVIEW:
-            terms.update({"solar power", "generation", "plant"})
-        if topic is ChatTopic.FACILITY_INFO:
-            terms.update({"solar farm", "capacity", "photovoltaic"})
-            if not station_name:
-                terms.update({"facility", "station", "timezone", "location"})
-
-        if station_name:
-            normalized_station = self._normalize_for_matching(station_name)
-            if normalized_station:
-                terms.add(normalized_station)
-                for token in normalized_station.split():
-                    if len(token) >= 4:
-                        terms.add(token)
-
-        return tuple(sorted(terms))
-
-    def _is_web_result_relevant(
-        self,
-        row: "WebSearchResult",
-        focus_terms: tuple[str, ...],
-    ) -> bool:
-        combined = self._normalize_for_matching(
-            f"{row.title} {row.snippet} {row.url}"
-        )
-        if not combined:
-            return False
-
-        if not self._contains_any(combined, WEBSEARCH_SYSTEM_KEYWORDS):
-            return False
-
-        if focus_terms and not any(term in combined for term in focus_terms):
-            return False
-
-        return True
-
-    def _is_facility_result_station_aligned(
-        self,
-        row: "WebSearchResult",
-        station_name: str,
-    ) -> bool:
-        normalized_station = self._normalize_for_matching(station_name)
-        if not normalized_station:
-            return False
-
-        combined = self._normalize_for_matching(
-            f"{row.title} {row.snippet} {row.url}"
-        )
-        if not combined:
-            return False
-
-        station_tokens = [
-            token for token in normalized_station.split()
-            if len(token) >= 4
-        ]
-        if normalized_station in combined:
-            station_match = True
-        else:
-            station_match = bool(station_tokens) and any(
-                token in combined for token in station_tokens
-            )
-        if not station_match:
-            return False
-
-        context_markers = (
-            "solar",
-            "photovoltaic",
-            "pv",
-            "renewable",
-            "energy",
-            "power",
-            "capacity",
-            "commissioning",
-            "planning",
-            "project",
-            "farm",
-        )
-        return any(marker in combined for marker in context_markers)
-
-    @staticmethod
-    def _trusted_domain_score(url: str) -> int:
-        normalized_url = str(url or "").strip().lower()
-        if any(domain in normalized_url for domain in WEBSEARCH_TRUSTED_DOMAIN_HINTS):
-            return 1
-        return 0
-
-    def _build_web_search_answer(
-        self,
-        message: str,
-        selected_results: list["WebSearchResult"],
-        topic: ChatTopic,
-        external_requested: bool,
-        station_name: str | None,
-        station_capacity_mw: float | None,
-    ) -> str:
-        normalized_message = self._normalize_for_matching(message)
-        lines: list[str] = []
-
-        if external_requested and topic is ChatTopic.FACILITY_INFO:
-            lines.append("**Kết luận nội bộ**")
-            if station_name:
-                capacity_text = "N/A"
-                if station_capacity_mw is not None:
-                    capacity_text = f"{station_capacity_mw:.2f}".rstrip("0").rstrip(".")
-                if self._is_bottom_capacity_request(normalized_message):
-                    lines.append(
-                        f"- Trạm có capacity nhỏ nhất hiện tại: **{station_name} ({capacity_text} MW)**."
-                    )
-                elif self._is_top_capacity_request(normalized_message):
-                    lines.append(
-                        f"- Trạm có capacity lớn nhất hiện tại: **{station_name} ({capacity_text} MW)**."
-                    )
-                else:
-                    lines.append(
-                        f"- Trạm mục tiêu: **{station_name} ({capacity_text} MW)**."
-                    )
-            else:
-                lines.append(
-                    "- Chưa xác định được chính xác 1 trạm từ dữ liệu nội bộ, nên mình tổng hợp nguồn internet liên quan."
-                )
-
-            lines.append("")
-            lines.append("**Thông tin tổng hợp từ internet (đã lọc nhiễu)**")
-            lines.extend(self._format_web_reference_rows(selected_results[:2]))
-            lines.append("")
-            lines.append("**Nguồn tham khảo**")
-            lines.extend(self._format_web_reference_rows(selected_results, include_snippet=False))
-            return "\n".join(lines)
-
-        if (
-            "performance ratio" in normalized_message
-            or "capacity factor" in normalized_message
-            or "he so cong suat" in normalized_message
-            or "ti le hieu suat" in normalized_message
-        ):
-            lines.extend(
-                [
-                    "Theo nguồn kỹ thuật bên ngoài, Performance Ratio (PR) là tỷ lệ giữa sản lượng AC thực tế và sản lượng kỳ vọng sau khi quy đổi theo bức xạ mặt trời.",
-                    "PR phản ánh mức tổn thất vận hành của hệ PV (nhiệt độ, inverter, cáp, bụi bẩn, suy hao thiết bị).",
-                    "Trong hệ thống của bạn, hiện đang dùng capacity_factor_pct như chỉ số proxy để so sánh tương đối giữa các trạm vì chưa có cột PR chuẩn trực tiếp cho mọi bản ghi.",
-                ]
-            )
-        else:
-            lines.append(
-                "Mình chưa có dữ liệu nội bộ trực tiếp cho định nghĩa này, nên đã đối chiếu thêm nguồn kỹ thuật bên ngoài."
-            )
-            lines.extend(self._format_web_reference_rows(selected_results[:2]))
-
-        lines.append("")
-        lines.append("**Nguồn tham khảo**")
-        lines.extend(self._format_web_reference_rows(selected_results, include_snippet=False))
-
-        return "\n".join(lines)
-
-    def _format_web_reference_rows(
-        self,
-        selected_results: list["WebSearchResult"],
-        *,
-        include_snippet: bool = True,
-    ) -> list[str]:
-        rows: list[str] = []
-        for index, row in enumerate(selected_results, start=1):
-            title = row.title.strip() or f"Source {index}"
-            url = row.url.strip()
-            rows.append(f"{index}. [{title}]({url})")
-            if include_snippet:
-                snippet = self._clean_web_snippet(row.snippet)
-                if not snippet:
-                    snippet = self._clean_web_snippet(row.title)
-                if snippet:
-                    if self._is_noisy_web_snippet(snippet):
-                        rows.append(
-                            "- Tóm tắt: Nguồn này cung cấp hồ sơ dự án, vị trí vận hành và quy mô công suất của trạm."
-                        )
-                    else:
-                        rows.append(f"- Tóm tắt: {self._short(snippet, 220)}")
-        return rows
-
-    @staticmethod
-    def _clean_web_snippet(value: str | None) -> str:
-        text = str(value or "").strip()
-        if not text:
-            return ""
-
-        text = text.replace("\r", " ").replace("\n", " ")
-        text = re.sub(r"\|+", " ", text)
-        text = re.sub(r"#{1,6}\s*", " ", text)
-        text = re.sub(r"-{2,}", " ", text)
-        text = re.sub(r"\bwikipedia\b", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bthe free encyclopedia\b", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"\bcontents\b", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s+", " ", text)
-        return text.strip(" .:-")
-
-    @staticmethod
-    def _is_noisy_web_snippet(text: str) -> bool:
-        lowered = str(text or "").lower()
-        noise_terms = ("country", "location", "coordinates", "map", "contents")
-        noise_hits = sum(1 for term in noise_terms if term in lowered)
-        if noise_hits >= 2:
-            return True
-
-        token_count = len(lowered.split())
-        has_sentence_break = any(mark in lowered for mark in (".", "!", "?", ";", ":"))
-        if token_count >= 28 and not has_sentence_break:
-            return True
-
-        return False
-
-    @staticmethod
-    def _is_top_capacity_request(normalized_message: str) -> bool:
-        markers = (
-            "lon nhat",
-            "largest",
-            "biggest",
-            "max capacity",
-            "capacity lon nhat",
-            "cong suat lon nhat",
-            "highest capacity",
-        )
-        return any(marker in normalized_message for marker in markers)
-
-    @staticmethod
-    def _is_bottom_capacity_request(normalized_message: str) -> bool:
-        markers = (
-            "nho nhat",
-            "thap nhat",
-            "smallest",
-            "lowest",
-            "minimum",
-            "min capacity",
-            "capacity nho nhat",
-            "capacty nho nhat",
-            "cong suat nho nhat",
-            "lowest capacity",
-        )
-        return any(marker in normalized_message for marker in markers)
-
-    @staticmethod
-    def _extract_facility_rows(metrics: dict[str, Any]) -> list[dict[str, Any]]:
-        rows = metrics.get("facilities", []) if isinstance(metrics, dict) else []
-        if not isinstance(rows, list):
-            return []
-        return [row for row in rows if isinstance(row, dict)]
-
-    @staticmethod
-    def _extract_capacity_mw(row: dict[str, Any]) -> float:
-        raw = row.get("total_capacity_mw")
-        if raw is None:
-            raw = row.get("capacity_mw")
-        if raw is None:
-            raw = row.get("capacity")
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return 0.0
-
-    def _resolve_facility_station_context(
-        self,
-        normalized_message: str,
-        metrics: dict[str, Any],
-    ) -> tuple[str | None, float | None]:
-        facilities = self._extract_facility_rows(metrics)
-        if not facilities:
-            return None, None
-
-        for row in facilities:
-            name = str(row.get("facility_name") or row.get("facility") or "").strip()
-            if not name:
-                continue
-            normalized_name = self._normalize_for_matching(name)
-            if normalized_name and normalized_name in normalized_message:
-                return name, self._extract_capacity_mw(row)
-
-        if self._is_bottom_capacity_request(normalized_message):
-            bottom_row = min(
-                facilities,
-                key=self._extract_capacity_mw,
-            )
-            bottom_name = str(bottom_row.get("facility_name") or bottom_row.get("facility") or "").strip()
-            if bottom_name:
-                return bottom_name, self._extract_capacity_mw(bottom_row)
-
-        if self._is_top_capacity_request(normalized_message):
-            top_row = max(
-                facilities,
-                key=self._extract_capacity_mw,
-            )
-            top_name = str(top_row.get("facility_name") or top_row.get("facility") or "").strip()
-            if top_name:
-                return top_name, self._extract_capacity_mw(top_row)
-
-        return None, None
-
-    def _detect_topic_from_text(self, message: str) -> ChatTopic:
-        normalized = self._normalize_for_matching(message)
-        if self._is_top_facility_comparison_query(normalized):
-            return ChatTopic.ENERGY_PERFORMANCE
-        try:
-            return self._intent_service.detect_intent(message).topic
-        except Exception:
-            logger.debug("Intent detection failed for topic text mapping, defaulting to GENERAL.")
-            return ChatTopic.GENERAL
-
-    @staticmethod
-    def _is_top_facility_comparison_query(normalized_message: str) -> bool:
-        compare_markers = ("so sanh", "compare", "comparison", "versus", " vs ")
-        facility_markers = ("facility", "facilities", "tram", "co so", "nha may")
-        ranking_markers = (
-            "top",
-            "top 2",
-            "largest",
-            "highest",
-            "lon nhat",
-            "2 facilities",
-            "2 facility",
-            "hai tram",
-            "hai co so",
-        )
-        has_compare = any(marker in normalized_message for marker in compare_markers)
-        has_facility = any(marker in normalized_message for marker in facility_markers)
-        has_ranking = any(marker in normalized_message for marker in ranking_markers)
-        return has_compare and has_facility and has_ranking
-
-    @staticmethod
-    def _parse_json_object(text: str) -> dict[str, Any] | None:
-        candidates: list[str] = []
-        stripped = str(text or "").strip()
-        if stripped:
-            candidates.append(stripped)
-
-        if "```" in stripped:
-            non_fence_lines = [line for line in stripped.splitlines() if not line.strip().startswith("```")]
-            joined = "\n".join(non_fence_lines).strip()
-            if joined:
-                candidates.append(joined)
-
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            candidates.append(stripped[start : end + 1])
-
-        for candidate in candidates:
-            try:
-                payload = json.loads(candidate)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                return payload
-        return None
-
-    def _plan_topic_with_llm(
-        self,
-        message: str,
-        history_messages: list[ChatMessage],
-    ) -> IntentDetectionResult | None:
-        if self._model_router is None:
-            return None
-
-        topic_values = [topic.value for topic in ChatTopic]
-        recent = history_messages[-LLM_PLANNER_HISTORY_LIMIT:]
-        history_lines = [
-            f"- {msg.sender}: {self._short(msg.content, 180)}"
-            for msg in recent
-        ]
-        history_block = "\n".join(history_lines) if history_lines else "- (no history)"
-
-        planner_prompt = (
-            "You are a routing planner for Solar AI Chat.\n"
-            "Task: choose exactly one topic label for the current user query.\n"
-            f"Allowed topics: {', '.join(topic_values)}\n"
-            "Return ONLY valid JSON in one line with this schema:\n"
-            '{"topic":"<allowed_topic>","confidence":<number_0_to_1>}\n'
-            "Do not include markdown or extra text.\n"
-            f"Recent conversation:\n{history_block}\n"
-            f"Current user message: {message}"
-        )
-
-        try:
-            planner_result = self._model_router.generate(planner_prompt)
-        except Exception as planner_error:
-            logger.warning("solar_chat_llm_planner_failed error=%s", planner_error)
-            return None
-
-        payload = self._parse_json_object(planner_result.text)
-        if not payload:
-            logger.info("solar_chat_llm_planner_invalid_json text=%s", self._short(planner_result.text, 240))
-            return None
-
-        topic_raw = str(payload.get("topic") or "").strip().lower()
-        if topic_raw not in topic_values:
-            logger.info("solar_chat_llm_planner_unknown_topic topic=%s", topic_raw)
-            return None
-
-        raw_confidence = payload.get("confidence", 0.0)
-        try:
-            confidence = float(raw_confidence)
-        except (TypeError, ValueError):
-            confidence = 0.0
-        confidence = max(0.0, min(1.0, confidence))
-
-        if confidence < LLM_PLANNER_MIN_CONFIDENCE:
-            logger.info(
-                "solar_chat_llm_planner_low_confidence topic=%s confidence=%.2f threshold=%.2f",
-                topic_raw,
-                confidence,
-                LLM_PLANNER_MIN_CONFIDENCE,
-            )
-            return None
-
-        logger.info(
-            "solar_chat_llm_planner_selected topic=%s confidence=%.2f model=%s fallback=%s",
-            topic_raw,
-            confidence,
-            planner_result.model_used,
-            planner_result.fallback_used,
-        )
-        return IntentDetectionResult(
-            topic=ChatTopic(topic_raw),
-            confidence=round(confidence, 2),
-        )
+    # ------------------------------------------------------------------
+    # History
+    # ------------------------------------------------------------------
 
     def _load_history(self, session_id: str | None) -> list[ChatMessage]:
         if not session_id or not self._history_repository:
@@ -1587,6 +1139,42 @@ class SolarAIChatService:
             return
         self._history_repository.add_message(session_id=session_id, sender="user", content=user_message)
         self._history_repository.add_message(
-            session_id=session_id, sender="assistant", content=answer,
-            topic=topic, sources=sources,
+            session_id=session_id,
+            sender="assistant",
+            content=answer,
+            topic=topic,
+            sources=sources,
         )
+
+    # ------------------------------------------------------------------
+    # Backward-compat static helpers (used by existing unit tests)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_extreme_metric_query(message: str) -> ExtremeMetricQuery | None:
+        return extract_extreme_metric_query(message)
+
+    @staticmethod
+    def _extract_timeframe(message: str, specific_hour: int | None = None) -> str:
+        normed = normalize_vietnamese_text(message)
+        return extract_timeframe(normed, specific_hour=specific_hour)
+
+    @staticmethod
+    def _short(value: Any, limit: int = 300) -> str:
+        text = str(value)
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
+
+    @staticmethod
+    def _normalize_for_matching(value: str) -> str:
+        lowered = str(value or "").strip().lower()
+        without_marks = normalize("NFD", lowered)
+        return "".join(c for c in without_marks if ord(c) < 128)
+
+    def _validate_role(self, topic: ChatTopic, role: ChatRole) -> None:
+        allowed_topics = ROLE_TOPIC_PERMISSIONS.get(role, set())
+        if topic not in allowed_topics:
+            raise PermissionError(
+                f"Role '{role.value}' is not allowed to access topic '{topic.value}'."
+            )

@@ -10,6 +10,7 @@ from app.core.settings import get_solar_chat_settings
 from app.repositories.solar_ai_chat.databricks_history_repository import DatabricksChatHistoryRepository
 from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
+from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
 from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
     ChatRole,
@@ -114,6 +115,15 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
         vector_repo=_get_vector_repository(),
         embedding_client=embedding_client,
         web_search_client=_get_web_search_client(),
+        planner_enabled=settings.planner_enabled,
+        orchestrator_enabled=settings.orchestrator_enabled,
+        verifier_enabled=settings.verifier_enabled,
+        hybrid_retrieval_enabled=settings.hybrid_retrieval_enabled,
+        max_tool_steps=settings.max_tool_steps,
+        legacy_router_enabled=settings.legacy_router_enabled,
+        planner_max_output_tokens=settings.llm_planner_max_output_tokens,
+        synthesis_max_output_tokens=settings.llm_synthesis_max_output_tokens,
+        verifier_max_output_tokens=settings.llm_verifier_max_output_tokens,
     )
 
 
@@ -159,6 +169,14 @@ def query_solar_ai_chat(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(value_error),
         ) from value_error
+    except DatabricksDataUnavailableError as databricks_error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Databricks is temporarily unavailable. "
+                "No fallback data was used. Please retry shortly."
+            ),
+        ) from databricks_error
     except Exception as unexpected_error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -196,6 +214,14 @@ def benchmark_solar_ai_chat_query(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(value_error),
         ) from value_error
+    except DatabricksDataUnavailableError as databricks_error:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Databricks is temporarily unavailable. "
+                "No fallback data was used. Please retry shortly."
+            ),
+        ) from databricks_error
     except Exception as unexpected_error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

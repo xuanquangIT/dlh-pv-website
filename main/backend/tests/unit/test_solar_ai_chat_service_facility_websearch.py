@@ -1,8 +1,16 @@
+"""Tests for SolarAIChatService — web search via agentic web_lookup tool call.
+
+In the new architecture web search is triggered when the LLM requests the
+web_lookup tool, not by heuristic text matching.  These tests mock the LLM to
+produce a web_lookup function call and verify the service executes the search,
+returns results to the LLM, and finalises the response correctly.
+"""
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from app.schemas.solar_ai_chat import ChatRole, ChatTopic, SolarChatRequest
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
+from app.services.solar_ai_chat.llm_client import LLMToolResult, ToolCallRequest
 from app.services.solar_ai_chat.web_search_client import WebSearchResult
 
 
@@ -17,283 +25,160 @@ class StubWebSearchClient:
         return list(self._results)
 
 
-def _facility_metrics_payload() -> tuple[dict, list[dict[str, str]]]:
+def _facility_metrics():
     return (
         {
             "facility_count": 3,
             "facilities": [
-                {
-                    "facility_name": "Avonlie",
-                    "location_lat": -34.913826,
-                    "location_lng": 146.590545,
-                    "total_capacity_mw": 254.1,
-                    "timezone_name": "Australia/Eastern",
-                    "timezone_utc_offset": "UTC+10:00",
-                },
-                {
-                    "facility_name": "Darlington Point",
-                    "location_lat": -34.648971,
-                    "location_lng": 146.061179,
-                    "total_capacity_mw": 324.0,
-                    "timezone_name": "Australia/Eastern",
-                    "timezone_utc_offset": "UTC+10:00",
-                },
-                {
-                    "facility_name": "Emerald",
-                    "location_lat": -23.507996,
-                    "location_lng": 148.126404,
-                    "total_capacity_mw": 88.0,
-                    "timezone_name": "Australia/Eastern",
-                    "timezone_utc_offset": "UTC+10:00",
-                },
+                {"facility_name": "Darlington Point", "total_capacity_mw": 324.0, "timezone_name": "Australia/Eastern"},
+                {"facility_name": "Avonlie", "total_capacity_mw": 254.1, "timezone_name": "Australia/Eastern"},
+                {"facility_name": "Emerald", "total_capacity_mw": 88.0, "timezone_name": "Australia/Eastern"},
             ],
         },
         [{"layer": "Gold", "dataset": "gold.dim_facility", "data_source": "databricks"}],
     )
 
 
-def test_explicit_internet_request_for_largest_capacity_station_uses_web_search() -> None:
+def _build_service_with_web_search(web_results, llm_side_effect):
     repository = MagicMock()
-    repository.fetch_topic_metrics.return_value = _facility_metrics_payload()
-
+    repository.fetch_topic_metrics.return_value = _facility_metrics()
     intent_service = MagicMock()
+    # Confidence below pre-fetch threshold (0.6) so the agentic loop runs
+    # and the LLM can request web_lookup as expected by these tests.
     intent_service.detect_intent.return_value = SimpleNamespace(
-        topic=ChatTopic.FACILITY_INFO,
-        confidence=0.9,
+        topic=ChatTopic.FACILITY_INFO, confidence=0.5
     )
+    web_client = StubWebSearchClient(web_results)
 
-    web_search_client = StubWebSearchClient(
-        [
-            WebSearchResult(
-                title="Darlington Point Solar Farm - Overview",
-                url="https://example.com/darlington-point-overview",
-                snippet="Darlington Point Solar Farm is one of the largest utility-scale PV plants in Australia.",
-                score=0.98,
-            ),
-            WebSearchResult(
-                title="NSW Planning - Darlington Point details",
-                url="https://example.com/darlington-point-planning",
-                snippet="Project profile covering location, commissioning, and installed capacity.",
-                score=0.86,
-            ),
-        ]
-    )
+    model_router = MagicMock()
+    model_router.generate_with_tools.side_effect = llm_side_effect
 
-    service = SolarAIChatService(
+    return SolarAIChatService(
         repository=repository,
         intent_service=intent_service,
-        model_router=None,
+        model_router=model_router,
         history_repository=None,
-        web_search_client=web_search_client,
-    )
+        web_search_client=web_client,
+    ), web_client
+
+
+# ---------------------------------------------------------------------------
+# LLM-triggered web search
+# ---------------------------------------------------------------------------
+
+
+def test_llm_web_lookup_results_are_passed_back_to_llm() -> None:
+    """When LLM autonomously requests web_lookup (not user-triggered), the
+    service executes it and returns results so the LLM can synthesise an answer.
+
+    Note: user-triggered web searches ("search internet ...") now use the
+    direct web-search path (test_solar_ai_chat_web_search_direct.py).
+    This test covers the agentic path where the LLM itself decides to search.
+    """
+    web_results = [
+        WebSearchResult(
+            title="Darlington Point Solar Farm - Overview",
+            url="https://example.com/darlington-point",
+            snippet="Darlington Point Solar Farm is one of the largest PV plants in Australia.",
+            score=0.98,
+        ),
+    ]
+
+    llm_side_effect = [
+        # Step 1: LLM autonomously requests web_lookup
+        LLMToolResult(
+            function_call=ToolCallRequest(
+                name="web_lookup",
+                arguments={"query": "Darlington Point solar farm capacity NSW"},
+            ),
+            text=None,
+            model_used="gemini-mock",
+            fallback_used=False,
+        ),
+        # Step 2: LLM synthesises answer using web results
+        LLMToolResult(
+            function_call=None,
+            text="Darlington Point Solar Farm là trạm lớn nhất với công suất 324 MW.",
+            model_used="gemini-mock",
+            fallback_used=False,
+        ),
+    ]
+
+    service, web_client = _build_service_with_web_search(web_results, llm_side_effect)
 
     response = service.handle_query(
         SolarChatRequest(
-            message=(
-                "Trạm có capacity lớn nhất là trạm nào, thông tin chi tiết trạm đó "
-                "tìm thông tin trạm trên internet"
-            ),
+            # No "internet"/"search" keywords — goes through agentic loop, not direct path
+            message="Cho tôi biết thêm thông tin về trạm Darlington Point",
             role=ChatRole.DATA_ENGINEER,
             session_id=None,
         )
     )
 
-    assert response.topic == ChatTopic.FACILITY_INFO
-    assert response.model_used == "web-search-fallback"
-    assert response.fallback_used is True
-    assert response.key_metrics.get("web_search_used") is True
-    assert response.key_metrics.get("web_search_source_count") == 2
     assert "Darlington Point" in response.answer
-    assert "Nguồn tham khảo" in response.answer
-    assert web_search_client.queries
-    assert "Darlington Point solar farm" in web_search_client.queries[0]
+    assert response.model_used == "gemini-mock"
+    assert response.fallback_used is False
+    # Web search was executed
+    assert len(web_client.queries) == 1
+    assert "Darlington Point" in web_client.queries[0]
 
 
-def test_explicit_internet_request_for_smallest_capacity_station_uses_web_search() -> None:
-    repository = MagicMock()
-    repository.fetch_topic_metrics.return_value = _facility_metrics_payload()
-
-    intent_service = MagicMock()
-    intent_service.detect_intent.return_value = SimpleNamespace(
-        topic=ChatTopic.FACILITY_INFO,
-        confidence=0.9,
-    )
-
-    web_search_client = StubWebSearchClient(
-        [
-            WebSearchResult(
-                title="Emerald Solar Farm profile",
-                url="https://example.com/emerald-solar-farm",
-                snippet="Emerald Solar Farm in Queensland includes utility-scale photovoltaic generation assets.",
-                score=0.93,
+def test_web_search_disabled_returns_error_to_llm_but_still_answers() -> None:
+    """When web search client is disabled, the service returns an error response
+    to the LLM tool call and the LLM should still produce a final answer."""
+    service, web_client = _build_service_with_web_search([], [
+        LLMToolResult(
+            function_call=ToolCallRequest(
+                name="web_lookup",
+                arguments={"query": "solar farm info"},
             ),
-            WebSearchResult(
-                title="Queensland energy project note",
-                url="https://example.com/qld-energy-emerald",
-                snippet="Project note describing Emerald solar generation, site location and installed capacity.",
-                score=0.84,
-            ),
-        ]
-    )
+            text=None,
+            model_used="gemini-mock",
+            fallback_used=False,
+        ),
+        LLMToolResult(
+            function_call=None,
+            text="Xin loi, khong co ket qua web.",
+            model_used="gemini-mock",
+            fallback_used=False,
+        ),
+    ])
+    # Disable web search
+    web_client.enabled = False
 
+    response = service.handle_query(
+        SolarChatRequest(
+            message="Tim thong tin tren internet",
+            role=ChatRole.DATA_ENGINEER,
+            session_id=None,
+        )
+    )
+    # Should still produce an answer (LLM handles gracefully)
+    assert response.answer  # non-empty
+    # Web search was NOT executed (disabled)
+    assert len(web_client.queries) == 0
+
+
+def test_no_llm_returns_insufficient_data_response() -> None:
+    """With model_router=None the service cannot do agentic reasoning and
+    returns the structured unavailability notice."""
+    web_client = StubWebSearchClient([])
     service = SolarAIChatService(
-        repository=repository,
-        intent_service=intent_service,
+        repository=MagicMock(),
+        intent_service=MagicMock(),
         model_router=None,
         history_repository=None,
-        web_search_client=web_search_client,
+        web_search_client=web_client,
     )
 
     response = service.handle_query(
         SolarChatRequest(
-            message="Trạm có capacty nhỏ nhất, tìm thông tin trạm đó trên internet",
+            message="Tìm thông tin trên internet",
             role=ChatRole.DATA_ENGINEER,
             session_id=None,
         )
     )
 
-    assert response.topic == ChatTopic.FACILITY_INFO
-    assert response.model_used == "web-search-fallback"
-    assert "capacity nhỏ nhất" in response.answer
-    assert "Emerald" in response.answer
-    assert web_search_client.queries
-    assert "Emerald solar farm" in web_search_client.queries[0]
-
-
-def test_irrelevant_facility_web_results_are_rejected() -> None:
-    repository = MagicMock()
-    repository.fetch_topic_metrics.return_value = _facility_metrics_payload()
-
-    intent_service = MagicMock()
-    intent_service.detect_intent.return_value = SimpleNamespace(
-        topic=ChatTopic.FACILITY_INFO,
-        confidence=0.9,
-    )
-
-    web_search_client = StubWebSearchClient(
-        [
-            WebSearchResult(
-                title="Trạm vũ trụ Quốc tế - Wikipedia tiếng Việt",
-                url="https://vi.wikipedia.org/wiki/Tr%E1%BA%A1m_v%C5%A9_tr%E1%BB%A5_Qu%E1%BB%91c_t%E1%BA%BF",
-                snippet="Trạm vũ trụ Quốc tế là trạm nghiên cứu trong quỹ đạo thấp của Trái Đất.",
-                score=0.99,
-            ),
-            WebSearchResult(
-                title="Trạm sạc xe điện SolarEV",
-                url="https://example.com/solarev",
-                snippet="Mạng lưới trạm sạc xe điện tại Việt Nam.",
-                score=0.88,
-            ),
-        ]
-    )
-
-    service = SolarAIChatService(
-        repository=repository,
-        intent_service=intent_service,
-        model_router=None,
-        history_repository=None,
-        web_search_client=web_search_client,
-    )
-
-    response = service.handle_query(
-        SolarChatRequest(
-            message="Trạm có capacity lớn nhất là trạm nào, tìm thông tin trạm đó trên internet",
-            role=ChatRole.DATA_ENGINEER,
-            session_id=None,
-        )
-    )
-
-    assert response.topic == ChatTopic.FACILITY_INFO
-    assert response.model_used == "deterministic-summary"
-    assert "web_search_used" not in response.key_metrics
-    assert "Trạm vũ trụ Quốc tế" not in response.answer
-    assert "SolarEV" not in response.answer
-
-
-def test_facility_query_without_internet_request_keeps_deterministic_summary() -> None:
-    repository = MagicMock()
-    repository.fetch_topic_metrics.return_value = _facility_metrics_payload()
-
-    intent_service = MagicMock()
-    intent_service.detect_intent.return_value = SimpleNamespace(
-        topic=ChatTopic.FACILITY_INFO,
-        confidence=0.9,
-    )
-
-    web_search_client = StubWebSearchClient(
-        [
-            WebSearchResult(
-                title="Darlington Point Solar Farm - Overview",
-                url="https://example.com/darlington-point-overview",
-                snippet="Utility-scale PV station profile.",
-                score=0.98,
-            )
-        ]
-    )
-
-    service = SolarAIChatService(
-        repository=repository,
-        intent_service=intent_service,
-        model_router=None,
-        history_repository=None,
-        web_search_client=web_search_client,
-    )
-
-    response = service.handle_query(
-        SolarChatRequest(
-            message="Trạm có capacity lớn nhất là trạm nào?",
-            role=ChatRole.DATA_ENGINEER,
-            session_id=None,
-        )
-    )
-
-    assert response.topic == ChatTopic.FACILITY_INFO
-    assert response.model_used == "deterministic-summary"
-    assert "web_search_used" not in response.key_metrics
-    assert web_search_client.queries == []
-
-
-def test_facility_web_search_sanitizes_noisy_snippets() -> None:
-    repository = MagicMock()
-    repository.fetch_topic_metrics.return_value = _facility_metrics_payload()
-
-    intent_service = MagicMock()
-    intent_service.detect_intent.return_value = SimpleNamespace(
-        topic=ChatTopic.FACILITY_INFO,
-        confidence=0.9,
-    )
-
-    web_search_client = StubWebSearchClient(
-        [
-            WebSearchResult(
-                title="Darlington Point public profile",
-                url="https://example.com/darlington-point-profile",
-                snippet=(
-                    "Wikipedia The Free Encyclopedia | Country Australia | Location NSW "
-                    "| Coordinates 34.6S 146.0E | Capacity 324 MW | Map | Contents"
-                ),
-                score=0.95,
-            )
-        ]
-    )
-
-    service = SolarAIChatService(
-        repository=repository,
-        intent_service=intent_service,
-        model_router=None,
-        history_repository=None,
-        web_search_client=web_search_client,
-    )
-
-    response = service.handle_query(
-        SolarChatRequest(
-            message="Trạm lớn nhất là trạm nào, tìm thông tin trạm đó trên internet",
-            role=ChatRole.DATA_ENGINEER,
-            session_id=None,
-        )
-    )
-
-    assert response.model_used == "web-search-fallback"
-    assert "Tóm tắt: Nguồn này cung cấp hồ sơ dự án" in response.answer
-    assert "The Free Encyclopedia" not in response.answer
-    assert "|" not in response.answer
+    assert response.fallback_used is True
+    assert response.model_used == "none"
+    assert len(web_client.queries) == 0  # web search never triggered
