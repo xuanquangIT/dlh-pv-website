@@ -47,6 +47,7 @@ from app.services.solar_ai_chat.nlp_parser import (
     extract_extreme_metric_query,
     extract_query_date,
     extract_timeframe,
+    expand_facility_codes_in_message,
 )
 from app.services.solar_ai_chat.permissions import ROLE_TOPIC_PERMISSIONS, ROLE_TOOL_PERMISSIONS
 from app.services.solar_ai_chat.prompt_builder import (
@@ -418,6 +419,19 @@ class SolarAIChatService:
          * Decides which tools to call and in what sequence
          * Synthesises the final answer after collecting all tool results
         """
+        # Bug #5: Expand facility ID codes (e.g. WRSF1 → "White Rock Solar Farm")
+        # BEFORE language detection and intent classification so the LLM and
+        # intent service receive meaningful station names, not opaque codes.
+        expanded_message = expand_facility_codes_in_message(request.message)
+        if expanded_message != request.message:
+            logger.info(
+                "solar_chat_facility_code_expand trace_id=%s original=%r expanded=%r",
+                trace_id,
+                request.message,
+                expanded_message,
+            )
+            request = request.model_copy(update={"message": expanded_message})
+
         language = self._query_rewriter.rewrite(request.message).language
 
         # No LLM -> cannot do agentic reasoning

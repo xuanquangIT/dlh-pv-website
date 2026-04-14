@@ -174,6 +174,7 @@ class TopicRepository(BaseRepository):
             "       SUM(energy_mwh) AS total_mwh"
             " FROM gold.fact_energy"
             f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            "   AND energy_mwh > 0"
             " GROUP BY EXTRACT(HOUR FROM date_hour)"
             " ORDER BY total_mwh DESC LIMIT 3"
         )
@@ -242,7 +243,10 @@ class TopicRepository(BaseRepository):
             facility_totals[facility] += energy
             dt = self._parse_datetime(row.get("date_hour"))
             if dt is not None:
-                hour_totals[dt.hour] += energy
+                # Only count daytime hours (non-zero production) to avoid
+                # night peaks caused by zero-value nighttime rows (Bug #1).
+                if energy > 0:
+                    hour_totals[dt.hour] += energy
                 daily_totals[dt.date().isoformat()] += energy
 
         for row in gold_fact:
@@ -489,7 +493,9 @@ class TopicRepository(BaseRepository):
                 issue = f"status={status_value}, bronze_failed={bronze_failed}, silver_failed={silver_failed}"
                 alerts.append(
                     {
-                        "facility": str(row.get("pipeline_name") or "pipeline"),
+                        # Use "pipeline_name" (not "facility") — these are Databricks
+                        # workflow job names, NOT solar facility names (Bug #3).
+                        "pipeline_name": str(row.get("pipeline_name") or "pipeline"),
                         "quality_flag": "WARNING",
                         "issue": issue,
                     }
@@ -604,20 +610,24 @@ class TopicRepository(BaseRepository):
             "SELECT CAST(forecast_date AS DATE) AS day,"
             "       SUM(predicted_energy_mwh_daily) AS expected_mwh"
             " FROM gold.forecast_daily"
-            " WHERE CAST(forecast_date AS DATE) BETWEEN current_date() AND date_add(current_date(), 2)"
+            " WHERE CAST(forecast_date AS DATE) >= current_date()"
+            "   AND CAST(forecast_date AS DATE) < date_add(current_date(), 3)"
             " GROUP BY CAST(forecast_date AS DATE)"
             " ORDER BY day ASC"
         )
 
         if len(rows) < 3:
-            latest_rows = self._safe_execute_query(
+            # Fallback: look for the nearest FUTURE dates available in the table.
+            # Never fall back to past dates — that would mislead the user.
+            future_rows = self._safe_execute_query(
                 "SELECT CAST(forecast_date AS DATE) AS day,"
                 "       SUM(predicted_energy_mwh_daily) AS expected_mwh"
                 " FROM gold.forecast_daily"
+                " WHERE CAST(forecast_date AS DATE) >= current_date()"
                 " GROUP BY CAST(forecast_date AS DATE)"
-                " ORDER BY day DESC LIMIT 3"
+                " ORDER BY day ASC LIMIT 3"
             )
-            rows = list(reversed(latest_rows))
+            rows = future_rows if future_rows else rows
 
         if not rows:
             return {"daily_forecast": []}

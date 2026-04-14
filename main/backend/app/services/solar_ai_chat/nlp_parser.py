@@ -96,6 +96,59 @@ def topic_for_extreme_metric(metric_name: str) -> ChatTopic:
     return ChatTopic.ENERGY_PERFORMANCE
 
 
+# ---------------------------------------------------------------------------
+# Facility ID ↔ name mapping (Bug #5)
+# Maps the short facility codes used in the data platform to human-readable
+# station names that the LLM and tool executor understand.
+# ---------------------------------------------------------------------------
+FACILITY_ID_MAP: dict[str, str] = {
+    "WRSF1": "White Rock Solar Farm",
+    "AVLSF": "Avonlie Solar Farm",
+    "BOMENSF": "Bomen Solar Farm",
+    "YATSF1": "Yatpool Solar Farm",
+    "LIMOSF2": "Limondale Solar Farm",
+    "FINLEYSF": "Finley Solar Farm",
+    "EMERASF": "Emerald Solar Farm",
+    "DARLSF": "Darlington Point Solar Farm",
+    # Common short-forms / aliases
+    "WRSF": "White Rock Solar Farm",
+    "EMERA": "Emerald Solar Farm",
+    "DARL": "Darlington Point Solar Farm",
+    "AVON": "Avonlie Solar Farm",
+    "BOMEN": "Bomen Solar Farm",
+    "YATPOOL": "Yatpool Solar Farm",
+    "LIMO": "Limondale Solar Farm",
+    "FINLEY": "Finley Solar Farm",
+}
+
+# Lower-cased facility codes for case-insensitive lookup
+_FACILITY_ID_MAP_LOWER: dict[str, str] = {k.lower(): v for k, v in FACILITY_ID_MAP.items()}
+
+
+def resolve_facility_code(token: str) -> str | None:
+    """Return the full facility name for a facility code token, or None if unknown."""
+    return _FACILITY_ID_MAP_LOWER.get(token.strip().lower())
+
+
+def expand_facility_codes_in_message(message: str) -> str:
+    """Replace any facility ID codes in *message* with their full names.
+
+    This ensures the LLM and downstream tools receive understandable station
+    names even when the user types abbreviated codes such as WRSF1 or EMERASF.
+    """
+    words = re.split(r"(\s+)", message)
+    expanded: list[str] = []
+    for word in words:
+        clean = word.strip().rstrip(".,;:?!\"'")
+        suffix = word[len(clean):]
+        full_name = _FACILITY_ID_MAP_LOWER.get(clean.lower())
+        if full_name:
+            expanded.append(full_name + suffix)
+        else:
+            expanded.append(word)
+    return "".join(expanded)
+
+
 def make_extreme_query(
     metric_name: str, query_type: str, timeframe: str, specific_hour: int | None,
 ) -> ExtremeMetricQuery:
@@ -155,6 +208,13 @@ def _is_ranking_request(normalized_message: str) -> bool:
 def extract_timeframe(normalized_message: str, specific_hour: int | None = None) -> str:
     if specific_hour is not None:
         return "hour"
+    # Bug #6: detect "all time" / "historical record" requests
+    if any(m in normalized_message for m in (
+        "lich su", "all time", "alltime", "moi thoi gian",
+        "tat ca thoi gian", "lich su toan bo", "record lich su",
+        "toan bo lich su", "ever", "all-time", "historical",
+    )):
+        return "all_time"
     if any(m in normalized_message for m in ("24 gio", "24h", "24 h")):
         return "24h"
     if any(m in normalized_message for m in ("1 gio", "1h", "1 h", "theo gio", "moi gio")):

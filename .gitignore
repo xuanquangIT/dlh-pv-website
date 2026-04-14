@@ -56,3 +56,5 @@ htmlcov/
 
 # Chat session history (runtime data, never committed)
 **/chat_history/
+
+**/test_reports/

@@ -462,6 +462,11 @@
     this.textarea.value = "";
   };
 
+  // Bug #9: allow pre-filling the textarea for chip/quick-action clicks
+  MessageInput.prototype.setValue = function (text) {
+    this.textarea.value = text;
+  };
+
   function initSolarChatPage() {
     const messagesElement = document.getElementById("page-chat-messages");
     const inputElement = document.getElementById("page-chat-input");
@@ -1157,6 +1162,7 @@
     });
 
     pipelineButton.addEventListener("click", async function () {
+      messageInput.setValue("Show latest pipeline status");
       await sendMessageFlow("Show latest pipeline status");
     });
 
@@ -1364,10 +1370,13 @@
 
     document.querySelectorAll("[data-chat-prompt]").forEach(function (button) {
       button.addEventListener("click", async function () {
-        const prompt = button.getAttribute("data-chat-prompt") || "";
+        const prompt = (button.getAttribute("data-chat-prompt") || "").trim();
         if (!prompt) {
           return;
         }
+        // Bug #9: populate textarea so the user sees what will be sent,
+        // then dispatch the send (matches chatbot_widget chip behaviour).
+        messageInput.setValue(prompt);
         await sendMessageFlow(prompt);
       });
     });

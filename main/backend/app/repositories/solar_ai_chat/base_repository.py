@@ -327,6 +327,12 @@ class BaseRepository:
             ys = resolved_anchor_date.replace(month=1, day=1)
             ye = ys.replace(year=ys.year + 1)
             return datetime.combine(ys, datetime.min.time()), datetime.combine(ye, datetime.min.time()), str(ys.year)
+        # Bug #6: "all_time" / "history" timeframe → use a very wide historical
+        # window (10 years back to today) so extreme queries return true records.
+        if timeframe in ("all_time", "history", "all"):
+            far_past = datetime(resolved_anchor_date.year - 10, 1, 1)
+            far_future = day_start + timedelta(days=1)
+            return far_past, far_future, "all time"
         return day_start, day_start + timedelta(days=1), resolved_anchor_date.isoformat()
 
     def _deduplicate_stations(self, rows: list[dict[str, Any]], highest: bool) -> list[dict[str, Any]]:
