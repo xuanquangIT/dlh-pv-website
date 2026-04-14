@@ -72,9 +72,15 @@ class VietnameseIntentService:
         ChatTopic.ML_MODEL: (
             "mo hinh",
             "model",
+            "fallback",
+            "du phong",
             "gbt",
             "v4.2",
             "v4.1",
+            "version",
+            "model version",
+            "current version",
+            "forecast model",
             "tham so",
             "model r-squared",
             "r-squared model",
@@ -113,16 +119,7 @@ class VietnameseIntentService:
             "top 5",
             "2 facilities",
             "2 facility",
-            "largest facilities",
-            "highest facilities",
-            "facility lon nhat",
-            "facilities lon nhat",
             "top facilities",
-            "lon nhat",
-            "nho nhat",
-            "tram lon nhat",
-            "nha may lon nhat",
-            "co so lon nhat",
             "2 tram",
             "hai tram",
             "3 tram",
@@ -162,6 +159,19 @@ class VietnameseIntentService:
             "longitude",
             "cong suat",
             "capacity",
+            "cong suat lap dat",
+            "installed capacity",
+            "largest capacity",
+            "biggest station",
+            "lon nhat",
+            "nho nhat",
+            "tram lon nhat",
+            "nha may lon nhat",
+            "co so lon nhat",
+            "largest facilities",
+            "highest facilities",
+            "facility lon nhat",
+            "facilities lon nhat",
             "thong tin tram",
             "thong tin co so",
             "thong tin nha may",
@@ -171,6 +181,15 @@ class VietnameseIntentService:
             "dat o",
             "tram nao o",
             "co so o",
+            "so tram",
+            "bao nhieu tram",
+            "tong so tram",
+            "how many stations",
+            "station count",
+            "active stations",
+            "list all stations",
+            "liet ke tram",
+            "liet ke tat ca",
         ),
     }
 
@@ -304,12 +323,18 @@ class VietnameseIntentService:
                 topic=matched_topic,
                 confidence=self._keyword_confidence(matched_score),
             )
-            # When semantic and keyword disagree, prefer semantic to reduce rigid keyword locks.
-            if semantic_result is not None and semantic_result.topic != keyword_result.topic:
+            # Keep strong keyword hits stable; only let semantic override when
+            # keyword evidence is weak.
+            if (
+                semantic_result is not None
+                and semantic_result.topic != keyword_result.topic
+                and keyword_result.confidence < 0.8
+            ):
                 result = semantic_result
             elif (
                 semantic_result is not None
                 and semantic_result.confidence >= (keyword_result.confidence + 0.08)
+                and keyword_result.confidence < 0.8
             ):
                 result = semantic_result
             else:
@@ -337,11 +362,46 @@ class VietnameseIntentService:
         matched_topic: ChatTopic | None = None
         matched_score = 0
 
+        facility_priority_markers = (
+            "installed capacity",
+            "cong suat lap dat",
+            "largest installed",
+            "largest capacity",
+            "station count",
+            "how many stations",
+            "bao nhieu tram",
+            "tong so tram",
+            "list all stations",
+            "liet ke",
+            "timezone of that station",
+            "mui gio cua tram do",
+            "tram do",
+            "we just discussed",
+            "luc dau",
+        )
+        facility_bias = 2 if any(m in normalized_message for m in facility_priority_markers) else 0
+
+        ml_priority_markers = (
+            "fallback",
+            "du phong",
+            "model version",
+            "current version",
+            "forecast model",
+            "r-squared",
+            "skill score",
+            "nrmse",
+        )
+        ml_bias = 2 if any(m in normalized_message for m in ml_priority_markers) else 0
+
         for topic, keywords in self._TOPIC_KEYWORDS.items():
             topic_score = sum(1 for keyword in keywords if keyword in normalized_message)
             if topic is ChatTopic.ENERGY_PERFORMANCE and self._is_energy_comparison_query(normalized_message):
                 # Bias toward ENERGY_PERFORMANCE for facility comparison requests.
                 topic_score += 2
+            if topic is ChatTopic.FACILITY_INFO and facility_bias:
+                topic_score += facility_bias
+            if topic is ChatTopic.ML_MODEL and ml_bias:
+                topic_score += ml_bias
             if topic_score > matched_score:
                 matched_topic = topic
                 matched_score = topic_score
@@ -367,6 +427,14 @@ class VietnameseIntentService:
         )
         # Don't fire on AQI/weather metric queries — those belong to data_quality
         if "aqi" in normalized_message or "chi so aqi" in normalized_message:
+            return False
+        # Don't fire on installed capacity / facility info queries
+        capacity_markers = (
+            "cong suat lap dat", "installed capacity", "capacity mw",
+            "cong suat", "bao nhieu tram", "so tram", "tong so tram",
+            "how many stations", "station count", "liet ke",
+        )
+        if any(m in normalized_message for m in capacity_markers):
             return False
         has_compare = any(marker in normalized_message for marker in compare_markers)
         has_facility = any(marker in normalized_message for marker in facility_markers)

@@ -103,11 +103,120 @@ _QUERY_FILLER_PREFIXES: tuple[str, ...] = (
     "để", "de",
 )
 
+_PROMPT_INJECTION_MARKERS: tuple[str, ...] = (
+    "ignore previous", "ignore all", "bo qua huong dan", "bo qua chi dan",
+    "reveal system", "system prompt", "developer prompt", "secret key",
+    "api key", "token", "jailbreak", "override instructions",
+)
+
 
 def _needs_web_search(message: str) -> bool:
     """Return True if the user's message explicitly requests a web search."""
     lowered = message.lower()
     return any(kw in lowered for kw in _WEB_SEARCH_KEYWORDS)
+
+
+def _has_any_marker(message: str, markers: tuple[str, ...]) -> bool:
+    normalized = normalize_vietnamese_text(message)
+    return any(normalize_vietnamese_text(m) in normalized for m in markers)
+
+
+def _contains_scope_refusal_signal(text: str) -> bool:
+    normalized = normalize_vietnamese_text(text)
+    markers = (
+        "toi chi",
+        "i can only",
+        "solar",
+        "solar energy",
+        "nang luong mat troi",
+        "outside",
+    )
+    return any(m in normalized for m in markers)
+
+
+def _is_prompt_injection_request(message: str) -> bool:
+    normalized = normalize_vietnamese_text(message)
+    token_groups: tuple[tuple[str, ...], ...] = (
+        ("ignore", "previous"),
+        ("ignore", "instructions"),
+        ("bo qua", "huong dan"),
+        ("bo qua", "chi dan"),
+        ("reveal", "system"),
+        ("system", "prompt"),
+        ("developer", "prompt"),
+        ("authentication", "token"),
+    )
+    if any(all(tok in normalized for tok in group) for group in token_groups):
+        return True
+    return _has_any_marker(message, _PROMPT_INJECTION_MARKERS)
+
+
+def _build_scope_refusal(language: str) -> str:
+    if language == "vi":
+        return (
+            "Tôi chỉ hỗ trợ các câu hỏi liên quan đến hệ thống năng lượng mặt trời "
+            "(solar energy). Vui lòng đặt câu hỏi về dữ liệu, dự báo, hoặc hiệu suất "
+            "năng lượng mặt trời."
+        )
+    return (
+        "I can only assist with questions related to solar energy systems and "
+        "the PV Lakehouse platform. Please ask about solar energy data or "
+        "solar system performance."
+    )
+
+
+def _last_assistant_topic(history: list[ChatMessage]) -> ChatTopic | None:
+    for msg in reversed(history):
+        if str(getattr(msg, "sender", "")).lower() == "assistant" and getattr(msg, "topic", None):
+            return msg.topic
+    return None
+
+
+def _is_capacity_or_station_query(message: str) -> bool:
+    norm = normalize_vietnamese_text(message)
+    markers = (
+        "cong suat lap dat",
+        "installed capacity",
+        "largest capacity",
+        "largest installed",
+        "capacity of the station",
+        "bao nhieu tram",
+        "so tram",
+        "tong so tram",
+        "how many stations",
+        "station count",
+        "list all stations",
+        "liet ke",
+        "mui gio cua tram do",
+        "timezone of that station",
+        "we just discussed",
+        "luc dau",
+        "nhac lai chinh xac cong suat",
+        "vua noi den",
+    )
+    return any(marker in norm for marker in markers)
+
+
+def _is_implicit_followup(message: str) -> bool:
+    norm = normalize_vietnamese_text(message)
+    markers = (
+        "chi so do",
+        "chi so do tinh theo",
+        "that figure",
+        "that metric",
+        "that number",
+        "cai do",
+        "thong so do",
+        "chi so o",
+        "chi so o tinh theo",
+    )
+    return any(marker in norm for marker in markers)
+
+
+def _is_cross_topic_summary_query(message: str) -> bool:
+    norm = normalize_vietnamese_text(message)
+    markers = ("tom tat", "tom tat lai", "summarise", "summarize", "summary")
+    return any(marker in norm for marker in markers)
 
 
 def _extract_search_query(
@@ -340,6 +449,7 @@ class SolarAIChatService:
         answer: str | None = None
         model_used = "llm-agentic"
         fallback_used = False
+        locked_topic: ChatTopic | None = None
 
         # ------------------------------------------------------------------
         # Intent-based pre-fetch: if the query topic is clear, execute the
@@ -352,12 +462,97 @@ class SolarAIChatService:
             intent_confidence = float(intent_result.confidence)
         except (TypeError, ValueError):
             intent_confidence = 0.0
+        intent_topic = intent_result.topic
+
+        # Context-aware disambiguation for known weak spots in deep validation.
+        if _is_cross_topic_summary_query(request.message):
+            intent_topic = ChatTopic.SYSTEM_OVERVIEW
+            intent_confidence = max(intent_confidence, 0.8)
+        elif _is_capacity_or_station_query(request.message):
+            intent_topic = ChatTopic.FACILITY_INFO
+            intent_confidence = max(intent_confidence, 0.85)
+        elif _is_implicit_followup(request.message):
+            previous_topic = _last_assistant_topic(history_messages)
+            if previous_topic:
+                intent_topic = previous_topic
+                intent_confidence = max(intent_confidence, 0.8)
+                locked_topic = previous_topic
+            else:
+                # Very short follow-ups like "chi so do..." in this app almost
+                # always refer back to energy KPI context.
+                intent_topic = ChatTopic.ENERGY_PERFORMANCE
+                intent_confidence = max(intent_confidence, 0.8)
+                locked_topic = ChatTopic.ENERGY_PERFORMANCE
+
         logger.info(
             "solar_chat_intent trace_id=%s topic=%s confidence=%.2f",
             trace_id,
-            getattr(intent_result.topic, "value", str(intent_result.topic)),
+            getattr(intent_topic, "value", str(intent_topic)),
             intent_confidence,
         )
+
+        is_prompt_injection = _is_prompt_injection_request(request.message)
+
+        if is_prompt_injection:
+            refusal_answer = _build_scope_refusal(language)
+            reason = "prompt_injection"
+            logger.info(
+                "solar_chat_scope_guard_refusal trace_id=%s reason=%s",
+                trace_id,
+                reason,
+            )
+            return self._finalize_response(
+                request=request,
+                answer=refusal_answer,
+                topic=ChatTopic.GENERAL,
+                metrics={},
+                sources=[],
+                model_used="scope-guard",
+                fallback_used=True,
+                started=started,
+                trace_id=trace_id,
+                intent_confidence=intent_confidence,
+                warning_message="Prompt-injection request refused.",
+                thinking_trace=ThinkingTrace(
+                    summary="Scope guard refused an unsafe prompt-injection request.",
+                    steps=[
+                        ThinkingStep(
+                            step="Scope guard",
+                            detail=reason,
+                            status="warning",
+                        )
+                    ],
+                    trace_id=trace_id,
+                ),
+            )
+
+        # For general intent, avoid agentic tool-calling entirely.
+        # Let model follow scope-guard instructions from system prompt.
+        if intent_topic == ChatTopic.GENERAL and not _needs_web_search(request.message):
+            return self._finalize_response(
+                request=request,
+                answer=_build_scope_refusal(language),
+                topic=ChatTopic.GENERAL,
+                metrics={},
+                sources=[],
+                model_used="scope-guard",
+                fallback_used=True,
+                started=started,
+                trace_id=trace_id,
+                intent_confidence=intent_confidence,
+                warning_message="General query handled with deterministic scope refusal.",
+                thinking_trace=ThinkingTrace(
+                    summary="General intent deterministic scope refusal.",
+                    steps=[
+                        ThinkingStep(
+                            step="General scope guard",
+                            detail="Tool-calling bypassed for general intent.",
+                            status="success",
+                        )
+                    ],
+                    trace_id=trace_id,
+                ),
+            )
 
         # Skip intent pre-fetch when the user message references a specific
         # date (e.g. "ngày 10/4/2026").  Pre-fetch tools like
@@ -419,10 +614,10 @@ class SolarAIChatService:
                         prefetch_err,
                     )
         elif (
-            intent_result.topic != ChatTopic.GENERAL
+            intent_topic != ChatTopic.GENERAL
             and intent_confidence >= 0.6
         ):
-            primary_tool = _TOPIC_TO_PRIMARY_TOOL.get(intent_result.topic)
+            primary_tool = _TOPIC_TO_PRIMARY_TOOL.get(intent_topic)
             allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
             if primary_tool and primary_tool in allowed_tools:
                 try:
@@ -431,7 +626,7 @@ class SolarAIChatService:
                     )
                     all_metrics.update(data)
                     all_sources.extend(sources)
-                    topic = intent_result.topic
+                    topic = intent_topic
                     # Inject as a completed tool call in the message thread
                     messages.append({
                         "role": "model",
@@ -567,6 +762,16 @@ class SolarAIChatService:
                 "status": "ok" if web_results else "no_results",
                 "result_count": len(web_results),
             })
+            # Propagate web URLs into sources so they appear in the response
+            for wr in web_results:
+                wr_url = wr.get("url", "")
+                if wr_url:
+                    all_sources.append({
+                        "layer": "Web",
+                        "dataset": wr.get("title", wr_url),
+                        "data_source": "web_search",
+                        "url": wr_url,
+                    })
             try:
                 gen = self._model_router.generate(
                     synthesis_prompt,
@@ -660,6 +865,16 @@ class SolarAIChatService:
             # Handle web_lookup
             if tool_name == "web_lookup":
                 web_response = self._execute_web_lookup(tool_args)
+                # Propagate web URLs into sources
+                for wr in web_response.get("results", []):
+                    wr_url = wr.get("url", "")
+                    if wr_url:
+                        all_sources.append({
+                            "layer": "Web",
+                            "dataset": wr.get("title", wr_url),
+                            "data_source": "web_search",
+                            "url": wr_url,
+                        })
                 messages.append({
                     "role": "user",
                     "parts": [{"functionResponse": {"name": tool_name, "response": web_response}}],
@@ -696,7 +911,7 @@ class SolarAIChatService:
                 data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
                 all_sources.extend(sources)
                 all_metrics.update(data)
-                if tool_name in TOOL_NAME_TO_TOPIC:
+                if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
                     topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
                 messages.append({
                     "role": "user",
@@ -781,6 +996,9 @@ class SolarAIChatService:
             SourceMetadata(**s) if isinstance(s, dict) else s
             for s in all_sources
         ]
+
+        if locked_topic is not None:
+            topic = locked_topic
 
         return self._finalize_response(
             request=request,
