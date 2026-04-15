@@ -208,15 +208,6 @@ html[data-theme="dark"] .user-card {
   background: #1a2431;
 }
 
-html[data-theme="dark"] .search-bar input {
-  background: #1a2431;
-  color: var(--txt);
-}
-
-html[data-theme="dark"] .search-bar {
-  display: none;
-}
-
 html[data-theme="dark"] .btn-sec {
   background: #1a2431;
   color: var(--txt2);
@@ -240,15 +231,6 @@ html[data-theme="dark"] .btn-sec:hover {
   color: var(--txt);
   font-family: "Syne", sans-serif;
   font-weight: 600;
-}
-
-.search-bar input {
-  border: 1px solid var(--border);
-  background: #f4f6f9;
-  border-radius: 6px;
-  height: 32px;
-  min-width: 200px;
-  padding: 0 10px;
 }
 
 .top-actions {

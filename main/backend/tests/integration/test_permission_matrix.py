@@ -2,6 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -76,6 +77,36 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
                         self.assertEqual(response.status_code, 200)
                     else:
                         self.assertEqual(response.status_code, 403)
+
+    def test_data_pipeline_schedule_permissions(self) -> None:
+        roles = ["admin", "data_engineer", "ml_engineer", "analyst", "system"]
+        allowed_roles = {"admin", "data_engineer"}
+        payload = {
+            "quartz_cron_expression": "0 00 03 ? * 2",
+            "timezone_id": "Asia/Ho_Chi_Minh",
+            "pause_status": "UNPAUSED",
+        }
+
+        with patch("app.api.data_pipeline.routes.update_job_schedule", return_value={"ok": True}):
+            for role in roles:
+                with self.subTest(role=role):
+                    self._set_role(role)
+                    response = self.client.post("/data-pipeline/jobs/schedule", json=payload)
+                    if role in allowed_roles:
+                        self.assertEqual(response.status_code, 200)
+                    else:
+                        self.assertEqual(response.status_code, 403)
+
+    def test_data_pipeline_schedule_payload_validation(self) -> None:
+        self._set_role("data_engineer")
+        invalid_payload = {
+            "quartz_cron_expression": "0 00 03 ? * 2",
+            "timezone_id": "Asia/Ho_Chi_Minh",
+            "pause_status": "INVALID",
+        }
+
+        response = self.client.post("/data-pipeline/jobs/schedule", json=invalid_payload)
+        self.assertEqual(response.status_code, 422)
 
 
 if __name__ == "__main__":

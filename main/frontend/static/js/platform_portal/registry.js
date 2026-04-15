@@ -8,6 +8,17 @@
 
   let allModels = [];
 
+  function parseMetricValue(value) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function formatMetricValue(value, decimals, emptyValue, suffix) {
+    const parsed = parseMetricValue(value);
+    if (parsed === null) return emptyValue;
+    return parsed.toFixed(decimals) + (suffix || "");
+  }
+
   async function loadRegistryModels() {
     try {
       const res = await fetch('/model-registry/models-list');
@@ -27,18 +38,14 @@
 
       tbody.innerHTML = data.map(function(model, idx) {
         const badgeClass = model.status === "Production" ? "badge-success" : "badge-info";
-        let rmse = model.rmse !== null ? parseFloat(model.rmse) : null;
-        let mae = model.mae !== null ? parseFloat(model.mae) : null;
-        let r2 = model.r2 !== null ? parseFloat(model.r2) : null;
-        let mape = model.mape !== null ? parseFloat(model.mape) : null;
         return `
           <tr class="registry-row" data-model-idx="${idx}" style="cursor:pointer;">
             <td>${model.version}</td>
             <td>${model.algorithm || 'Unknown'}</td>
-            <td>${rmse !== null ? rmse.toFixed(3) : '-'}</td>
-            <td>${mae !== null ? mae.toFixed(3) : '-'}</td>
-            <td>${r2 !== null ? r2.toFixed(4) : '-'}</td>
-            <td>${mape !== null ? mape.toFixed(2) + '%' : '-'}</td>
+            <td>${formatMetricValue(model.rmse, 3, '-', '')}</td>
+            <td>${formatMetricValue(model.mae, 3, '-', '')}</td>
+            <td>${formatMetricValue(model.r2, 4, '-', '')}</td>
+            <td>${formatMetricValue(model.mape, 2, '-', '%')}</td>
             <td>${model.created}</td>
             <td><span class="badge ${badgeClass}">${model.status}</span></td>
           </tr>
@@ -69,10 +76,10 @@
         // Here we just plot raw values, though they have different scales.
         // Usually, in a radar chart, they should be normalized to 0-100.
         // For demonstration logic based on typical scaled PV metrics:
-        const pRmse = parseFloat(m.rmse) || 0;
-        const pMae = parseFloat(m.mae) || 0;
-        const pR2 = parseFloat(m.r2) || 0;
-        const pMape = parseFloat(m.mape) || 0;
+        const pRmse = parseMetricValue(m.rmse) || 0;
+        const pMae = parseMetricValue(m.mae) || 0;
+        const pR2 = parseMetricValue(m.r2) || 0;
+        const pMape = parseMetricValue(m.mape) || 0;
 
         const nRMSE = Math.max(0, 100 - (pRmse * 1000)); // lower rmse = higher score
         const nMAE = Math.max(0, 100 - (pMae * 1500));
@@ -126,16 +133,13 @@
 
     const labels = sorted.map(function (m) { return m.version || "Unknown"; });
     const rmse = sorted.map(function (m) {
-      const v = m.rmse !== null ? parseFloat(m.rmse) : null;
-      return Number.isFinite(v) ? v : null;
+      return parseMetricValue(m.rmse);
     });
     const mae = sorted.map(function (m) {
-      const v = m.mae !== null ? parseFloat(m.mae) : null;
-      return Number.isFinite(v) ? v : null;
+      return parseMetricValue(m.mae);
     });
     const r2 = sorted.map(function (m) {
-      const v = m.r2 !== null ? parseFloat(m.r2) : null;
-      return Number.isFinite(v) ? v : null;
+      return parseMetricValue(m.r2);
     });
 
     const hasAnyMetric = rmse.some(v => v !== null) || mae.some(v => v !== null) || r2.some(v => v !== null);
@@ -212,10 +216,10 @@
     title.textContent = `Model Details · ${model.version || 'Unknown'}`;
 
     const badgeClass = model.status === 'Production' ? 'badge-success' : 'badge-info';
-    const rmse = model.rmse !== null ? parseFloat(model.rmse).toFixed(3) : 'N/A';
-    const mae = model.mae !== null ? parseFloat(model.mae).toFixed(3) : 'N/A';
-    const r2 = model.r2 !== null ? parseFloat(model.r2).toFixed(4) : 'N/A';
-    const mape = model.mape !== null ? parseFloat(model.mape).toFixed(2) + '%' : 'N/A';
+  const rmse = formatMetricValue(model.rmse, 3, 'N/A', '');
+  const mae = formatMetricValue(model.mae, 3, 'N/A', '');
+  const r2 = formatMetricValue(model.r2, 4, 'N/A', '');
+  const mape = formatMetricValue(model.mape, 2, 'N/A', '%');
 
     body.innerHTML = `
       <div class="detail-section">

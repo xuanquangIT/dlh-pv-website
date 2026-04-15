@@ -26,6 +26,52 @@ async function fetchPipelineData() {
     }
 }
 
+const QUARTZ_DAY_LABEL_BY_NUMBER = {
+    '1': 'Sunday',
+    '2': 'Monday',
+    '3': 'Tuesday',
+    '4': 'Wednesday',
+    '5': 'Thursday',
+    '6': 'Friday',
+    '7': 'Saturday'
+};
+
+const QUARTZ_DAY_NUMBER_BY_NAME = {
+    SUN: '1',
+    MON: '2',
+    TUE: '3',
+    WED: '4',
+    THU: '5',
+    FRI: '6',
+    SAT: '7'
+};
+
+function normalizeQuartzDayForPicker(rawValue) {
+    const token = String(rawValue || '').trim().toUpperCase();
+    if (!token || token === '*' || token === '?') return '1';
+
+    if (QUARTZ_DAY_NUMBER_BY_NAME[token]) {
+        return QUARTZ_DAY_NUMBER_BY_NAME[token];
+    }
+
+    const numeric = Number.parseInt(token, 10);
+    if (Number.isFinite(numeric)) {
+        if (numeric === 0) return '1';
+        if (numeric >= 1 && numeric <= 7) return String(numeric);
+    }
+
+    return '1';
+}
+
+function getQuartzDayLabel(dayOfWeek) {
+    const normalized = normalizeQuartzDayForPicker(dayOfWeek);
+    return QUARTZ_DAY_LABEL_BY_NUMBER[normalized] || 'Sunday';
+}
+
+function getFirstCronToken(value) {
+    return String(value || '').split(',')[0].split('-')[0].trim();
+}
+
 function parseQuartzToPicker(cronExpr) {
     const parts = cronExpr.trim().split(/\s+/);
     const minute = (parts[1] || '0').trim();
@@ -41,7 +87,7 @@ function parseQuartzToPicker(cronExpr) {
         minute: isNaN(minute) ? '0' : minute,
         hour: isNaN(hour) ? '0' : hour,
         dayOfMonth: dayOfMonth === '*' || dayOfMonth === '?' ? '1' : dayOfMonth,
-        dayOfWeek: dayOfWeek === '*' || dayOfWeek === '?' ? '0' : dayOfWeek,
+        dayOfWeek: normalizeQuartzDayForPicker(dayOfWeek),
         frequency 
     };
 }
@@ -49,9 +95,10 @@ function parseQuartzToPicker(cronExpr) {
 function generateQuartzCron(frequency, hour, minute, dayOfWeek = '*', dayOfMonth = '*') {
     hour = String(hour).padStart(2, '0');
     minute = String(minute).padStart(2, '0');
+    const normalizedDayOfWeek = normalizeQuartzDayForPicker(dayOfWeek);
     
     if (frequency === 'weekly') {
-        return `0 ${minute} ${hour} ? * ${dayOfWeek}`;
+        return `0 ${minute} ${hour} ? * ${normalizedDayOfWeek}`;
     } else if (frequency === 'monthly') {
         return `0 ${minute} ${hour} ${dayOfMonth} * ?`;
     }
@@ -59,13 +106,12 @@ function generateQuartzCron(frequency, hour, minute, dayOfWeek = '*', dayOfMonth
 }
 
 function formatScheduleReadable(cron, timezone, frequency, hour, minute, dayOfWeek) {
-    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     hour = String(hour).padStart(2, '0');
     minute = String(minute).padStart(2, '0');
     
     let freq_str = 'Every day';
     if (frequency === 'weekly') {
-        freq_str = `Every ${daysOfWeek[dayOfWeek] || 'Monday'}`;
+        freq_str = `Every ${getQuartzDayLabel(dayOfWeek)}`;
     } else if (frequency === 'monthly') {
         freq_str = 'Every month';
     }
@@ -102,12 +148,12 @@ function renderJobInfo(jobInfo) {
         if (hourInput && document.activeElement !== hourInput) hourInput.value = String(parsed.hour).padStart(2, '0');
         if (minuteInput && document.activeElement !== minuteInput) minuteInput.value = String(parsed.minute).padStart(2, '0');
         
-        const dowValue = String(parsed.dayOfWeek).split(/[,\\-]/)[0];
+        const dowValue = normalizeQuartzDayForPicker(getFirstCronToken(parsed.dayOfWeek));
         if (dayOfWeekSelect && document.activeElement !== dayOfWeekSelect && dowValue !== '*' && dowValue !== '?') {
             dayOfWeekSelect.value = dowValue;
         }
         
-        const domValue = String(parsed.dayOfMonth).split(/[,\\-]/)[0];
+        const domValue = getFirstCronToken(parsed.dayOfMonth);
         if (dayOfMonthSelect && document.activeElement !== dayOfMonthSelect && domValue !== '*' && domValue !== '?') {
             dayOfMonthSelect.value = domValue;
         }
@@ -425,7 +471,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const frequency = frequencySelect?.value || 'daily';
             const hour = parseInt(hourInput?.value || '0', 10);
             const minute = parseInt(minuteInput?.value || '0', 10);
-            const dayOfWeek = dayOfWeekSelect?.value || '0';
+            const dayOfWeek = dayOfWeekSelect?.value || '1';
             const dayOfMonth = dayOfMonthSelect?.value || '1';
             const timezone = (timezoneSelect?.value || 'UTC').trim();
 
