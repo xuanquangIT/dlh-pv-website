@@ -1,4 +1,5 @@
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
 from app.core.settings import get_solar_chat_settings
 from functools import lru_cache
 
@@ -37,6 +38,50 @@ def cancel_job_run(run_id: int) -> dict:
     client = get_databricks_client()
     client.jobs.cancel_run(run_id=run_id)
     return {"message": f"Run {run_id} cancelled successfully"}
+
+
+def update_job_schedule(
+    job_id: int,
+    quartz_cron_expression: str,
+    timezone_id: str | None = None,
+    pause_status: str | None = None,
+) -> dict:
+    client = get_databricks_client()
+
+    job = client.jobs.get(job_id=job_id)
+    current_schedule = job.settings.schedule if job and job.settings else None
+
+    resolved_timezone = timezone_id or (current_schedule.timezone_id if current_schedule else None) or "UTC"
+    resolved_pause = pause_status or (
+        current_schedule.pause_status.value if current_schedule and current_schedule.pause_status else "UNPAUSED"
+    )
+
+    try:
+        pause_enum = PauseStatus[resolved_pause.upper()]
+    except KeyError as exc:
+        raise ValueError("pause_status must be 'PAUSED' or 'UNPAUSED'.") from exc
+
+    new_schedule = CronSchedule(
+        quartz_cron_expression=quartz_cron_expression.strip(),
+        timezone_id=resolved_timezone,
+        pause_status=pause_enum,
+    )
+
+    client.jobs.update(job_id=job_id, new_settings=JobSettings(schedule=new_schedule))
+    updated_job = client.jobs.get(job_id=job_id)
+    updated_schedule = updated_job.settings.schedule if updated_job and updated_job.settings else None
+
+    return {
+        "job_id": job_id,
+        "message": "Schedule updated successfully",
+        "schedule": {
+            "quartz_cron_expression": updated_schedule.quartz_cron_expression if updated_schedule else quartz_cron_expression,
+            "timezone_id": updated_schedule.timezone_id if updated_schedule else resolved_timezone,
+            "pause_status": (
+                updated_schedule.pause_status.value if updated_schedule and updated_schedule.pause_status else resolved_pause
+            ),
+        },
+    }
 
 def execute_sql(query: str) -> list[dict]:
     client = get_databricks_client()
@@ -153,7 +198,12 @@ def get_recent_quality_issues() -> list[dict]:
       SPLIT_PART(rule_name, '_', 1) as sensor,
       rule_name as issue,
       CONCAT(failed_rows, ' records') as affected,
-      CASE WHEN status = 'FAIL' THEN 'Error' ELSE 'Warning' END as severity,
+      CAST(failed_rate AS DOUBLE) as failed_rate,
+      CASE 
+        WHEN CAST(failed_rate AS DOUBLE) = 0 THEN 'GOOD'
+        WHEN CAST(failed_rate AS DOUBLE) <= 0.01 THEN 'WARNING'
+        ELSE 'BAD'
+      END as severity,
       'Flagged' as action
     FROM pv.silver.data_quality_log
     WHERE status != 'PASS'

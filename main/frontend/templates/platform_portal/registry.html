@@ -20,7 +20,7 @@
     <div class="table-wrap">
         <table>
             <thead>
-                <tr><th>Version</th><th>Algorithm</th><th>RMSE</th><th>MAE</th><th>R2</th><th>MAPE</th><th>Created</th><th>Status</th></tr>
+                <tr><th>Model_Version</th><th>Approach</th><th>RMSE</th><th>MAE</th><th>R2</th><th>MAPE</th><th>Created</th><th>Status</th></tr>
             </thead>
             <tbody id="registry-table-body">
                 <tr><td colspan="8" style="text-align:center; padding: 20px;">Loading registry data...</td></tr>
@@ -34,7 +34,25 @@
     <div class="chart-box"><canvas id="compareChart"></canvas></div>
 </section>
 
-<script src="/static/js/platform_portal/registry.js?v=3"></script>
+<section class="card" style="margin-top:16px;">
+    <h2 class="card-title">Model Version Lineage</h2>
+    <div class="chart-box" style="height:300px;"><canvas id="lineageChart"></canvas></div>
+    <div class="page-subtitle" id="lineage-summary" style="margin-top:8px;">Tracking metric evolution across model versions.</div>
+</section>
+
+<div class="model-detail-modal" id="model-detail-modal">
+    <div class="model-detail-content">
+        <div class="model-detail-header">
+            <h2 id="model-detail-title">Model Details</h2>
+            <button class="btn-close" id="model-detail-close">&times;</button>
+        </div>
+        <div class="model-detail-body" id="model-detail-body">
+            <!-- Filled by JS -->
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/platform_portal/registry.js?v=4"></script>
 {% endblock %}
 
 
