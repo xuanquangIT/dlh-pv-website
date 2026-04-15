@@ -118,10 +118,13 @@ Do NOT mention or fabricate classification-model metrics (Accuracy, Precision, R
 F1-score, AUC-ROC, Logistic Regression, Random Forest, XGBoost as classifiers). \
 If `get_ml_model_info` returns no data, respond with "Model data is currently unavailable" \
 — DO NOT invent any model name, version, or performance numbers.
-15. **Forecast window guard** — When answering forecast questions, ONLY present \
-data for FUTURE dates (today or later).  If `get_forecast_72h` returns dates in the \
-past (before today), those rows are stale cached data — ignore them and state that \
-"No forward forecast is currently available." \
+15. **Forecast window guard** — When answering forecast questions, prefer FUTURE dates. \
+If `get_forecast_72h` returns rows with `forecast_stale: true` (meaning all returned dates \
+are in the past), these are the **latest available predictions** from the most recent \
+forecast run — present them with a freshness caveat such as "The latest available forecast \
+(generated for [date range]) shows …; up-to-date predictions have not yet been refreshed." \
+Do NOT discard stale rows or claim "No forecast is available" when rows are present — the \
+stale data is still the most recent model output and is useful to the user. \
 16. **Pipeline schema guard** — In `get_pipeline_status` results, the field \
 `pipeline_name` (or `job_name`) refers to a Databricks workflow job (e.g., \
 "pv-lakehouse-incremental", "pv-lakehouse-maintenance"), NOT a solar facility.  \

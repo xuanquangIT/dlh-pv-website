@@ -52,6 +52,11 @@ html[data-theme="dark"] body {
   display: flex;
   flex-direction: column;
   z-index: 1200;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.panels-hidden #sidebar {
+  transform: translateX(-100%);
 }
 
 html[data-theme="dark"] #sidebar {
@@ -104,11 +109,27 @@ html[data-theme="dark"] #sidebar {
 }
 
 .nav-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 9px 18px;
   color: var(--txt2);
   text-decoration: none;
   font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.nav-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nav-item span {
+  display: inline-block;
+  line-height: normal;
+  transform: translateY(1px); /* Nudge text down instead of SVG up */
 }
 
 .nav-item:hover {
@@ -181,6 +202,45 @@ html[data-theme="dark"] #sidebar {
   color: var(--txt3);
 }
 
+body.sidebar-narrow {
+  --sw: 68px;
+}
+body.sidebar-narrow .logo-content,
+body.sidebar-narrow .nav-sec,
+body.sidebar-narrow .nav-item span,
+body.sidebar-narrow .health-row span:not(.status-dot),
+body.sidebar-narrow .user-name,
+body.sidebar-narrow .user-role {
+  display: none;
+}
+body.sidebar-narrow .nav-item {
+  justify-content: center;
+  padding: 14px 0;
+}
+body.sidebar-narrow .nav-item.active {
+  padding-left: 0;
+  border-left: none;
+  border-right: 3px solid var(--green);
+}
+body.sidebar-narrow #sidebar-toggle-btn svg {
+  transform: rotate(180deg);
+}
+body.sidebar-narrow #sidebar-toggle-btn {
+  margin: 0 auto;
+}
+body.sidebar-narrow .nav-logo {
+  flex-direction: column;
+  padding: 16px 8px;
+  gap: 16px;
+}
+body.sidebar-narrow .sidebar-footer {
+  padding: 12px 10px;
+}
+body.sidebar-narrow .user-card {
+  padding: 8px 0;
+  justify-content: center;
+}
+
 #topbar {
   position: fixed;
   left: var(--sw);
@@ -194,6 +254,11 @@ html[data-theme="dark"] #sidebar {
   gap: 10px;
   padding: 0 18px;
   z-index: 1300;
+  transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.panels-hidden #topbar {
+  left: 0;
 }
 
 html[data-theme="dark"] #topbar {
@@ -258,6 +323,11 @@ html[data-theme="dark"] .btn-sec:hover {
   padding: 24px;
   position: relative;
   z-index: 1;
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.panels-hidden #main {
+  margin-left: 0;
 }
 
 .section-header {
@@ -771,6 +841,11 @@ html[data-theme="dark"] .logout-user-pill {
   grid-template-columns: 300px 1fr;
   height: 100%;
   min-height: 0;
+  transition: grid-template-columns 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.panels-hidden .solar-chat-layout {
+  grid-template-columns: 0px 1fr;
 }
 
 .solar-chat-conversations {

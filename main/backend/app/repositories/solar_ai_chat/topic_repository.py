@@ -305,14 +305,29 @@ class TopicRepository(BaseRepository):
         )
 
     def _ml_model_databricks(self) -> dict[str, Any]:
+        # Prefer the most recently evaluated non-fallback (champion) model.
+        # Fall back to the latest record only if no non-fallback model exists.
         latest_rows = self._safe_execute_query(
             "SELECT model_name, model_version, approach, eval_date,"
             "       r2, skill_score, nrmse_pct"
             " FROM gold.model_monitoring_daily"
             " WHERE facility_id = 'ALL'"
+            "   AND LOWER(model_name) NOT LIKE '%:fallback%'"
+            "   AND LOWER(model_version) NOT LIKE 'fallback%'"
+            "   AND LOWER(approach) NOT LIKE 'fallback%'"
             " ORDER BY CAST(eval_date AS DATE) DESC, generated_at_utc DESC"
             " LIMIT 1"
         )
+        if not latest_rows:
+            # No non-fallback model found; use the latest record regardless.
+            latest_rows = self._safe_execute_query(
+                "SELECT model_name, model_version, approach, eval_date,"
+                "       r2, skill_score, nrmse_pct"
+                " FROM gold.model_monitoring_daily"
+                " WHERE facility_id = 'ALL'"
+                " ORDER BY CAST(eval_date AS DATE) DESC, generated_at_utc DESC"
+                " LIMIT 1"
+            )
 
         if not latest_rows:
             return {
@@ -460,12 +475,25 @@ class TopicRepository(BaseRepository):
         run_rows = self._safe_execute_query(
             "SELECT run_timestamp_utc, pipeline_name, status,"
             "       bronze_failed_events, silver_quality_failed_checks,"
-            "       forecast_hourly_rows_generated"
+            "       forecast_daily_rows_generated AS forecast_rows_generated"
             " FROM gold.pipeline_run_diagnostics"
             f" WHERE run_timestamp_utc >= current_timestamp() - INTERVAL {lookback_days} DAYS"
             " ORDER BY run_timestamp_utc DESC"
             " LIMIT 50"
         )
+
+        # Backward compatibility for workspaces that still have the legacy
+        # forecast_hourly_rows_generated diagnostics column.
+        if not run_rows:
+            run_rows = self._safe_execute_query(
+                "SELECT run_timestamp_utc, pipeline_name, status,"
+                "       bronze_failed_events, silver_quality_failed_checks,"
+                "       forecast_hourly_rows_generated AS forecast_rows_generated"
+                " FROM gold.pipeline_run_diagnostics"
+                f" WHERE run_timestamp_utc >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+                " ORDER BY run_timestamp_utc DESC"
+                " LIMIT 50"
+            )
 
         if run_rows:
             latest_by_pipeline: dict[str, dict[str, Any]] = {}
@@ -477,7 +505,7 @@ class TopicRepository(BaseRepository):
             latest_rows = list(latest_by_pipeline.values())
             bronze_fail_sum = sum(int(r.get("bronze_failed_events") or 0) for r in latest_rows)
             silver_fail_sum = sum(int(r.get("silver_quality_failed_checks") or 0) for r in latest_rows)
-            forecast_rows_sum = sum(int(r.get("forecast_hourly_rows_generated") or 0) for r in latest_rows)
+            forecast_rows_sum = sum(int(r.get("forecast_rows_generated") or 0) for r in latest_rows)
 
             bronze_progress = 100.0 if bronze_fail_sum == 0 else 65.0
             silver_progress = 100.0 if silver_fail_sum == 0 else 70.0
@@ -617,8 +645,7 @@ class TopicRepository(BaseRepository):
         )
 
         if len(rows) < 3:
-            # Fallback: look for the nearest FUTURE dates available in the table.
-            # Never fall back to past dates — that would mislead the user.
+            # Secondary: any available future dates in the table.
             future_rows = self._safe_execute_query(
                 "SELECT CAST(forecast_date AS DATE) AS day,"
                 "       SUM(predicted_energy_mwh_daily) AS expected_mwh"
@@ -629,13 +656,32 @@ class TopicRepository(BaseRepository):
             )
             rows = future_rows if future_rows else rows
 
+        forecast_stale = False
         if not rows:
-            return {"daily_forecast": []}
+            # Tertiary: the forecast pipeline may not have run recently.
+            # Return the most recently generated predictions regardless of date so
+            # the LLM can present them with an appropriate freshness caveat instead
+            # of claiming no forecast exists at all.
+            stale_rows = self._safe_execute_query(
+                "SELECT CAST(forecast_date AS DATE) AS day,"
+                "       SUM(predicted_energy_mwh_daily) AS expected_mwh"
+                " FROM gold.forecast_daily"
+                " GROUP BY CAST(forecast_date AS DATE)"
+                " ORDER BY day DESC LIMIT 3"
+            )
+            if stale_rows:
+                # Re-sort ascending for consistent presentation.
+                rows = sorted(stale_rows, key=lambda r: str(r.get("day", "")))
+                forecast_stale = True
+
+        if not rows:
+            return {"daily_forecast": [], "forecast_stale": True}
 
         uncertainty_factor = self._latest_forecast_uncertainty_factor()
         return {
             "daily_forecast": self._build_forecast_from_rows(rows, uncertainty_factor),
             "uncertainty_factor": round(uncertainty_factor, 4),
+            "forecast_stale": forecast_stale,
         }
 
     def _forecast_72h_csv(self) -> dict[str, Any]:

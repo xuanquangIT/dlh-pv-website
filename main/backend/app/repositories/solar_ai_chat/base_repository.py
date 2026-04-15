@@ -38,7 +38,6 @@ class BaseRepository:
         "gold.dim_weather_condition",
         "gold.fact_energy",
         "gold.dim_facility",
-        "gold.forecast_hourly",
         "gold.forecast_daily",
         "gold.model_monitoring_daily",
     })

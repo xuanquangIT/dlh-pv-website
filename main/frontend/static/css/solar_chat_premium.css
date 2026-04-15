@@ -57,6 +57,15 @@ html[data-theme="dark"] .solar-chat-avatar {
   background: rgba(248, 251, 250, 0.6);
   border-right: 1px solid rgba(200, 210, 225, 0.5);
   backdrop-filter: blur(10px);
+  transition: opacity 0.2s ease, visibility 0.4s ease;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+body.panels-hidden .solar-chat-conversations {
+  opacity: 0;
+  visibility: hidden;
+  border-right-color: transparent;
 }
 
 html[data-theme="dark"] .solar-chat-conversations {
