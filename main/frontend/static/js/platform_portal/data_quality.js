@@ -44,7 +44,10 @@ function updateRecentIssuesDom(data) {
     }
     
     tbody.innerHTML = data.map(item => {
-        const severityClass = item.severity === 'Error' ? 'badge-danger' : 'badge-warn';
+        let severityClass = 'badge-warn';
+        if (item.severity === 'GOOD') severityClass = 'badge-success';
+        else if (item.severity === 'BAD') severityClass = 'badge-danger';
+        
         return `<tr>
             <td>${item.time}</td>
             <td>${item.facility}</td>
