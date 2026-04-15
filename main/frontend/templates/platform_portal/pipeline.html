@@ -2,23 +2,84 @@
 
 {% block title %}PV Lakehouse - Data Pipeline{% endblock %}
 
-{% block extra_head %}
-<!-- If the base layout supports injecting CSS in head -->
+{% block head_extra %}
+<!-- Style for pipeline page -->
 <link rel="stylesheet" href="/static/css/data_pipeline.css">
 {% endblock %}
 
 {% block content %}
 <div class="pipeline-container">
-    <section class="section-header">
-        <div>
-            <h1 class="page-title">Data Pipeline</h1>
-            <!-- Replaced local static value with dynamically rendered element -->
-            <div class="page-subtitle">Schedule: <span id="job-cron">Loading...</span></div>
-        </div>
-        <div>
-            <div class="page-subtitle" style="margin-bottom: 8px; text-align: right;">Target: <span id="job-name">Loading...</span></div>
+    <section class="section-header-pipeline">
+        <div class="header-top">
+            <div>
+                <h1 class="page-title">Data Pipeline</h1>
+                <div class="schedule-display" id="schedule-display">Loading...</div>
+            </div>
             <button class="btn btn-pri" type="button" id="pipeline-run-now">Run Now</button>
         </div>
+        
+        <div class="header-bottom">
+            <span class="job-target">Job: <strong id="job-name">Loading...</strong></span>
+            <button class="btn btn-sm btn-outline" type="button" id="toggle-schedule-form">Edit Schedule</button>
+        </div>
+
+        <form id="schedule-form" class="pipeline-schedule-form" style="display: none;">
+            <div class="schedule-row">
+                <label>Every</label>
+                <select id="schedule-frequency" class="pipeline-input schedule-input-sm">
+                    <option value="daily">Day</option>
+                    <option value="weekly">Week</option>
+                    <option value="monthly">Month</option>
+                </select>
+            </div>
+            
+            <div class="schedule-row" id="schedule-day-row" style="display: none;">
+                <label>at</label>
+                <select id="schedule-day-of-week" class="pipeline-input schedule-input-sm">
+                    <option value="0">Sunday</option>
+                    <option value="1">Monday</option>
+                    <option value="2">Tuesday</option>
+                    <option value="3">Wednesday</option>
+                    <option value="4">Thursday</option>
+                    <option value="5">Friday</option>
+                    <option value="6">Saturday</option>
+                </select>
+            </div>
+            
+            <div class="schedule-row" id="schedule-date-row" style="display: none;">
+                <label>Day of month</label>
+                <select id="schedule-day-of-month" class="pipeline-input schedule-input-sm">
+                    <option value="1">1st</option>
+                    <option value="2">2nd</option>
+                    <option value="3">3rd</option>
+                    <option value="15">15th</option>
+                    <option value="L">Last day</option>
+                </select>
+            </div>
+
+            <div class="schedule-row">
+                <label>at</label>
+                <input id="schedule-hour" type="number" min="0" max="23" value="03" class="pipeline-input schedule-input-xs" placeholder="HH">
+                <span class="time-separator">:</span>
+                <input id="schedule-minute" type="number" min="0" max="59" value="00" class="pipeline-input schedule-input-xs" placeholder="MM">
+            </div>
+            
+            <div class="schedule-row">
+                <select id="schedule-timezone" class="pipeline-input schedule-input-lg">
+                    <option value="UTC">UTC</option>
+                    <option value="Asia/Ho_Chi_Minh">(UTC+07:00) Asia/Ho_Chi_Minh</option>
+                    <option value="Asia/Bangkok">(UTC+07:00) Asia/Bangkok</option>
+                    <option value="Asia/Tokyo">(UTC+09:00) Asia/Tokyo</option>
+                    <option value="Asia/Shanghai">(UTC+08:00) Asia/Shanghai</option>
+                    <option value="Asia/Singapore">(UTC+08:00) Asia/Singapore</option>
+                    <option value="America/New_York">(UTC-05:00) America/New_York</option>
+                    <option value="Europe/London">(UTC+00:00) Europe/London</option>
+                </select>
+            </div>
+            
+            <button class="btn" type="submit" id="pipeline-save-schedule">Save Schedule</button>
+            <button class="btn btn-secondary" type="button" id="cancel-schedule-form">Cancel</button>
+        </form>
     </section>
 
     <!-- Tabs Nav -->
@@ -35,13 +96,14 @@
                 <thead>
                     <tr>
                         <th>Start Time</th>
+                        <th>Launched</th>
                         <th>Status</th>
                         <th>Duration</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="recent-runs-body">
-                    <tr><td colspan="4">Loading recent runs...</td></tr>
+                    <tr><td colspan="5">Loading recent runs...</td></tr>
                 </tbody>
             </table>
         </section>

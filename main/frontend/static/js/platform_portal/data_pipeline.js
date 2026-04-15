@@ -26,11 +26,106 @@ async function fetchPipelineData() {
     }
 }
 
+function parseQuartzToPicker(cronExpr) {
+    const parts = cronExpr.trim().split(/\s+/);
+    const minute = (parts[1] || '0').trim();
+    const hour = (parts[2] || '0').trim();
+    const dayOfMonth = (parts[3] || '*').trim();
+    const dayOfWeek = (parts[5] || '*').trim();
+    
+    let frequency = 'daily';
+    if (dayOfWeek !== '*' && dayOfWeek !== '?') frequency = 'weekly';
+    else if (dayOfMonth !== '*' && dayOfMonth !== '?') frequency = 'monthly';
+    
+    return { 
+        minute: isNaN(minute) ? '0' : minute,
+        hour: isNaN(hour) ? '0' : hour,
+        dayOfMonth: dayOfMonth === '*' || dayOfMonth === '?' ? '1' : dayOfMonth,
+        dayOfWeek: dayOfWeek === '*' || dayOfWeek === '?' ? '0' : dayOfWeek,
+        frequency 
+    };
+}
+
+function generateQuartzCron(frequency, hour, minute, dayOfWeek = '*', dayOfMonth = '*') {
+    hour = String(hour).padStart(2, '0');
+    minute = String(minute).padStart(2, '0');
+    
+    if (frequency === 'weekly') {
+        return `0 ${minute} ${hour} ? * ${dayOfWeek}`;
+    } else if (frequency === 'monthly') {
+        return `0 ${minute} ${hour} ${dayOfMonth} * ?`;
+    }
+    return `0 ${minute} ${hour} * * ?`;
+}
+
+function formatScheduleReadable(cron, timezone, frequency, hour, minute, dayOfWeek) {
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    hour = String(hour).padStart(2, '0');
+    minute = String(minute).padStart(2, '0');
+    
+    let freq_str = 'Every day';
+    if (frequency === 'weekly') {
+        freq_str = `Every ${daysOfWeek[dayOfWeek] || 'Monday'}`;
+    } else if (frequency === 'monthly') {
+        freq_str = 'Every month';
+    }
+    
+    return `${freq_str} at ${hour}:${minute} (${timezone})`;
+}
+
 function renderJobInfo(jobInfo) {
     document.getElementById('job-name').textContent = jobInfo.settings.name || 'pv-lakehouse-incremental';
     if(jobInfo.settings.schedule) {
-        document.getElementById('job-cron').textContent = jobInfo.settings.schedule.quartz_cron_expression || '0 0 3 * * ?';
+        const schedule = jobInfo.settings.schedule;
+        const cron = schedule.quartz_cron_expression || '0 0 3 * * ?';
+        const timezone = schedule.timezone_id || 'UTC';
+
+        const parsed = parseQuartzToPicker(cron);
+        const readableSchedule = formatScheduleReadable(cron, timezone, parsed.frequency, parsed.hour, parsed.minute, parsed.dayOfWeek);
+        
+        const displayEl = document.getElementById('schedule-display');
+        if (displayEl) {
+            displayEl.textContent = readableSchedule;
+        }
+
+        const frequencySelect = document.getElementById('schedule-frequency');
+        const hourInput = document.getElementById('schedule-hour');
+        const minuteInput = document.getElementById('schedule-minute');
+        const dayOfWeekSelect = document.getElementById('schedule-day-of-week');
+        const dayOfMonthSelect = document.getElementById('schedule-day-of-month');
+        const timezoneSelect = document.getElementById('schedule-timezone');
+
+        if (frequencySelect && document.activeElement !== frequencySelect) {
+            frequencySelect.value = parsed.frequency;
+            updateScheduleUIVisibility();
+        }
+        if (hourInput && document.activeElement !== hourInput) hourInput.value = String(parsed.hour).padStart(2, '0');
+        if (minuteInput && document.activeElement !== minuteInput) minuteInput.value = String(parsed.minute).padStart(2, '0');
+        
+        const dowValue = String(parsed.dayOfWeek).split(/[,\\-]/)[0];
+        if (dayOfWeekSelect && document.activeElement !== dayOfWeekSelect && dowValue !== '*' && dowValue !== '?') {
+            dayOfWeekSelect.value = dowValue;
+        }
+        
+        const domValue = String(parsed.dayOfMonth).split(/[,\\-]/)[0];
+        if (dayOfMonthSelect && document.activeElement !== dayOfMonthSelect && domValue !== '*' && domValue !== '?') {
+            dayOfMonthSelect.value = domValue;
+        }
+        
+        if (timezoneSelect && document.activeElement !== timezoneSelect) timezoneSelect.value = timezone;
+    } else {
+        const displayEl = document.getElementById('schedule-display');
+        if (displayEl) displayEl.textContent = 'No schedule configured';
     }
+}
+
+function updateScheduleUIVisibility() {
+    const frequency = document.getElementById('schedule-frequency')?.value || 'daily';
+    const dayRow = document.getElementById('schedule-day-row');
+    const dateRow = document.getElementById('schedule-date-row');
+    
+    if (dayRow) dayRow.style.display = frequency === 'weekly' ? 'flex' : 'none';
+    if (dateRow) dateRow.style.display = frequency === 'monthly' ? 'flex' : 'none';
 }
 
 function renderRecentRuns(runs) {
@@ -42,6 +137,16 @@ function renderRecentRuns(runs) {
         
         const dateCell = document.createElement('td');
         dateCell.textContent = new Date(run.start_time).toLocaleString();
+        
+        const launchedCell = document.createElement('td');
+        const launchType = getLaunchType(run);
+        launchedCell.textContent = launchType;
+        launchedCell.className = 'launched-cell';
+        if (launchType === 'Manually') {
+            launchedCell.classList.add('launched-manually');
+        } else if (launchType === 'By scheduler') {
+            launchedCell.classList.add('launched-scheduler');
+        }
         
         const stateCell = document.createElement('td');
         const stateRaw = run.state.result_state || run.state.life_cycle_state;
@@ -78,12 +183,30 @@ function renderRecentRuns(runs) {
         }
 
         tr.appendChild(dateCell);
+        tr.appendChild(launchedCell);
         tr.appendChild(stateCell);
         tr.appendChild(durationCell);
         tr.appendChild(actionsCell);
         
         tbody.appendChild(tr);
     });
+}
+
+function getLaunchType(run) {
+    // Databricks trigger field is a string:
+    // - "ONE_TIME" = Manual trigger (user clicked "Run Now")
+    // - "PERIODIC" = Scheduled trigger
+    
+    if (run.trigger) {
+        if (run.trigger === 'ONE_TIME') {
+            return 'Manually';
+        } else if (run.trigger === 'PERIODIC') {
+            return 'By scheduler';
+        }
+    }
+    
+    // Fallback
+    return 'Unknown';
 }
 
 function formatDuration(ms) {
@@ -127,14 +250,63 @@ function renderDAG(configuredTasks, runTasks) {
     
     [bronzeContainer, silverContainer, goldContainer, mlContainer].forEach(el => el.innerHTML = '');
 
+    // Build dependency map
+    const taskMap = {};
+    configuredTasks.forEach((task, index) => {
+        taskMap[task.task_key] = { task, index, order: index + 1 };
+    });
+
+    // Calculate execution order
+    let executionOrder = 1;
+    const executionOrderMap = {};
+    const visited = new Set();
+    
+    function calculateOrder(taskKey, order = 1) {
+        if (visited.has(taskKey)) return executionOrderMap[taskKey] || order;
+        visited.add(taskKey);
+        
+        const entry = taskMap[taskKey];
+        if (!entry) return order;
+        
+        const task = entry.task;
+        if (task.depends_on && task.depends_on.length > 0) {
+            let maxDepOrder = 0;
+            task.depends_on.forEach(dep => {
+                const depOrder = calculateOrder(dep.task_key, order);
+                maxDepOrder = Math.max(maxDepOrder, depOrder);
+            });
+            executionOrderMap[taskKey] = maxDepOrder + 1;
+        } else {
+            if (!executionOrderMap[taskKey]) {
+                executionOrderMap[taskKey] = executionOrder++;
+            }
+        }
+        
+        return executionOrderMap[taskKey];
+    }
+    
+    configuredTasks.forEach(task => calculateOrder(task.task_key));
+
+    // Render tasks
     configuredTasks.forEach(task => {
         const status = taskStatusMap[task.task_key] || 'PENDING';
+        const order = executionOrderMap[task.task_key] || 0;
+        const deps = task.depends_on && task.depends_on.length > 0 
+            ? task.depends_on.map(d => d.task_key).join(', ')
+            : 'none';
         
         const taskEl = document.createElement('div');
         taskEl.className = 'task-node';
+        taskEl.setAttribute('data-task-key', task.task_key);
+        taskEl.setAttribute('data-task-order', order);
+        
+        const depText = deps === 'none' ? '(starts first)' : `← ${deps}`;
+        
         taskEl.innerHTML = `
             <div class="task-status status-${status}" title="${status}"></div>
             <div class="task-name">${task.task_key}</div>
+            <div class="task-order">#${order}</div>
+            <div class="task-deps" title="Dependencies: ${depText}">${depText}</div>
             <div class="task-duration">${status}</div>
         `;
         
@@ -199,6 +371,100 @@ document.addEventListener('DOMContentLoaded', () => {
             } finally {
                 runBtn.disabled = false;
                 runBtn.textContent = 'Run Now';
+            }
+        });
+    }
+
+    // Toggle Schedule Form
+    const scheduleForm = document.getElementById('schedule-form');
+    const toggleBtn = document.getElementById('toggle-schedule-form');
+    const cancelBtn = document.getElementById('cancel-schedule-form');
+    
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', () => {
+            if (scheduleForm.style.display === 'none') {
+                scheduleForm.style.display = 'flex';
+                toggleBtn.textContent = 'Hide Schedule';
+                toggleBtn.classList.add('active');
+            } else {
+                scheduleForm.style.display = 'none';
+                toggleBtn.textContent = 'Edit Schedule';
+                toggleBtn.classList.remove('active');
+            }
+        });
+    }
+    
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            scheduleForm.style.display = 'none';
+            if (toggleBtn) {
+                toggleBtn.textContent = 'Edit Schedule';
+                toggleBtn.classList.remove('active');
+            }
+        });
+    }
+
+    const frequencySelect = document.getElementById('schedule-frequency');
+    if (frequencySelect) {
+        frequencySelect.addEventListener('change', updateScheduleUIVisibility);
+        updateScheduleUIVisibility();
+    }
+
+    if (scheduleForm) {
+        scheduleForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const saveBtn = document.getElementById('pipeline-save-schedule');
+            const frequencySelect = document.getElementById('schedule-frequency');
+            const hourInput = document.getElementById('schedule-hour');
+            const minuteInput = document.getElementById('schedule-minute');
+            const dayOfWeekSelect = document.getElementById('schedule-day-of-week');
+            const dayOfMonthSelect = document.getElementById('schedule-day-of-month');
+            const timezoneSelect = document.getElementById('schedule-timezone');
+
+            const frequency = frequencySelect?.value || 'daily';
+            const hour = parseInt(hourInput?.value || '0', 10);
+            const minute = parseInt(minuteInput?.value || '0', 10);
+            const dayOfWeek = dayOfWeekSelect?.value || '0';
+            const dayOfMonth = dayOfMonthSelect?.value || '1';
+            const timezone = (timezoneSelect?.value || 'UTC').trim();
+
+            const generatedCron = generateQuartzCron(frequency, hour, minute, dayOfWeek, dayOfMonth);
+
+            const payload = {
+                quartz_cron_expression: generatedCron,
+                timezone_id: timezone || null,
+                pause_status: 'UNPAUSED'
+            };
+
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.textContent = 'Saving...';
+            }
+
+            try {
+                const response = await fetch('/data-pipeline/jobs/schedule', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    const message = errorData.detail || 'Failed to update schedule.';
+                    throw new Error(message);
+                }
+
+                alert('Schedule updated successfully.');
+                await fetchPipelineData();
+            } catch (error) {
+                console.error('Schedule update failed', error);
+                alert(error.message || 'Failed to update schedule.');
+            } finally {
+                if (saveBtn) {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = 'Save Schedule';
+                }
             }
         });
     }
