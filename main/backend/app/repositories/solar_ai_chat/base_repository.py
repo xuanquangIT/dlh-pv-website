@@ -40,6 +40,11 @@ class BaseRepository:
         "gold.dim_facility",
         "gold.forecast_daily",
         "gold.model_monitoring_daily",
+        "gold.mart_aqi_impact_daily",
+        "gold.mart_energy_daily",
+        "gold.mart_forecast_accuracy_daily",
+        "gold.mart_system_kpi_daily",
+        "gold.mart_weather_impact_daily",
     })
     _ALLOWED_COLUMNS: frozenset[str] = frozenset({
         "aqi_value", "aqi_category",

@@ -37,11 +37,18 @@ class TopicRepository(BaseRepository):
 
     # ------ System Overview -----------------------------------------------
 
-    def _system_overview(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    def _system_overview(self, arguments: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        lookback_days = self._lookback_days()
+        if arguments is not None and "timeframe_days" in arguments:
+            try:
+                lookback_days = max(0, int(arguments["timeframe_days"]))
+            except (ValueError, TypeError):
+                pass
+                
         return self._with_databricks_query(
             "system_overview",
-            self._system_overview_databricks,
-            self._system_overview_csv,
+            lambda: self._system_overview_databricks(lookback_days),
+            lambda: self._system_overview_csv(lookback_days),
             [
                 {"layer": "Gold", "dataset": "gold.fact_energy"},
                 {"layer": "Gold", "dataset": "gold.dim_facility"},
@@ -49,13 +56,12 @@ class TopicRepository(BaseRepository):
             ],
         )
 
-    def _system_overview_databricks(self) -> dict[str, Any]:
-        lookback_days = self._lookback_days()
+    def _system_overview_databricks(self, lookback_days: int) -> dict[str, Any]:
         agg = self._execute_query(
             "SELECT COALESCE(SUM(energy_mwh), 0) AS total_mwh,"
             "       COALESCE(AVG(completeness_pct), 0) AS avg_quality"
             " FROM gold.fact_energy"
-            f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
         )
         total_mwh = float(agg[0]["total_mwh"]) if agg else 0.0
         avg_quality = float(agg[0]["avg_quality"]) if agg else 0.0
@@ -99,7 +105,7 @@ class TopicRepository(BaseRepository):
             "latest_data_timestamp": latest_data_ts,
         }
 
-    def _system_overview_csv(self) -> dict[str, Any]:
+    def _system_overview_csv(self, lookback_days: int) -> dict[str, Any]:
         gold_fact = self._load_csv(self._dataset_path("lh_gold_fact_solar_environmental.csv"))
         gold_fac = self._load_csv(self._dataset_path("lh_gold_dim_facility.csv"))
         silver_energy = self._load_csv(self._dataset_path("lh_silver_clean_hourly_energy.csv"))
@@ -122,11 +128,18 @@ class TopicRepository(BaseRepository):
 
     # ------ Energy Performance --------------------------------------------
 
-    def _energy_performance(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    def _energy_performance(self, arguments: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        lookback_days = self._lookback_days()
+        if arguments is not None and "timeframe_days" in arguments:
+            try:
+                lookback_days = max(0, int(arguments["timeframe_days"]))
+            except (ValueError, TypeError):
+                pass
+
         return self._with_databricks_query(
             "energy_performance",
-            self._energy_performance_databricks,
-            self._energy_performance_csv,
+            lambda: self._energy_performance_databricks(lookback_days),
+            lambda: self._energy_performance_csv(lookback_days),
             [
                 {"layer": "Gold", "dataset": "gold.fact_energy"},
                 {"layer": "Gold", "dataset": "gold.forecast_daily"},
@@ -134,8 +147,7 @@ class TopicRepository(BaseRepository):
             ],
         )
 
-    def _energy_performance_databricks(self) -> dict[str, Any]:
-        lookback_days = self._lookback_days()
+    def _energy_performance_databricks(self, lookback_days: int) -> dict[str, Any]:
         # Fetch all facilities (no LIMIT) so we can derive both top-N and bottom-N.
         # Include capacity_mw and capacity_factor_pct for richer per-facility context.
         all_fac_rows = self._execute_query(
@@ -146,7 +158,7 @@ class TopicRepository(BaseRepository):
             " FROM gold.fact_energy f"
             " LEFT JOIN gold.dim_facility d"
             "   ON f.facility_id = d.facility_id AND d.is_current = true"
-            f" WHERE f.date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE f.date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
             " GROUP BY COALESCE(d.facility_name, f.facility_id)"
             " ORDER BY total_mwh DESC"
         )
@@ -173,7 +185,7 @@ class TopicRepository(BaseRepository):
             "SELECT EXTRACT(HOUR FROM date_hour) AS hr,"
             "       SUM(energy_mwh) AS total_mwh"
             " FROM gold.fact_energy"
-            f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
             "   AND energy_mwh > 0"
             " GROUP BY EXTRACT(HOUR FROM date_hour)"
             " ORDER BY total_mwh DESC LIMIT 3"
@@ -184,7 +196,7 @@ class TopicRepository(BaseRepository):
             " FROM gold.fact_energy f"
             " LEFT JOIN gold.dim_facility d"
             "   ON f.facility_id = d.facility_id AND d.is_current = true"
-            f" WHERE f.date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE f.date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
             "   AND f.capacity_factor_pct IS NOT NULL"
             " GROUP BY COALESCE(d.facility_name, f.facility_id)"
             " ORDER BY performance_ratio_pct DESC LIMIT 3"
@@ -203,7 +215,7 @@ class TopicRepository(BaseRepository):
                 "SELECT CAST(date_hour AS DATE) AS day,"
                 "       SUM(energy_mwh) AS daily_mwh"
                 " FROM gold.fact_energy"
-                f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+                f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
                 " GROUP BY CAST(date_hour AS DATE)"
                 " ORDER BY day DESC LIMIT 7"
             )
@@ -230,7 +242,7 @@ class TopicRepository(BaseRepository):
             "window_days": lookback_days,
         }
 
-    def _energy_performance_csv(self) -> dict[str, Any]:
+    def _energy_performance_csv(self, lookback_days: int) -> dict[str, Any]:
         rows = self._load_csv(self._dataset_path("lh_silver_clean_hourly_energy.csv"))
         gold_fact = self._load_csv(self._dataset_path("lh_gold_fact_solar_environmental.csv"))
         facility_totals: dict[str, float] = defaultdict(float)
@@ -477,7 +489,7 @@ class TopicRepository(BaseRepository):
             "       bronze_failed_events, silver_quality_failed_checks,"
             "       forecast_daily_rows_generated AS forecast_rows_generated"
             " FROM gold.pipeline_run_diagnostics"
-            f" WHERE run_timestamp_utc >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE run_timestamp_utc >= current_date() - INTERVAL {lookback_days} DAYS"
             " ORDER BY run_timestamp_utc DESC"
             " LIMIT 50"
         )
@@ -490,7 +502,7 @@ class TopicRepository(BaseRepository):
                 "       bronze_failed_events, silver_quality_failed_checks,"
                 "       forecast_hourly_rows_generated AS forecast_rows_generated"
                 " FROM gold.pipeline_run_diagnostics"
-                f" WHERE run_timestamp_utc >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+                f" WHERE run_timestamp_utc >= current_date() - INTERVAL {lookback_days} DAYS"
                 " ORDER BY run_timestamp_utc DESC"
                 " LIMIT 50"
             )
@@ -555,7 +567,7 @@ class TopicRepository(BaseRepository):
             "SELECT COALESCE(facility_name, facility_id) AS facility,"
             "       quality_flag, quality_issues"
             " FROM silver.energy_readings"
-            f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
             "   AND (quality_flag != 'GOOD'"
             "        OR (quality_issues IS NOT NULL AND quality_issues != '' AND quality_issues != '|||||'))"
             " LIMIT 5"
@@ -753,11 +765,18 @@ class TopicRepository(BaseRepository):
 
     # ------ Data Quality --------------------------------------------------
 
-    def _data_quality_issues(self) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    def _data_quality_issues(self, arguments: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        lookback_days = self._lookback_days()
+        if arguments is not None and "timeframe_days" in arguments:
+            try:
+                lookback_days = max(0, int(arguments["timeframe_days"]))
+            except (ValueError, TypeError):
+                pass
+                
         return self._with_databricks_query(
             "data_quality_issues",
-            self._data_quality_databricks,
-            self._data_quality_csv,
+            lambda: self._data_quality_databricks(lookback_days),
+            lambda: self._data_quality_csv(lookback_days),
             [
                 {"layer": "Silver", "dataset": "silver.energy_readings"},
                 {"layer": "Silver", "dataset": "silver.weather"},
@@ -765,13 +784,12 @@ class TopicRepository(BaseRepository):
             ],
         )
 
-    def _data_quality_databricks(self) -> dict[str, Any]:
-        lookback_days = self._lookback_days()
+    def _data_quality_databricks(self, lookback_days: int) -> dict[str, Any]:
         quality_rows = self._execute_query(
             "SELECT COALESCE(facility_name, facility_id) AS facility,"
             "       AVG(completeness_pct) AS avg_score"
             " FROM silver.energy_readings"
-            f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
             " GROUP BY COALESCE(facility_name, facility_id)"
             " ORDER BY facility"
         )
@@ -785,17 +803,17 @@ class TopicRepository(BaseRepository):
         issue_rows = self._execute_query(
             "SELECT COALESCE(facility_name, facility_id) AS facility, quality_issues"
             " FROM silver.energy_readings"
-            f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
             "   AND quality_issues IS NOT NULL AND quality_issues != '' AND quality_issues != '|||||'"
             " UNION ALL"
             " SELECT COALESCE(facility_name, location_id) AS facility, quality_issues"
             " FROM silver.weather"
-            f" WHERE weather_timestamp >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE weather_timestamp >= current_date() - INTERVAL {lookback_days} DAYS"
             "   AND quality_flag != 'GOOD'"
             " UNION ALL"
             " SELECT COALESCE(facility_name, location_id) AS facility, quality_issues"
             " FROM silver.air_quality"
-            f" WHERE aqi_timestamp >= current_timestamp() - INTERVAL {lookback_days} DAYS"
+            f" WHERE aqi_timestamp >= current_date() - INTERVAL {lookback_days} DAYS"
             "   AND quality_flag != 'GOOD'"
         )
         from collections import defaultdict
@@ -836,7 +854,7 @@ class TopicRepository(BaseRepository):
             result["summary"] = "All facilities have quality score >= 95%. No issues detected."
         return result
 
-    def _data_quality_csv(self) -> dict[str, Any]:
+    def _data_quality_csv(self, lookback_days: int) -> dict[str, Any]:
         from collections import defaultdict
         silver_energy = self._load_csv(self._dataset_path("lh_silver_clean_hourly_energy.csv"))
         silver_weather = self._load_csv(self._dataset_path("lh_silver_clean_hourly_weather.csv"))
