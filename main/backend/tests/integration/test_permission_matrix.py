@@ -34,9 +34,9 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
     def test_matrix_for_frontend_routes(self) -> None:
         route_matrix = {
             "/dashboard": {"admin", "data_engineer", "ml_engineer", "analyst"},
-            "/pipeline": {"data_engineer"},
-            "/quality": {"data_engineer"},
-            "/training": {"ml_engineer"},
+            "/pipeline": {"admin", "data_engineer"},
+            "/quality": {"admin", "data_engineer"},
+            "/training": {"admin", "ml_engineer"},
             "/registry": {"admin", "ml_engineer"},
             "/forecast": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/analytics": {"admin", "analyst"},
@@ -59,10 +59,10 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
             "/dashboard/summary": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/dashboard/embed-info": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/data-pipeline/status": {"data_engineer", "system"},
-            "/data-quality/score": {"data_engineer"},
-            "/ml-training/experiments": {"ml_engineer", "system"},
-            "/model-registry/models": {"admin", "ml_engineer", "system"},
-            "/forecast/next-72h": {"admin", "data_engineer", "ml_engineer", "analyst"},
+            "/data-quality/summary": {"admin", "data_engineer"},
+            "/ml-training/monitoring": {"admin", "ml_engineer", "data_engineer"},
+            "/model-registry/models-list": {"admin", "ml_engineer", "data_engineer"},
+            "/forecast/summary-kpi": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/analytics/query-history": {"admin", "analyst"},
             "/solar-ai-chat/topics": {"admin", "data_engineer", "ml_engineer"},
         }

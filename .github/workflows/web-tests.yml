@@ -1,0 +1,50 @@
+name: Web Tests CI
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: ["main", "develop", "test/**"]
+
+jobs:
+  web-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run web pytest with coverage gate
+        env:
+          AUTH_SECRET_KEY: ci-test-secret-key
+          AUTH_COOKIE_NAME: pv_access_token
+          AUTH_COOKIE_SECURE: "false"
+        run: |
+          python -m pytest \
+            main/backend/tests/integration/test_frontend_pages.py \
+            main/backend/tests/integration/test_auth_login_flow.py \
+            main/backend/tests/integration/test_permission_matrix.py \
+            main/backend/tests/integration/test_auth_admin_routes.py \
+            --cov=app.api.frontend \
+            --cov=app.api.auth.routes \
+            --cov=app.main \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=90 \
+            -q
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage-report
+          path: coverage.xml

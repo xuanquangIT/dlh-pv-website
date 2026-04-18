@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -61,7 +62,7 @@ class AuthLoginFlowIntegrationTests(unittest.TestCase):
     def test_dashboard_renders_and_common_js_does_not_force_login_redirect(self) -> None:
         dashboard_response = self.client.get("/dashboard", headers={"accept": "text/html"})
         self.assertEqual(dashboard_response.status_code, 200)
-        self.assertIn("common.js?v=20260406-authfix", dashboard_response.text)
+        self.assertIn("/static/js/platform_portal/common.js", dashboard_response.text)
 
         common_js_response = self.client.get("/static/js/platform_portal/common.js")
         self.assertEqual(common_js_response.status_code, 200)
@@ -69,6 +70,50 @@ class AuthLoginFlowIntegrationTests(unittest.TestCase):
         common_js = common_js_response.text
         self.assertNotIn('/login?next=', common_js)
         self.assertIn('window.location.assign("/auth/logout")', common_js)
+
+    def test_login_redirects_with_inactive_error_code(self) -> None:
+        with patch.object(
+            AuthService,
+            "authenticate_user",
+            side_effect=HTTPException(status_code=401, detail="Inactive user"),
+        ):
+            response = self.client.post(
+                "/auth/login",
+                data={"username": "admin", "password": "admin123", "next": "/pipeline"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers.get("location"), "/login?next=%2Fpipeline&error=inactive")
+
+    def test_login_redirects_with_invalid_credentials_error_code(self) -> None:
+        with patch.object(
+            AuthService,
+            "authenticate_user",
+            side_effect=HTTPException(status_code=401, detail="Incorrect username or password"),
+        ):
+            response = self.client.post(
+                "/auth/login",
+                data={"username": "admin", "password": "wrong", "next": "/dashboard"},
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers.get("location"), "/login?next=%2Fdashboard&error=invalid_credentials")
+
+    def test_login_reraises_unmapped_auth_error(self) -> None:
+        with patch.object(
+            AuthService,
+            "authenticate_user",
+            side_effect=HTTPException(status_code=418, detail="Custom auth error"),
+        ):
+            response = self.client.post(
+                "/auth/login",
+                data={"username": "admin", "password": "admin123", "next": "/dashboard"},
+            )
+
+        self.assertEqual(response.status_code, 418)
+        self.assertEqual(response.json().get("detail"), "Custom auth error")
 
 
 if __name__ == "__main__":
