@@ -181,18 +181,22 @@ class ExtremeRepository(BaseRepository):
         for col in extra_columns:
             self._validate_sql_identifier(col, self._ALLOWED_COLUMNS)
 
+        # Timeframe windows (hour/day/week/month/year) are built from the
+        # user's anchor_date which is a wall-clock date — so filter on the
+        # station-local timestamp column, not UTC. Otherwise an Australian
+        # station's "ngày 17/04" actually maps to UTC 16/04 07:00..17/04 07:00.
         if table == "silver.energy_readings":
             facility_expr = "COALESCE(facility_name, facility_id)"
-            timestamp_column = "date_hour"
+            timestamp_column = "date_hour_local"
         elif table == "silver.weather":
             facility_expr = "COALESCE(facility_name, location_id)"
-            timestamp_column = "weather_timestamp"
+            timestamp_column = "weather_timestamp_local"
         elif table == "silver.air_quality":
             facility_expr = "COALESCE(facility_name, location_id)"
-            timestamp_column = "aqi_timestamp"
+            timestamp_column = "aqi_timestamp_local"
         else:
             facility_expr = "COALESCE(facility_name, facility_code)"
-            timestamp_column = "date_hour"
+            timestamp_column = "date_hour_local"
 
         extra_select = "".join(f", {col}" for col in extra_columns)
         sql = (

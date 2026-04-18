@@ -169,13 +169,15 @@ class TopicRepository(BaseRepository):
         top_names = {f["facility"] for f in top_fac}
         bottom_fac = [f for f in reversed(all_facilities) if f["facility"] not in top_names][:3]
 
+        # Use station-local hour so peak_hours reflect wall-clock midday
+        # (the physically relevant solar peak), not UTC hour.
         peak = self._execute_query(
-            "SELECT EXTRACT(HOUR FROM date_hour) AS hr,"
+            "SELECT EXTRACT(HOUR FROM date_hour_local) AS hr,"
             "       SUM(energy_mwh) AS total_mwh"
             " FROM gold.fact_energy"
             f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
             "   AND energy_mwh > 0"
-            " GROUP BY EXTRACT(HOUR FROM date_hour)"
+            " GROUP BY EXTRACT(HOUR FROM date_hour_local)"
             " ORDER BY total_mwh DESC LIMIT 3"
         )
         top_performance_ratio = self._safe_execute_query(
@@ -200,11 +202,13 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = float(forecast_rows[0]["tomorrow_mwh"])
         else:
             fallback_daily = self._safe_execute_query(
-                "SELECT CAST(date_hour AS DATE) AS day,"
+                # Group by local DATE so "daily MWh" matches operator reports
+                # (a station's day is its wall-clock day, not UTC's).
+                "SELECT reading_date_local AS day,"
                 "       SUM(energy_mwh) AS daily_mwh"
                 " FROM gold.fact_energy"
                 f" WHERE date_hour >= current_timestamp() - INTERVAL {lookback_days} DAYS"
-                " GROUP BY CAST(date_hour AS DATE)"
+                " GROUP BY reading_date_local"
                 " ORDER BY day DESC LIMIT 7"
             )
             daily_values = [float(r["daily_mwh"]) for r in fallback_daily if r.get("daily_mwh") is not None]

@@ -61,6 +61,8 @@ from app.services.solar_ai_chat.prompt_builder import (
 from app.services.solar_ai_chat.query_rewriter import QueryRewriter
 from app.services.solar_ai_chat.tool_executor import ToolExecutor
 from app.services.solar_ai_chat.answer_verifier import AnswerVerifier
+from app.services.solar_ai_chat.deep_planner import DeepPlanner
+from app.schemas.solar_ai_chat.agent import EvidenceItem, EvidenceStore
 
 if TYPE_CHECKING:
     from app.repositories.solar_ai_chat.vector_repository import VectorRepository
@@ -79,6 +81,8 @@ logger.propagate = False
 
 TOOL_PATH_CONFIDENCE = 0.95
 MAX_TOOL_STEPS = 6  # Increased from 2 to allow multi-tool agentic queries
+MAX_PLANNED_ACTIONS = 5
+MAX_REFLECTION_PASSES = 1
 
 # Keywords that signal the user explicitly wants a live web search.
 _WEB_SEARCH_KEYWORDS = (
@@ -328,9 +332,10 @@ class SolarAIChatService:
         hybrid_retrieval_enabled: bool = True,   # kept for route-compat, ignored
         max_tool_steps: int = MAX_TOOL_STEPS,
         legacy_router_enabled: bool = False,     # kept for route-compat, ignored
-        planner_max_output_tokens: int | None = None,    # ignored
+        planner_max_output_tokens: int | None = None,
         synthesis_max_output_tokens: int | None = None,
         verifier_max_output_tokens: int | None = None,
+        deep_planner_enabled: bool = False,
     ) -> None:
         self._repository = repository
         self._intent_service = intent_service
@@ -350,6 +355,11 @@ class SolarAIChatService:
             AnswerVerifier(model_router, max_output_tokens=verifier_max_output_tokens)
             if verifier_enabled and model_router is not None
             else AnswerVerifier(None)
+        )
+        self._deep_planner = DeepPlanner(
+            model_router,
+            max_output_tokens=planner_max_output_tokens or 700,
+            enabled=deep_planner_enabled and model_router is not None,
         )
 
     # ------------------------------------------------------------------
@@ -532,9 +542,119 @@ class SolarAIChatService:
             locked_topic: ChatTopic | None = None
             user_query_date = extract_query_date(request.message)
 
-            # Intent-based pre-fetch (step 0)
+            # ----------------------------------------------------------
+            # Deep planner (stream path): structured plan with all tools
+            # needed for compound/multi-intent prompts.  Each planned tool
+            # is executed and emitted as a thinking step so the web UI
+            # shows progress for every call.
+            # ----------------------------------------------------------
+            planner_used_stream = False
+            if self._deep_planner.enabled and not _needs_web_search(request.message):
+                try:
+                    plan = self._deep_planner.plan(
+                        request.message, language, history_messages or None
+                    )
+                except Exception as plan_err:
+                    logger.warning("solar_chat_stream_planner_error trace_id=%s error=%s", trace_id, plan_err)
+                    plan = None
+
+                if plan and plan.actions:
+                    allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+                    yield _sse(StatusUpdateEvent(text="Planning tool calls…"))
+                    for idx, action in enumerate(list(plan.actions)[:MAX_PLANNED_ACTIONS]):
+                        step_num = len(step_events)
+                        tool_name = str(getattr(action, "tool", "") or "")
+                        tool_args = dict(getattr(action, "arguments", {}) or {})
+                        if not tool_name or tool_name == "answer_directly":
+                            step_events.append({"step": step_num, "tool": tool_name or "answer_directly", "status": "skipped"})
+                            continue
+
+                        yield _sse(ThinkingStepEvent(
+                            step=step_num, tool_name=tool_name,
+                            label=tool_label(tool_name), trace_id=trace_id,
+                        ))
+                        t0 = time.perf_counter()
+
+                        if tool_name == "web_lookup":
+                            web_response = self._execute_web_lookup(tool_args)
+                            dur = int((time.perf_counter() - t0) * 1000)
+                            for wr in web_response.get("results", []):
+                                wr_url = wr.get("url", "")
+                                if wr_url:
+                                    all_sources.append({
+                                        "layer": "Web", "dataset": wr.get("title", wr_url),
+                                        "data_source": "web_search", "url": wr_url,
+                                    })
+                            messages.append({
+                                "role": "model",
+                                "parts": [{"functionCall": {"name": tool_name, "args": tool_args}}],
+                            })
+                            messages.append({
+                                "role": "user",
+                                "parts": [{"functionResponse": {"name": tool_name, "response": web_response}}],
+                            })
+                            step_events.append({
+                                "step": step_num, "tool": tool_name, "status": "ok",
+                                "result_count": len(web_response.get("results", [])),
+                            })
+                            yield _sse(ToolResultEvent(
+                                step=step_num, tool_name=tool_name, status="ok",
+                                duration_ms=dur, trace_id=trace_id,
+                            ))
+                            continue
+
+                        if tool_name not in allowed_tools:
+                            step_events.append({"step": step_num, "tool": tool_name, "status": "denied"})
+                            yield _sse(ToolResultEvent(
+                                step=step_num, tool_name=tool_name, status="denied", trace_id=trace_id,
+                            ))
+                            continue
+
+                        try:
+                            data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
+                            dur = int((time.perf_counter() - t0) * 1000)
+                            all_metrics.update(data)
+                            all_sources.extend(sources)
+                            if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
+                                topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
+                            messages.append({
+                                "role": "model",
+                                "parts": [{"functionCall": {"name": tool_name, "args": tool_args}}],
+                            })
+                            messages.append({
+                                "role": "user",
+                                "parts": [{"functionResponse": {"name": tool_name, "response": data}}],
+                            })
+                            step_events.append({
+                                "step": step_num, "tool": tool_name, "status": "ok",
+                                "metric_keys": sorted(data.keys()), "source_count": len(sources),
+                            })
+                            yield _sse(ToolResultEvent(
+                                step=step_num, tool_name=tool_name, status="ok",
+                                metric_keys=sorted(data.keys()), duration_ms=dur, trace_id=trace_id,
+                            ))
+                        except DatabricksDataUnavailableError:
+                            raise
+                        except Exception as tool_err:
+                            dur = int((time.perf_counter() - t0) * 1000)
+                            step_events.append({
+                                "step": step_num, "tool": tool_name, "status": "error",
+                                "detail": str(tool_err)[:120],
+                            })
+                            yield _sse(ToolResultEvent(
+                                step=step_num, tool_name=tool_name, status="error",
+                                duration_ms=dur, trace_id=trace_id,
+                            ))
+
+                    if all_metrics:
+                        planner_used_stream = True
+
+            # Intent-based pre-fetch (step 0) — legacy fallback when planner
+            # returned no actionable plan.
             prefetch_tool: str | None = None
-            if user_query_date is not None:
+            if planner_used_stream:
+                prefetch_tool = None
+            elif user_query_date is not None:
                 prefetch_tool = "get_station_daily_report"
             elif intent_topic != ChatTopic.GENERAL and intent_confidence >= 0.6:
                 prefetch_tool = _TOPIC_TO_PRIMARY_TOOL.get(intent_topic)
@@ -1135,6 +1255,44 @@ class SolarAIChatService:
                 ),
             )
 
+        # ------------------------------------------------------------------
+        # Deep planner (pre-agentic): a single structured LLM call that
+        # enumerates ALL tools needed to answer the question.  Handles
+        # compound/multi-intent prompts in one pass so synthesis sees the
+        # full evidence set instead of a partial retrieval.  If the planner
+        # returns any actions, we execute them and SKIP the legacy
+        # single-tool intent pre-fetch below.
+        # ------------------------------------------------------------------
+        planner_used = False
+        if (
+            self._deep_planner.enabled
+            and not _needs_web_search(request.message)
+        ):
+            try:
+                plan = self._deep_planner.plan(
+                    request.message, language, history_messages or None
+                )
+            except Exception as plan_err:
+                logger.warning("solar_chat_deep_planner_error trace_id=%s error=%s", trace_id, plan_err)
+                plan = None
+
+            if plan and plan.actions:
+                logger.info(
+                    "solar_chat_plan trace_id=%s intent=%s actions=%s confidence=%.2f",
+                    trace_id,
+                    plan.intent_type,
+                    [f"{a.tool}({sorted(a.arguments.keys())})" for a in plan.actions],
+                    plan.confidence,
+                )
+                derived = self._execute_plan(
+                    list(plan.actions), request.role, messages,
+                    all_metrics, all_sources, step_events, trace_id,
+                )
+                if all_metrics:
+                    planner_used = True
+                    if derived is not None and locked_topic is None:
+                        topic = derived
+
         # Skip intent pre-fetch when the user message references a specific
         # date (e.g. "ngày 10/4/2026").  Pre-fetch tools like
         # get_energy_performance don't accept date parameters, so their
@@ -1142,7 +1300,12 @@ class SolarAIChatService:
         # get_station_daily_report with the extracted anchor_date.
         user_query_date = extract_query_date(request.message)
 
-        if user_query_date is not None:
+        if planner_used:
+            # Planner has already satisfied retrieval — fall through to the
+            # fast-path synthesis block below, skipping the legacy single-tool
+            # pre-fetch to avoid redundant calls.
+            pass
+        elif user_query_date is not None:
             # Date-specific query: pre-fetch station daily report with the
             # extracted date so the LLM has real data to synthesise from.
             prefetch_tool = "get_station_daily_report"
@@ -1601,6 +1764,112 @@ class SolarAIChatService:
             intent_confidence=TOOL_PATH_CONFIDENCE,
             thinking_trace=thinking_trace,
         )
+
+    def _execute_plan(
+        self,
+        actions: list[Any],
+        role: ChatRole,
+        messages: list[dict[str, Any]],
+        all_metrics: dict[str, Any],
+        all_sources: list[dict[str, str]],
+        step_events: list[dict[str, Any]],
+        trace_id: str,
+    ) -> ChatTopic | None:
+        """Execute a planner's action list. Appends results to the provided
+        containers so downstream synthesis sees all collected evidence.
+
+        Returns the topic derived from the first data-producing tool (for
+        response metadata).  web_lookup is handled here; answer_directly is
+        skipped (no data fetch).  RBAC-denied actions are recorded but do not
+        abort the pipeline.
+        """
+        allowed_tools = ROLE_TOOL_PERMISSIONS.get(role, set())
+        derived_topic: ChatTopic | None = None
+        step_index = len(step_events)
+
+        for action in actions[:MAX_PLANNED_ACTIONS]:
+            tool_name = str(getattr(action, "tool", "") or "")
+            if not tool_name:
+                continue
+            tool_args = dict(getattr(action, "arguments", {}) or {})
+            step_index += 1
+
+            if tool_name == "answer_directly":
+                step_events.append({
+                    "step": step_index, "tool": tool_name, "status": "skipped",
+                    "detail": getattr(action, "rationale", "") or "planner: no data needed",
+                })
+                continue
+
+            if tool_name == "web_lookup":
+                try:
+                    web_response = self._execute_web_lookup(tool_args)
+                    results = web_response.get("results", [])
+                    for wr in results:
+                        wr_url = wr.get("url", "")
+                        if wr_url:
+                            all_sources.append({
+                                "layer": "Web", "dataset": wr.get("title", wr_url),
+                                "data_source": "web_search", "url": wr_url,
+                            })
+                    messages.append({
+                        "role": "model",
+                        "parts": [{"functionCall": {"name": tool_name, "args": tool_args}}],
+                    })
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": tool_name, "response": web_response}}],
+                    })
+                    step_events.append({
+                        "step": step_index, "tool": tool_name, "status": "ok",
+                        "result_count": len(results),
+                    })
+                except Exception as err:
+                    step_events.append({
+                        "step": step_index, "tool": tool_name, "status": "error", "detail": str(err)[:120],
+                    })
+                continue
+
+            if tool_name not in allowed_tools:
+                step_events.append({
+                    "step": step_index, "tool": tool_name, "status": "denied",
+                })
+                continue
+
+            try:
+                data, sources = self._tool_executor.execute(tool_name, tool_args, role)
+                all_metrics.update(data)
+                all_sources.extend(sources)
+                messages.append({
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": tool_name, "args": tool_args}}],
+                })
+                messages.append({
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": tool_name, "response": data}}],
+                })
+                step_events.append({
+                    "step": step_index, "tool": tool_name, "status": "ok",
+                    "metric_keys": sorted(data.keys()), "source_count": len(sources),
+                })
+                if derived_topic is None and tool_name in TOOL_NAME_TO_TOPIC:
+                    derived_topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
+                logger.info(
+                    "solar_chat_plan_exec trace_id=%s tool=%s metric_keys=%s sources=%d",
+                    trace_id, tool_name, sorted(data.keys()), len(sources),
+                )
+            except DatabricksDataUnavailableError:
+                raise
+            except Exception as err:
+                step_events.append({
+                    "step": step_index, "tool": tool_name, "status": "error", "detail": str(err)[:120],
+                })
+                logger.warning(
+                    "solar_chat_plan_exec_failed trace_id=%s tool=%s error=%s",
+                    trace_id, tool_name, err,
+                )
+
+        return derived_topic
 
     def _execute_web_lookup(self, tool_args: dict[str, Any]) -> dict[str, Any]:
         """Execute a web_lookup tool call and return structured search results."""

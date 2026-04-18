@@ -272,6 +272,16 @@ def extract_specific_hour(normalized_message: str) -> int | None:
 
 def extract_query_date(message: str) -> date | None:
     normalized = normalize_vietnamese_text(message)
+    # Relative-day keywords (Vietnamese + English). Ordered longest-first.
+    today = date.today()
+    if any(kw in normalized for kw in ("hom nay", "ngay nay", "today")):
+        return today
+    if any(kw in normalized for kw in ("hom qua", "yesterday")):
+        from datetime import timedelta
+        return today - timedelta(days=1)
+    if any(kw in normalized for kw in ("ngay mai", "hom mai", "tomorrow")):
+        from datetime import timedelta
+        return today + timedelta(days=1)
     for pattern, field_names in _DATE_PATTERNS:
         match = pattern.search(normalized)
         if not match:

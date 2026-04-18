@@ -124,6 +124,7 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
         planner_max_output_tokens=settings.llm_planner_max_output_tokens,
         synthesis_max_output_tokens=settings.llm_synthesis_max_output_tokens,
         verifier_max_output_tokens=settings.llm_verifier_max_output_tokens,
+        deep_planner_enabled=settings.planner_enabled,
     )
 
 

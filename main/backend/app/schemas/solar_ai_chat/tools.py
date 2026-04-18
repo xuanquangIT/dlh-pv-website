@@ -228,6 +228,37 @@ TOOL_DECLARATIONS: list[dict] = [
         },
     },
     {
+        "name": "get_station_hourly_report",
+        "description": (
+            "Retrieve HOURLY energy generation for one or more stations on a specific date. "
+            "Returns rows with hour (0-23), facility, energy_mwh, capacity_factor_pct. "
+            "Use this whenever the user asks for energy/output broken down by hour, "
+            "'theo giờ', 'từng giờ', 'hourly', or an hour-of-day time series for a station. "
+            "If anchor_date is omitted, the latest available date for the station is used. "
+            "Always pass station_name for single-station requests; leave empty for all stations."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "station_name": {
+                    "type": "string",
+                    "description": (
+                        "Name or code of a specific station (partial match supported). "
+                        "Leave empty to aggregate across all stations."
+                    ),
+                },
+                "anchor_date": {
+                    "type": "string",
+                    "description": (
+                        "Date for the hourly breakdown (YYYY-MM-DD). "
+                        "Leave empty to use the latest date with data for that station."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_facility_info",
         "description": (
             "Retrieve detailed information about solar energy facilities: "
@@ -294,6 +325,7 @@ TOOL_NAME_TO_TOPIC: dict[str, str] = {
     "get_extreme_energy": "energy_performance",
     "get_extreme_weather": "energy_performance",
     "get_station_daily_report": "energy_performance",
+    "get_station_hourly_report": "energy_performance",
     "get_facility_info": "facility_info",
     "search_documents": "general",
 }

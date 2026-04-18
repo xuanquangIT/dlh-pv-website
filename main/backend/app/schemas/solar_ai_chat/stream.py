@@ -86,6 +86,7 @@ TOOL_DISPLAY_LABELS: dict[str, str] = {
     "get_data_quality_issues":   "Checking data quality",
     "get_ml_model_info":         "Fetching ML model info",
     "get_station_daily_report":  "Fetching daily station report",
+    "get_station_hourly_report": "Fetching hourly station report",
     "web_lookup":                "Searching the web",
     "web_lookup_direct":         "Searching the web",
     "answer_directly":           "Preparing direct answer",

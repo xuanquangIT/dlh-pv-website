@@ -49,6 +49,10 @@ class LLMToolResult:
     text: str | None
     model_used: str
     fallback_used: bool
+    # Optional: all tool calls returned by the model in a single turn. When
+    # the provider supports parallel tool calls (OpenAI, Anthropic), this
+    # carries every call; `function_call` holds the first one for back-compat.
+    function_calls: tuple[ToolCallRequest, ...] = ()
 
 
 class LLMModelRouter:
@@ -544,6 +548,7 @@ class LLMModelRouter:
         fallback_used: bool,
     ) -> LLMToolResult:
         parts = cls._extract_gemini_parts(raw)
+        calls: list[ToolCallRequest] = []
         for part in parts:
             if not isinstance(part, dict):
                 continue
@@ -552,15 +557,20 @@ class LLMModelRouter:
                 arguments = function_call.get("args", {})
                 if not isinstance(arguments, dict):
                     arguments = {}
-                return LLMToolResult(
-                    function_call=ToolCallRequest(
+                calls.append(
+                    ToolCallRequest(
                         name=str(function_call.get("name", "")),
                         arguments=arguments,
-                    ),
-                    text=None,
-                    model_used=model_used,
-                    fallback_used=fallback_used,
+                    )
                 )
+        if calls:
+            return LLMToolResult(
+                function_call=calls[0],
+                text=None,
+                model_used=model_used,
+                fallback_used=fallback_used,
+                function_calls=tuple(calls),
+            )
 
         text_segments = [
             str(part.get("text", "")).strip()
@@ -594,6 +604,7 @@ class LLMModelRouter:
 
         tool_calls = message.get("tool_calls")
         if isinstance(tool_calls, list) and tool_calls:
+            parsed_calls: list[ToolCallRequest] = []
             for call in tool_calls:
                 function = call.get("function", {}) if isinstance(call, dict) else {}
                 name = str(function.get("name", ""))
@@ -611,12 +622,15 @@ class LLMModelRouter:
                     arguments = raw_arguments
                 else:
                     arguments = {}
+                parsed_calls.append(ToolCallRequest(name=name, arguments=arguments))
 
+            if parsed_calls:
                 return LLMToolResult(
-                    function_call=ToolCallRequest(name=name, arguments=arguments),
+                    function_call=parsed_calls[0],
                     text=None,
                     model_used=model_used,
                     fallback_used=fallback_used,
+                    function_calls=tuple(parsed_calls),
                 )
 
         content = message.get("content")
@@ -641,6 +655,7 @@ class LLMModelRouter:
         if not isinstance(content, list) or not content:
             raise RuntimeError("LLM response does not contain content blocks.")
 
+        tool_calls: list[ToolCallRequest] = []
         for block in content:
             if not isinstance(block, dict):
                 continue
@@ -648,12 +663,15 @@ class LLMModelRouter:
                 name = str(block.get("name", ""))
                 raw_input = block.get("input", {})
                 arguments = raw_input if isinstance(raw_input, dict) else {}
-                return LLMToolResult(
-                    function_call=ToolCallRequest(name=name, arguments=arguments),
-                    text=None,
-                    model_used=model_used,
-                    fallback_used=fallback_used,
-                )
+                tool_calls.append(ToolCallRequest(name=name, arguments=arguments))
+        if tool_calls:
+            return LLMToolResult(
+                function_call=tool_calls[0],
+                text=None,
+                model_used=model_used,
+                fallback_used=fallback_used,
+                function_calls=tuple(tool_calls),
+            )
 
         text_blocks = [
             block.get("text", "")
