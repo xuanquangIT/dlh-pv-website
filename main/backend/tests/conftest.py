@@ -16,8 +16,7 @@ def _install_bcrypt_stub() -> None:
     sys.modules["bcrypt"] = bcrypt_stub
 
 
-# Work around local Windows wheel issues where bcrypt may fail during import.
 try:
-    import bcrypt  # type: ignore # noqa: F401
+    import bcrypt
 except Exception:
     _install_bcrypt_stub()

@@ -283,8 +283,6 @@ python -m pytest \
   -q
 ```
 
-GitHub workflow: `.github/workflows/web-tests.yml`
-
 ## Troubleshooting
 
 | Problem | Cause | Fix |
