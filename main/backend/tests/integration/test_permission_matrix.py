@@ -12,6 +12,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.api.dependencies import get_current_user
 from app.main import create_app
+from app.schemas.dashboard import EmbedTokenResponse
 
 
 class PermissionMatrixIntegrationTests(unittest.TestCase):
@@ -68,15 +69,29 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
         }
 
         roles = ["admin", "data_engineer", "ml_engineer", "analyst", "system"]
-        for path, allowed_roles in api_matrix.items():
-            for role in roles:
-                with self.subTest(path=path, role=role):
-                    self._set_role(role)
-                    response = self.client.get(path)
-                    if role in allowed_roles:
-                        self.assertEqual(response.status_code, 200)
-                    else:
-                        self.assertEqual(response.status_code, 403)
+        with (
+            patch(
+                "app.services.dashboard.powerbi_service.PowerBIService.get_embed_info",
+                return_value=EmbedTokenResponse(
+                    embed_token="test-token",
+                    embed_url="https://app.powerbi.com/reportEmbed?reportId=test",
+                    report_id="test-report",
+                ),
+            ),
+            patch("app.api.data_quality.routes.get_quality_summary_metrics", return_value={"ok": True}),
+            patch("app.api.ml_training.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
+            patch("app.api.model_registry.routes.get_registry_models", return_value=[{"ok": True}]),
+            patch("app.api.forecast.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
+        ):
+            for path, allowed_roles in api_matrix.items():
+                for role in roles:
+                    with self.subTest(path=path, role=role):
+                        self._set_role(role)
+                        response = self.client.get(path)
+                        if role in allowed_roles:
+                            self.assertEqual(response.status_code, 200)
+                        else:
+                            self.assertEqual(response.status_code, 403)
 
     def test_data_pipeline_schedule_permissions(self) -> None:
         roles = ["admin", "data_engineer", "ml_engineer", "analyst", "system"]
