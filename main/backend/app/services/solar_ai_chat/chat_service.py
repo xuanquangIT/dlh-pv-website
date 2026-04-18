@@ -635,8 +635,16 @@ class SolarAIChatService:
             allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
             if primary_tool and primary_tool in allowed_tools:
                 try:
+                    from app.services.solar_ai_chat.nlp_parser import parse_timeframe_days
+                    tool_args = {}
+                    
+                    # Inject timeframe parameter if explicitly found in query
+                    tf_days = parse_timeframe_days(request.message)
+                    if tf_days is not None:
+                        tool_args["timeframe_days"] = tf_days
+                        
                     data, sources = self._tool_executor.execute(
-                        primary_tool, {}, request.role
+                        primary_tool, tool_args, request.role
                     )
                     all_metrics.update(data)
                     all_sources.extend(sources)
@@ -644,7 +652,7 @@ class SolarAIChatService:
                     # Inject as a completed tool call in the message thread
                     messages.append({
                         "role": "model",
-                        "parts": [{"functionCall": {"name": primary_tool, "args": {}}}],
+                        "parts": [{"functionCall": {"name": primary_tool, "args": tool_args}}],
                     })
                     messages.append({
                         "role": "user",
@@ -809,13 +817,16 @@ class SolarAIChatService:
         # Agentic loop — LLM may call additional tools or synthesise directly
         # (only entered if neither fast-path nor direct web-search set answer)
         # ------------------------------------------------------------------
+        allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+        role_tool_declarations = [td for td in TOOL_DECLARATIONS if td.get("name") in allowed_tools]
+
         for step_num in range(1, self._max_tool_steps + 1):
             if answer is not None:
                 break
             try:
                 result = self._model_router.generate_with_tools(
                     messages,
-                    TOOL_DECLARATIONS,
+                    role_tool_declarations,
                     max_output_tokens=self._synthesis_max_output_tokens,
                     require_function_call=(step_num == 1 and not all_metrics),
                 )

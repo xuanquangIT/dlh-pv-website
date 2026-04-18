@@ -50,52 +50,50 @@ class TopicRepository(BaseRepository):
             lambda: self._system_overview_databricks(lookback_days),
             lambda: self._system_overview_csv(lookback_days),
             [
-                {"layer": "Gold", "dataset": "gold.fact_energy"},
-                {"layer": "Gold", "dataset": "gold.dim_facility"},
-                {"layer": "Gold", "dataset": "gold.model_monitoring_daily"},
+                {"layer": "Gold", "dataset": "gold.mart_system_kpi_daily"},
             ],
         )
 
     def _system_overview_databricks(self, lookback_days: int) -> dict[str, Any]:
-        agg = self._execute_query(
-            "SELECT COALESCE(SUM(energy_mwh), 0) AS total_mwh,"
-            "       COALESCE(AVG(completeness_pct), 0) AS avg_quality"
-            " FROM gold.fact_energy"
-            f" WHERE date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
-        )
-        total_mwh = float(agg[0]["total_mwh"]) if agg else 0.0
-        avg_quality = float(agg[0]["avg_quality"]) if agg else 0.0
-
-        r_rows = self._safe_execute_query(
-            "SELECT r2"
-            " FROM gold.model_monitoring_daily"
-            " WHERE facility_id = 'ALL' AND r2 IS NOT NULL"
-            " ORDER BY CAST(eval_date AS DATE) DESC, generated_at_utc DESC"
-            " LIMIT 1"
-        )
-
-        if not r_rows:
-            r_rows = self._safe_execute_query(
-                "SELECT AVG(r2) AS r2"
-                " FROM gold.model_monitoring_daily"
-                " WHERE facility_id <> 'ALL'"
-                "   AND r2 IS NOT NULL"
-                "   AND CAST(eval_date AS DATE) = ("
-                "       SELECT MAX(CAST(eval_date AS DATE))"
-                "       FROM gold.model_monitoring_daily"
-                "       WHERE facility_id <> 'ALL'"
-                "   )"
+        """Fetch high-level system overall KPI from the dedicated Gold mart."""
+        
+        # If the user asks for exact "today" (lookback_days=0), we query today.
+        # Otherwise, for rolling windows (e.g. 30 days), we exclude the partial "current_date()" 
+        # to ensure the totals precisely match verified dashboards.
+        where_clause = f"kpi_date = current_date()"
+        if lookback_days > 0:
+            where_clause = (
+                f"kpi_date >= current_date() - INTERVAL {lookback_days} DAYS "
+                f"AND kpi_date < current_date()"
             )
-
-        r_squared = float(r_rows[0]["r2"]) if r_rows and r_rows[0].get("r2") is not None else 0.0
-
-        fac = self._execute_query(
-            "SELECT COUNT(*) AS cnt"
-            " FROM gold.dim_facility"
-            " WHERE is_current = true"
+            
+        agg = self._execute_query(
+            "SELECT "
+            "  SUM(total_energy_mwh) AS total_mwh,"
+            "  AVG(champion_r2) AS avg_r2,"
+            "  AVG(data_completeness_pct) AS avg_quality,"
+            "  MAX(total_facility_count) AS facility_count,"
+            "  MAX(created_at) AS latest_timestamp "
+            "FROM gold.mart_system_kpi_daily "
+            f"WHERE {where_clause}"
         )
-        facility_count = int(fac[0]["cnt"]) if fac else 0
-        latest_data_ts = self._resolve_latest_datetime("gold.fact_energy")
+        
+        total_mwh = 0.0
+        r_squared = 0.0
+        avg_quality = 0.0
+        facility_count = 0
+        latest_data_ts = None
+        
+        if agg and agg[0].get("total_mwh") is not None:
+            row = agg[0]
+            total_mwh = float(row["total_mwh"] or 0.0)
+            r_squared = float(row["avg_r2"] or 0.0)
+            avg_quality = float(row["avg_quality"] or 0.0)
+            facility_count = int(row["facility_count"] or 0)
+            
+            # The timestamp from max(created_at). Fallback to standard resolve if None.
+            latest_data_ts = self._resolve_latest_datetime("gold.mart_system_kpi_daily")
+            
         return {
             "production_output_mwh": round(total_mwh, 2),
             "r_squared": round(r_squared, 4),

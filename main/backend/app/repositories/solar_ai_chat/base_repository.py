@@ -194,6 +194,8 @@ class BaseRepository:
         timestamp_column = {
             "silver.weather": "weather_timestamp",
             "silver.air_quality": "aqi_timestamp",
+            "gold.mart_system_kpi_daily": "created_at",
+            "gold.mart_energy_daily": "energy_date",
         }.get(table, "date_hour")
         try:
             rows = self._execute_query(
