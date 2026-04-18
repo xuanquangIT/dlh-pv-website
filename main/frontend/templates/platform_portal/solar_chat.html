@@ -62,23 +62,20 @@
             </div>
 
             <div class="solar-chat-chip-row" id="solar-chat-suggestions">
-                <button class="solar-chat-chip" type="button" data-chat-prompt="System overview">System
-                    overview</button>
-                <button class="solar-chat-chip" type="button" data-chat-prompt="Energy performance">Energy
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Summarize energy performance across all facilities">Summarize energy
                     performance</button>
-                <button class="solar-chat-chip" type="button" data-chat-prompt="Top model by RMSE">Best model</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Identify top and bottom performing solar farms">Find best & worst farms</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="What is the energy generation forecast for tomorrow?">Tomorrow's forecast</button>
                 <button class="solar-chat-chip" type="button" id="pipeline-status-btn">Show latest pipeline
                     status</button>
-                <button class="solar-chat-chip" type="button" data-chat-prompt="Forecast for next 72 hours">72-hour
-                    forecast</button>
-                <button class="solar-chat-chip" type="button" data-chat-prompt="Recent quality incidents">Quality
-                    issues</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Compare Darlington Point and Avonlie facilities">Compare facilities</button>
             </div>
 
-            <div class="solar-chat-feedback" aria-live="polite" aria-atomic="true">
-                <div id="page-chat-loading" class="solar-chat-loading" hidden>
-                    Sending message to assistant...
-                </div>
+            <div id="page-chat-feedback" class="solar-chat-feedback" aria-live="polite" aria-atomic="true" hidden>
                 <div id="page-chat-error" class="solar-chat-error" hidden></div>
             </div>
 

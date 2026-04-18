@@ -1,9 +1,10 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
-from app.schemas.solar_ai_chat.chat import SourceMetadata
+from app.schemas.solar_ai_chat.chat import SourceMetadata, ThinkingTrace
 
 
 class ChatMessage(BaseModel):
@@ -14,6 +15,8 @@ class ChatMessage(BaseModel):
     timestamp: datetime
     topic: ChatTopic | None = None
     sources: list[SourceMetadata] | None = None
+    thinking_trace: ThinkingTrace | None = None  # ← persisted tool steps
+
 
 
 class ChatSessionSummary(BaseModel):

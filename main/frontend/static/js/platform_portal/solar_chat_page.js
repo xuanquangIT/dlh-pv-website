@@ -48,6 +48,83 @@
       });
     },
 
+    /**
+     * Stream a query via SSE.
+     * @param {object} payload - { message, session_id }
+     * @param {object} handlers - { onStatus, onThinkingStep, onToolResult, onTextDelta, onDone, onError }
+     * @returns {AbortController} - Call .abort() to cancel
+     */
+    queryStream(payload, handlers) {
+      const controller = new AbortController();
+      const {
+        onStatus = () => {},
+        onThinkingStep = () => {},
+        onToolResult = () => {},
+        onTextDelta = () => {},
+        onDone = () => {},
+        onError = () => {}
+      } = handlers || {};
+
+      (async () => {
+        let response;
+        try {
+          response = await fetch("/solar-ai-chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+          });
+        } catch (fetchErr) {
+          if (fetchErr.name !== "AbortError") {
+            onError({ message: fetchErr.message || "Network error" });
+          }
+          return;
+        }
+
+        if (!response.ok) {
+          let detail = "Stream request failed";
+          try { const d = await response.json(); detail = (d && d.detail) || detail; } catch (e) { /* ignore */ }
+          onError({ message: detail });
+          return;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n\n");
+            buffer = lines.pop();  // last partial chunk stays in buffer
+            for (const block of lines) {
+              const line = block.trim();
+              if (!line.startsWith("data: ")) continue;
+              let evt;
+              try { evt = JSON.parse(line.slice(6)); } catch (e) { continue; }
+              switch (evt.event) {
+                case "status_update":  onStatus(evt); break;
+                case "thinking_step": onThinkingStep(evt); break;
+                case "tool_result":   onToolResult(evt); break;
+                case "text_delta":    onTextDelta(evt); break;
+                case "done":          onDone(evt); break;
+                case "error":         onError(evt); break;
+                default: break;
+              }
+            }
+          }
+        } catch (readErr) {
+          if (readErr.name !== "AbortError") {
+            onError({ message: readErr.message || "Stream read error" });
+          }
+        }
+      })();
+
+      return controller;
+    },
+
     async getSession(sessionId) {
       return requestJson("/solar-ai-chat/sessions/" + encodeURIComponent(sessionId), {
         method: "GET"
@@ -314,19 +391,93 @@
     return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
 
-  function renderMessageContent(messageElement, role, content, isPending) {
-    if (role === "assistant") {
-      if (isPending) {
-        messageElement.classList.add("msg-typing");
-        messageElement.innerHTML = buildTypingIndicatorHtml();
+  function buildThinkingTraceHtml(thinkingTrace, isOpen) {
+    if (!thinkingTrace || !thinkingTrace.steps || thinkingTrace.steps.length === 0) {
+      return "";
+    }
+
+    // Parse the summary — format is "N tool calls · Topic · model-name"
+    const summary = String(thinkingTrace.summary || "");
+
+    // Count total steps for the pill badge
+    const stepCount = thinkingTrace.steps.length;
+    const allOk = thinkingTrace.steps.every(function(s) {
+      return s.status === "success" || s.status === "ok" || s.status === "skipped";
+    });
+
+    const toggleLabel = (isOpen ? "▾" : "▸") + " Thought for " + stepCount +
+      " step" + (stepCount !== 1 ? "s" : "") +
+      " <span class=\"msg-thinking-badge " + (allOk ? "ok" : "warn") + "\">" +
+      (allOk ? "done" : "issues") + "</span>";
+
+    const html = [
+      '<details class="msg-thinking"' + (isOpen ? " open" : "") + ">",
+      '<summary class="msg-thinking-toggle">' + toggleLabel + "</summary>",
+      '<div class="msg-thinking-body">',
+    ];
+
+    if (summary) {
+      html.push('<div class="msg-thinking-summary">' + escapeHtml(summary) + "</div>");
+    }
+
+    html.push('<div class="msg-thinking-list">');
+
+    thinkingTrace.steps.forEach(function(step) {
+      const isOk = step.status === "success" || step.status === "ok";
+      const isWarn = step.status === "warning" || step.status === "error";
+      const isRunning = step.status === "running";
+
+      let icon;
+      if (isRunning) {
+        icon = '<span class="task-tracker-spinner" aria-hidden="true"></span>';
+      } else if (isOk) {
+        icon = '<span class="task-tracker-icon ok" aria-hidden="true">✓</span>';
+      } else if (isWarn) {
+        icon = '<span class="task-tracker-icon error" aria-hidden="true">✕</span>';
       } else {
+        icon = '<span class="task-tracker-icon skipped" aria-hidden="true">–</span>';
+      }
+
+      const rowClass = isRunning ? "task-tracker-row running" : "task-tracker-row";
+      // step.step is now the human label e.g. "Fetching energy performance"
+      const label = step.step || step.tool_name || "";
+      // step.detail is now "7 metrics retrieved" or "3 results found"
+      const detail = step.detail ? ' <span class="task-tracker-dur">' + escapeHtml(step.detail) + "</span>" : "";
+
+      html.push(
+        '<div class="' + rowClass + '">',
+        "  " + icon,
+        '  <span class="task-tracker-label">' + escapeHtml(label) + "</span>",
+        detail,
+        "</div>"
+      );
+    });
+
+    html.push("</div></div></details>");
+    return html.join("");
+  }
+
+
+  function renderMessageContent(messageElement, role, content, isPending, hasThinking) {
+    if (role === "assistant") {
+      if (isPending && !content) {
+        messageElement.classList.add("msg-typing");
+        messageElement.style.display = "block";
+        messageElement.innerHTML = buildTypingIndicatorHtml();
+      } else if (content) {
         messageElement.classList.remove("msg-typing");
-        messageElement.innerHTML = formatAssistantContent(content || "");
+        messageElement.style.display = "block";
+        messageElement.innerHTML = formatAssistantContent(content);
+      } else {
+        // No content and not pending: hide the bubble if there is a thinking trace
+        messageElement.style.display = hasThinking ? "none" : "block";
+        messageElement.innerHTML = "";
       }
       return;
     }
 
     messageElement.classList.remove("msg-typing");
+    messageElement.style.display = "block";
     messageElement.textContent = content || "";
   }
 
@@ -338,9 +489,16 @@
       row.dataset.messageId = messageId;
     }
 
+    if (thinkingTrace && normalizedRole === "assistant") {
+      const thinkingWrapper = document.createElement("div");
+      thinkingWrapper.className = "msg-thinking-wrapper";
+      thinkingWrapper.innerHTML = buildThinkingTraceHtml(thinkingTrace, false);
+      row.appendChild(thinkingWrapper);
+    }
+
     const message = document.createElement("div");
     message.className = "msg " + (normalizedRole === "user" ? "msg-user" : "msg-bot");
-    renderMessageContent(message, normalizedRole, content, Boolean(isPending));
+    renderMessageContent(message, normalizedRole, content, Boolean(isPending), Boolean(thinkingTrace));
 
     const time = document.createElement("div");
     time.className = "msg-time";
@@ -353,12 +511,26 @@
 
   function updateMessageElement(row, role, content, timestamp, thinkingTrace, isPending) {
     const normalizedRole = role === "user" ? "user" : "assistant";
-    const message = row.querySelector(".msg");
-    if (!message) {
-      return;
+
+    let thinkingWrapper = row.querySelector(".msg-thinking-wrapper");
+    if (thinkingTrace && normalizedRole === "assistant") {
+      const details = thinkingWrapper ? thinkingWrapper.querySelector("details") : null;
+      const isOpen = details ? details.open : false;
+      const html = buildThinkingTraceHtml(thinkingTrace, isOpen);
+      if (!thinkingWrapper) {
+        thinkingWrapper = document.createElement("div");
+        thinkingWrapper.className = "msg-thinking-wrapper";
+        row.insertBefore(thinkingWrapper, row.firstChild);
+      }
+      thinkingWrapper.innerHTML = html;
+    } else if (thinkingWrapper) {
+      thinkingWrapper.remove();
     }
 
-    renderMessageContent(message, normalizedRole, content, Boolean(isPending));
+    const message = row.querySelector(".msg");
+    if (message) {
+      renderMessageContent(message, normalizedRole, content, Boolean(isPending), Boolean(thinkingTrace));
+    }
 
     const time = row.querySelector(".msg-time");
     if (time) {
@@ -369,6 +541,7 @@
   function MessageList(container) {
     this.container = container;
   }
+
 
   MessageList.prototype.render = function (messages) {
     this.container.innerHTML = "";
@@ -473,7 +646,8 @@
     const sendButton = document.getElementById("page-chat-send");
     const statusElement = document.getElementById("solar-chat-status-text");
     const errorElement = document.getElementById("page-chat-error");
-    const loadingElement = document.getElementById("page-chat-loading");
+    const feedbackContainer = document.getElementById("page-chat-feedback");
+    const suggestionsElement = document.getElementById("solar-chat-suggestions");
     const exportButton = document.getElementById("solar-chat-export-btn");
     const pipelineButton = document.getElementById("pipeline-status-btn");
     const newChatButton = document.getElementById("solar-chat-new-chat-btn");
@@ -510,7 +684,6 @@
       !sendButton ||
       !statusElement ||
       !errorElement ||
-      !loadingElement ||
       !exportButton ||
       !pipelineButton ||
       !newChatButton ||
@@ -596,10 +769,6 @@
     function setLoading(loading, messageText) {
       state.loading = loading;
       messageInput.setDisabled(loading);
-      loadingElement.hidden = !loading;
-      if (loading) {
-        loadingElement.textContent = messageText || "Assistant is analyzing your request.";
-      }
     }
 
     function setStatus(text) {
@@ -622,16 +791,21 @@
       if (messageCountElement) {
         messageCountElement.textContent = String(state.messages.length);
       }
+      if (suggestionsElement) {
+        suggestionsElement.style.display = state.messages.length > 1 ? "none" : "flex";
+      }
     }
 
     function setError(message) {
       if (!message) {
         errorElement.hidden = true;
         errorElement.textContent = "";
+        if (feedbackContainer) feedbackContainer.hidden = true;
         return;
       }
       errorElement.hidden = false;
       errorElement.textContent = message;
+      if (feedbackContainer) feedbackContainer.hidden = false;
     }
 
     function shouldSurfaceWarningAsError(warningMessage) {
@@ -1049,6 +1223,121 @@
       await refreshSessionList();
     }
 
+    // ----------------------------------------------------------------
+    // Live Task Tracker
+    // ----------------------------------------------------------------
+
+    function TaskTracker(container) {
+      this.container = container;
+      this._tasks = [];
+      this._statusText = "Processing your request...";
+      // We start open.
+      this._isOpen = true;
+    }
+
+    TaskTracker.prototype._render = function () {
+      var stepCount = this._tasks.length;
+      var allDone = this._tasks.length > 0 && this._tasks.every(function(t) {
+        return t.status !== "running";
+      });
+      var allOk = allDone && this._tasks.every(function(t) {
+        return t.status === "ok" || t.status === "skipped";
+      });
+
+      var arrowChar = this._isOpen ? "▾" : "▸";
+      var badge;
+      if (!allDone) {
+        badge = '<span class="msg-thinking-badge running">working</span>';
+      } else if (allOk) {
+        badge = '<span class="msg-thinking-badge ok">done</span>';
+      } else {
+        badge = '<span class="msg-thinking-badge warn">issues</span>';
+      }
+
+      var toggleLabel = arrowChar + " Thinking\u2026 " + stepCount +
+        " step" + (stepCount !== 1 ? "s" : "") + " " + badge;
+
+      var html = [
+        '<details class="msg-thinking"' + (this._isOpen ? " open" : "") + ">",
+        '<summary class="msg-thinking-toggle">' + toggleLabel + "</summary>",
+        '<div class="msg-thinking-body">',
+        '<div class="msg-thinking-summary">' + escapeHtml(this._statusText) + "</div>",
+        '<div class="msg-thinking-list">'
+      ];
+
+      var tasksHtml = this._tasks.map(function (task) {
+        var iconHtml;
+        var rowClass = "task-tracker-row";
+        if (task.status === "running") {
+          iconHtml = '<span class="task-tracker-spinner" aria-hidden="true"></span>';
+          rowClass += " running";
+        } else if (task.status === "ok") {
+          iconHtml = '<span class="task-tracker-icon ok" aria-hidden="true">✓</span>';
+        } else if (task.status === "error") {
+          iconHtml = '<span class="task-tracker-icon error" aria-hidden="true">✕</span>';
+        } else if (task.status === "denied") {
+          iconHtml = '<span class="task-tracker-icon denied" aria-hidden="true">⊘</span>';
+        } else {
+          iconHtml = '<span class="task-tracker-icon skipped" aria-hidden="true">–</span>';
+        }
+        var durationHtml = task.duration_ms != null
+          ? ' <span class="task-tracker-dur">' + task.duration_ms + "ms</span>"
+          : "";
+        return [
+          '<div class="' + rowClass + '" aria-live="polite">',
+          "  " + iconHtml,
+          '  <span class="task-tracker-label">' + escapeHtml(task.label || task.tool_name) + "</span>",
+          durationHtml,
+          "</div>"
+        ].join("");
+      }).join("");
+
+      html.push(tasksHtml);
+      html.push("</div></div></details>");
+      
+      // Only set innerHTML if there's actually a task or status, otherwise keep it empty so it doesn't take space
+      if (this._tasks.length > 0) {
+        this.container.innerHTML = html.join("");
+      } else {
+        this.container.innerHTML = "";
+      }
+    };
+
+
+    TaskTracker.prototype.setStatus = function(text) {
+      this._statusText = text;
+      this._render();
+    };
+
+    TaskTracker.prototype.setOpen = function(isOpen) {
+      this._isOpen = isOpen;
+      this._render();
+    };
+
+    TaskTracker.prototype.addRunning = function (step, toolName, label) {
+      var idx = this._tasks.findIndex(function (t) { return t.step === step; });
+      var task = { step: step, tool_name: toolName, label: label, status: "running", duration_ms: null };
+      if (idx >= 0) {
+        this._tasks[idx] = task;
+      } else {
+        this._tasks.push(task);
+      }
+      this._render();
+    };
+
+    TaskTracker.prototype.markDone = function (step, status, durationMs) {
+      var idx = this._tasks.findIndex(function (t) { return t.step === step; });
+      if (idx >= 0) {
+        this._tasks[idx].status = status;
+        this._tasks[idx].duration_ms = durationMs || 0;
+        this._render();
+      }
+    };
+
+    // ----------------------------------------------------------------
+    // sendMessageFlow — streaming version
+    // ----------------------------------------------------------------
+
     async function sendMessageFlow(text) {
       if (state.loading) {
         return;
@@ -1075,60 +1364,109 @@
       messageInput.clear();
       updateContext();
 
+      // Find the row and replace its typing indicator with our TaskTracker container and a content container
+      const pendingRow = messageList.findById(pendingMessageId);
+      let taskTracker = null;
+      let textContentEl = null;
+
+      if (pendingRow) {
+        const trackerContainer = document.createElement("div");
+        trackerContainer.className = "msg-thinking-wrapper";
+        // task tracker starts empty, we don't render until events come in, or we just render an empty state?
+        // Actually TaskTracker _render creates the HTML inside trackerContainer.
+        pendingRow.insertBefore(trackerContainer, pendingRow.firstChild);
+        taskTracker = new TaskTracker(trackerContainer);
+        
+        // We do not call _render yet because tasks is empty, so it would show "0 steps".
+        // But the typing indicator is currently inside msgEl, displaying beautifully!
+        textContentEl = pendingRow.querySelector(".msg");
+      }
+
+      let streamController = null;
+
       try {
         setError("");
-        setLoading(true, "Sending message to assistant...");
+        setLoading(true, "Connecting to Solar AI…");
         setStatus("Processing");
 
         const sessionId = await ensureSession(text);
 
-        const response = await SolarChatApi.query({
-          message: text,
-          session_id: sessionId
-        });
+        await new Promise(function (resolve, reject) {
+          streamController = SolarChatApi.queryStream(
+            { message: text, session_id: sessionId },
+            {
+              onStatus: function (evt) {
+                setStatus(evt.text || "Processing");
+                if (taskTracker) taskTracker.setStatus(evt.text || "Processing");
+              },
+              onThinkingStep: function (evt) {
+                if (taskTracker) taskTracker.addRunning(evt.step, evt.tool_name, evt.label || evt.tool_name);
+              },
+              onToolResult: function (evt) {
+                if (taskTracker) taskTracker.markDone(evt.step, evt.status || "ok", evt.duration_ms);
+              },
+              onTextDelta: function (evt) {
+                if (textContentEl) {
+                  if (textContentEl.classList.contains("msg-typing")) {
+                    textContentEl.innerHTML = "";
+                    textContentEl.classList.remove("msg-typing");
+                  }
+                  textContentEl.textContent = (textContentEl.textContent || "") + (evt.delta || "");
+                }
+              },
+              onDone: function (evt) {
+                if (taskTracker) taskTracker.setOpen(false); // Collapse when done
+                
+                state.modelUsed = evt.model_used || state.modelUsed;
+                var assistantMessage = {
+                  role: "assistant",
+                  content: evt.answer || "",
+                  timestamp: new Date().toISOString(),
+                  thinkingTrace: evt.thinking_trace || null
+                };
+                var pendingIndex = state.messages.findIndex(function (item) {
+                  return item.id === pendingMessageId && item.isPending;
+                });
+                if (pendingIndex >= 0) {
+                  state.messages.splice(pendingIndex, 1, assistantMessage);
+                  if (!messageList.updateById(
+                    pendingMessageId,
+                    "assistant",
+                    assistantMessage.content,
+                    assistantMessage.timestamp,
+                    assistantMessage.thinkingTrace,
+                    false
+                  )) {
+                    messageList.render(state.messages);
+                  }
+                } else {
+                  state.messages.push(assistantMessage);
+                  messageList.append(
+                    "assistant",
+                    assistantMessage.content,
+                    assistantMessage.timestamp,
+                    assistantMessage.thinkingTrace,
+                    "",
+                    false
+                  );
+                }
+                updateContext();
 
-        state.modelUsed = response.model_used || state.modelUsed;
-        const assistantMessage = {
-          role: "assistant",
-          content: response.answer || "",
-          timestamp: new Date().toISOString()
-        };
-        const pendingIndex = state.messages.findIndex(function (item) {
-          return item.id === pendingMessageId && item.isPending;
-        });
-        if (pendingIndex >= 0) {
-          state.messages.splice(pendingIndex, 1, assistantMessage);
-          if (!messageList.updateById(
-            pendingMessageId,
-            "assistant",
-            assistantMessage.content,
-            assistantMessage.timestamp,
-            null,
-            false
-          )) {
-            messageList.render(state.messages);
-          }
-        } else {
-          state.messages.push(assistantMessage);
-          messageList.append(
-            "assistant",
-            assistantMessage.content,
-            assistantMessage.timestamp,
-            null,
-            "",
-            false
+                if (shouldSurfaceWarningAsError(evt.warning_message)) {
+                  setError(evt.warning_message);
+                }
+
+                refreshSessionList().catch(function () {});
+                setStatus("Ready");
+                resolve();
+              },
+              onError: function (evt) {
+                reject(new Error(evt.message || "Stream error"));
+              }
+            }
           );
-        }
-        updateContext();
-
-        if (shouldSurfaceWarningAsError(response.warning_message)) {
-          setError(response.warning_message);
-        }
-
-        refreshSessionList().catch(function () {
-          // Keep UI responsive even if sidebar refresh fails.
         });
-        setStatus("Ready");
+
       } catch (error) {
         const pendingIndex = state.messages.findIndex(function (item) {
           return item.id === pendingMessageId && item.isPending;

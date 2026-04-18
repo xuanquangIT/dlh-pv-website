@@ -31,6 +31,7 @@ from app.schemas.solar_ai_chat import (
     SourceMetadata,
     ThinkingStep,
     ThinkingTrace,
+    tool_label,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
 from app.services.solar_ai_chat.llm_client import (
@@ -400,6 +401,572 @@ class SolarAIChatService:
                     trace_id=trace_id,
                 ),
             )
+
+    def handle_query_stream(self, request: SolarChatRequest):
+        """Streaming variant — yields SSE-ready JSON strings.
+
+        Each yielded item is a ``data: <json>\\n\\n``-formatted SSE line.
+        The caller (FastAPI StreamingResponse) sends these directly to the
+        browser.  The final event is always ``done`` or ``error``.
+
+        Design: runs the full synchronous agentic loop but emits events at
+        every decision boundary so the frontend can show a live Task Tracker.
+        No async/await; the generator is wrapped by the SSE route handler.
+        """
+        import json as _json
+        from app.schemas.solar_ai_chat.stream import (
+            ThinkingStepEvent,
+            ToolResultEvent,
+            StatusUpdateEvent,
+            DoneEvent,
+            ErrorEvent,
+        )
+
+        def _sse(event_obj) -> str:
+            return "data: " + _json.dumps(event_obj.model_dump()) + "\n\n"
+
+        started = time.perf_counter()
+        trace_id = uuid.uuid4().hex[:8]
+
+        try:
+            yield _sse(StatusUpdateEvent(text="Analyzing your request…"))
+
+            history_messages = self._load_history(request.session_id)
+
+            # Facility code expansion
+            expanded_message = expand_facility_codes_in_message(request.message)
+            if expanded_message != request.message:
+                request = request.model_copy(update={"message": expanded_message})
+
+            language = self._query_rewriter.rewrite(request.message).language
+
+            if self._model_router is None:
+                yield _sse(ErrorEvent(message="No LLM configured.", code="no_llm"))
+                return
+
+            # Prompt injection check
+            if _is_prompt_injection_request(request.message):
+                final_resp = self._finalize_response(
+                    request=request,
+                    answer=_build_scope_refusal(language),
+                    topic=ChatTopic.GENERAL,
+                    metrics={},
+                    sources=[],
+                    model_used="scope-guard",
+                    fallback_used=True,
+                    started=started,
+                    trace_id=trace_id,
+                    intent_confidence=0.0,
+                    warning_message="Prompt-injection request refused.",
+                )
+                yield _sse(DoneEvent(
+                    answer=final_resp.answer,
+                    topic=final_resp.topic.value,
+                    role=final_resp.role.value,
+                    sources=[s.model_dump() for s in final_resp.sources],
+                    key_metrics=final_resp.key_metrics,
+                    model_used=final_resp.model_used,
+                    fallback_used=final_resp.fallback_used,
+                    latency_ms=final_resp.latency_ms,
+                    intent_confidence=final_resp.intent_confidence,
+                    warning_message=final_resp.warning_message,
+                    trace_id=trace_id,
+                ))
+                return
+
+            # Intent detection
+            intent_result = self._intent_service.detect_intent(request.message)
+            try:
+                intent_confidence = float(intent_result.confidence)
+            except (TypeError, ValueError):
+                intent_confidence = 0.0
+            intent_topic = intent_result.topic
+
+            if _is_cross_topic_summary_query(request.message):
+                intent_topic = ChatTopic.SYSTEM_OVERVIEW
+                intent_confidence = max(intent_confidence, 0.8)
+            elif _is_capacity_or_station_query(request.message):
+                intent_topic = ChatTopic.FACILITY_INFO
+                intent_confidence = max(intent_confidence, 0.85)
+            elif _is_implicit_followup(request.message):
+                previous_topic = _last_assistant_topic(history_messages)
+                intent_topic = previous_topic or ChatTopic.ENERGY_PERFORMANCE
+                intent_confidence = max(intent_confidence, 0.8)
+
+            # General scope guard
+            if intent_topic == ChatTopic.GENERAL and not _needs_web_search(request.message):
+                final_resp = self._finalize_response(
+                    request=request,
+                    answer=_build_scope_refusal(language),
+                    topic=ChatTopic.GENERAL,
+                    metrics={},
+                    sources=[],
+                    model_used="scope-guard",
+                    fallback_used=True,
+                    started=started,
+                    trace_id=trace_id,
+                    intent_confidence=intent_confidence,
+                )
+                yield _sse(DoneEvent(
+                    answer=final_resp.answer,
+                    topic=final_resp.topic.value,
+                    role=final_resp.role.value,
+                    sources=[],
+                    key_metrics={},
+                    model_used=final_resp.model_used,
+                    fallback_used=final_resp.fallback_used,
+                    latency_ms=final_resp.latency_ms,
+                    intent_confidence=final_resp.intent_confidence,
+                    trace_id=trace_id,
+                ))
+                return
+
+            messages = build_agentic_messages(request.message, language, history_messages)
+            all_sources: list[dict[str, str]] = []
+            all_metrics: dict[str, Any] = {}
+            topic = ChatTopic.GENERAL
+            step_events: list[dict[str, Any]] = []
+            answer: str | None = None
+            model_used = "llm-agentic"
+            fallback_used = False
+            locked_topic: ChatTopic | None = None
+            user_query_date = extract_query_date(request.message)
+
+            # Intent-based pre-fetch (step 0)
+            prefetch_tool: str | None = None
+            if user_query_date is not None:
+                prefetch_tool = "get_station_daily_report"
+            elif intent_topic != ChatTopic.GENERAL and intent_confidence >= 0.6:
+                prefetch_tool = _TOPIC_TO_PRIMARY_TOOL.get(intent_topic)
+
+            if prefetch_tool:
+                allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+                if prefetch_tool in allowed_tools:
+                    yield _sse(ThinkingStepEvent(
+                        step=0,
+                        tool_name=prefetch_tool,
+                        label=tool_label(prefetch_tool),
+                        trace_id=trace_id,
+                    ))
+                    t0 = time.perf_counter()
+                    try:
+                        tool_args = (
+                            {"anchor_date": user_query_date.isoformat()}
+                            if user_query_date and prefetch_tool == "get_station_daily_report"
+                            else {}
+                        )
+                        data, sources = self._tool_executor.execute(
+                            prefetch_tool, tool_args, request.role
+                        )
+                        dur = int((time.perf_counter() - t0) * 1000)
+                        all_metrics.update(data)
+                        all_sources.extend(sources)
+                        topic = intent_topic if user_query_date is None else ChatTopic.ENERGY_PERFORMANCE
+                        messages.append({
+                            "role": "model",
+                            "parts": [{"functionCall": {"name": prefetch_tool, "args": tool_args}}],
+                        })
+                        messages.append({
+                            "role": "user",
+                            "parts": [{"functionResponse": {
+                                "name": prefetch_tool,
+                                "response": data,
+                            }}],
+                        })
+                        step_events.append({"step": 0, "tool": prefetch_tool, "status": "ok",
+                                            "metric_keys": sorted(data.keys()), "source_count": len(sources)})
+                        yield _sse(ToolResultEvent(
+                            step=0,
+                            tool_name=prefetch_tool,
+                            status="ok",
+                            metric_keys=sorted(data.keys()),
+                            duration_ms=dur,
+                            trace_id=trace_id,
+                        ))
+                    except DatabricksDataUnavailableError:
+                        raise
+                    except Exception as prefetch_err:
+                        dur = int((time.perf_counter() - t0) * 1000)
+                        step_events.append({"step": 0, "tool": prefetch_tool, "status": "error",
+                                            "detail": str(prefetch_err)[:80]})
+                        yield _sse(ToolResultEvent(
+                            step=0, tool_name=prefetch_tool, status="error", duration_ms=dur, trace_id=trace_id,
+                        ))
+                        logger.warning("solar_chat_stream_prefetch_failed trace_id=%s error=%s", trace_id, prefetch_err)
+
+            # Fast-path synthesis
+            if all_metrics and not _needs_web_search(request.message):
+                _SYNTH_STEP = len(step_events)  # place after tool steps
+                yield _sse(StatusUpdateEvent(text="Synthesizing answer…"))
+                yield _sse(ThinkingStepEvent(
+                    step=_SYNTH_STEP, tool_name="synthesize",
+                    label="Synthesizing answer", trace_id=trace_id,
+                ))
+                evidence_text = json.dumps(all_metrics, ensure_ascii=False)
+                synthesis_prompt = build_synthesis_prompt(
+                    user_message=request.message,
+                    evidence_text=evidence_text,
+                    language=language,
+                    history=history_messages or None,
+                )
+                t_syn = time.perf_counter()
+                try:
+                    gen = self._model_router.generate(
+                        synthesis_prompt,
+                        max_output_tokens=self._synthesis_max_output_tokens,
+                        temperature=0.1,
+                    )
+                    answer = gen.text
+                    model_used = gen.model_used
+                    fallback_used = gen.fallback_used
+                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                    step_events.append({"step": _SYNTH_STEP, "tool": "synthesize", "status": "ok", "duration_ms": dur_syn, "detail": f"via {model_used}"})
+                    yield _sse(ToolResultEvent(step=_SYNTH_STEP, tool_name="synthesize", status="ok", duration_ms=dur_syn, trace_id=trace_id))
+                except Exception:
+                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                    answer = build_data_only_summary(all_metrics, all_sources, language)
+                    fallback_used = True
+                    step_events.append({"step": _SYNTH_STEP, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
+                    yield _sse(ToolResultEvent(step=_SYNTH_STEP, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
+
+            elif _needs_web_search(request.message):
+                search_query = _extract_search_query(request.message, history_messages)
+                if all_metrics:
+                    top_names = _extract_top_facility_names(all_metrics)
+                    if top_names and not any(n.lower() in search_query.lower() for n in top_names):
+                        search_query = " ".join(top_names) + " solar farm"
+
+                _WEB_STEP = len(step_events)  # correct index — comes after any prefetch step
+                yield _sse(ThinkingStepEvent(
+                    step=_WEB_STEP, tool_name="web_lookup_direct",
+                    label=tool_label("web_lookup_direct"), trace_id=trace_id,
+                ))
+                t0 = time.perf_counter()
+                web_response = self._execute_web_lookup({"query": search_query})
+                dur = int((time.perf_counter() - t0) * 1000)
+                web_results = web_response.get("results", [])
+                web_status = "ok" if web_results else "error"
+                step_events.append({"step": _WEB_STEP, "tool": "web_lookup_direct", "status": web_status,
+                                    "result_count": len(web_results), "duration_ms": dur})
+                yield _sse(ToolResultEvent(
+                    step=_WEB_STEP, tool_name="web_lookup_direct",
+                    status=web_status, duration_ms=dur, trace_id=trace_id,
+                ))
+
+                evidence_parts: list[str] = []
+                if all_metrics:
+                    evidence_parts.append("## System data\n" + json.dumps(all_metrics, ensure_ascii=False)[:2000])
+                if web_results:
+                    snippets = "\n".join(
+                        f"- [{r.get('title', '')}]({r.get('url', '')}): {r.get('snippet', '')[:300]}"
+                        for r in web_results
+                    )
+                    evidence_parts.append(f"## Web results ({len(web_results)} sources)\n{snippets}")
+                    for wr in web_results:
+                        wr_url = wr.get("url", "")
+                        if wr_url:
+                            all_sources.append({
+                                "layer": "Web", "dataset": wr.get("title", wr_url),
+                                "data_source": "web_search", "url": wr_url,
+                            })
+                evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "(no data)"
+                synthesis_prompt = build_synthesis_prompt(
+                    user_message=request.message,
+                    evidence_text=evidence_text,
+                    language=language,
+                    history=history_messages or None,
+                    cite_web_sources=bool(web_results),
+                )
+                _SYNTH_STEP_W = len(step_events)  # AFTER web step is appended
+                yield _sse(StatusUpdateEvent(text="Synthesizing answer…"))
+                yield _sse(ThinkingStepEvent(
+                    step=_SYNTH_STEP_W, tool_name="synthesize",
+                    label="Synthesizing answer", trace_id=trace_id,
+                ))
+                t_syn = time.perf_counter()
+                try:
+                    gen = self._model_router.generate(
+                        synthesis_prompt,
+                        max_output_tokens=self._synthesis_max_output_tokens,
+                        temperature=0.1,
+                    )
+                    answer = gen.text
+                    model_used = gen.model_used
+                    fallback_used = gen.fallback_used
+                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                    step_events.append({"step": _SYNTH_STEP_W, "tool": "synthesize", "status": "ok", "duration_ms": dur_syn, "detail": f"via {model_used}"})
+                    yield _sse(ToolResultEvent(step=_SYNTH_STEP_W, tool_name="synthesize", status="ok", duration_ms=dur_syn, trace_id=trace_id))
+                except Exception:
+                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                    answer = build_data_only_summary(all_metrics, all_sources, language)
+                    fallback_used = True
+                    step_events.append({"step": _SYNTH_STEP_W, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
+                    yield _sse(ToolResultEvent(step=_SYNTH_STEP_W, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
+
+            # Agentic loop
+            for step_num in range(1, self._max_tool_steps + 1):
+                if answer is not None:
+                    break
+                yield _sse(StatusUpdateEvent(text=f"Step {step_num}: calling AI agent…"))
+                try:
+                    result = self._model_router.generate_with_tools(
+                        messages,
+                        TOOL_DECLARATIONS,
+                        max_output_tokens=self._synthesis_max_output_tokens,
+                        require_function_call=(step_num == 1 and not all_metrics),
+                    )
+                except ToolCallNotSupportedError:
+                    evidence_text = json.dumps(all_metrics, ensure_ascii=False)
+                    synthesis_prompt = build_synthesis_prompt(
+                        user_message=request.message,
+                        evidence_text=evidence_text,
+                        language=language,
+                        history=history_messages or None,
+                    )
+                    _SYNTH_STEP_F = len(step_events)
+                    yield _sse(StatusUpdateEvent(text="Synthesizing answer (fallback)…"))
+                    yield _sse(ThinkingStepEvent(
+                        step=_SYNTH_STEP_F, tool_name="synthesize",
+                        label="Synthesizing answer", trace_id=trace_id,
+                    ))
+                    t_syn = time.perf_counter()
+                    try:
+                        gen = self._model_router.generate(
+                            synthesis_prompt,
+                            max_output_tokens=self._synthesis_max_output_tokens,
+                            temperature=0.1,
+                        )
+                        answer = gen.text
+                        model_used = gen.model_used
+                        fallback_used = gen.fallback_used
+                        dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                        step_events.append({"step": _SYNTH_STEP_F, "tool": "synthesize", "status": "ok", "duration_ms": dur_syn, "detail": f"via {model_used}"})
+                        yield _sse(ToolResultEvent(step=_SYNTH_STEP_F, tool_name="synthesize", status="ok", duration_ms=dur_syn, trace_id=trace_id))
+                    except Exception:
+                        dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                        answer = build_data_only_summary(all_metrics, all_sources, language)
+                        fallback_used = True
+                        step_events.append({"step": _SYNTH_STEP_F, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
+                        yield _sse(ToolResultEvent(step=_SYNTH_STEP_F, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
+                    break
+                except ModelUnavailableError:
+                    raise
+
+                if result.function_call is None:
+                    answer = result.text or build_data_only_summary(all_metrics, all_sources, language)
+                    model_used = result.model_used
+                    fallback_used = result.fallback_used
+                    break
+
+                tool_name = result.function_call.name
+                tool_args = dict(result.function_call.arguments or {})
+
+                yield _sse(ThinkingStepEvent(
+                    step=step_num,
+                    tool_name=tool_name,
+                    label=tool_label(tool_name),
+                    trace_id=trace_id,
+                ))
+
+                messages.append({
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": tool_name, "args": tool_args}}],
+                })
+
+                if tool_name == "answer_directly":
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": tool_name, "response": {"status": "ok"}}}],
+                    })
+                    step_events.append({"step": step_num, "tool": tool_name, "status": "skipped"})
+                    yield _sse(ToolResultEvent(
+                        step=step_num, tool_name=tool_name, status="skipped", trace_id=trace_id,
+                    ))
+                    continue
+
+                if tool_name == "web_lookup":
+                    t0 = time.perf_counter()
+                    web_response = self._execute_web_lookup(tool_args)
+                    dur = int((time.perf_counter() - t0) * 1000)
+                    for wr in web_response.get("results", []):
+                        wr_url = wr.get("url", "")
+                        if wr_url:
+                            all_sources.append({
+                                "layer": "Web", "dataset": wr.get("title", wr_url),
+                                "data_source": "web_search", "url": wr_url,
+                            })
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": tool_name, "response": web_response}}],
+                    })
+                    step_events.append({"step": step_num, "tool": tool_name, "status": "ok",
+                                        "result_count": len(web_response.get("results", []))})
+                    yield _sse(ToolResultEvent(
+                        step=step_num, tool_name=tool_name, status="ok", duration_ms=dur, trace_id=trace_id,
+                    ))
+                    continue
+
+                # RBAC
+                allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
+                if tool_name not in allowed_tools:
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {
+                            "name": tool_name,
+                            "response": {"error": f"Access denied for role '{request.role.value}'."},
+                        }}],
+                    })
+                    step_events.append({"step": step_num, "tool": tool_name, "status": "denied"})
+                    yield _sse(ToolResultEvent(
+                        step=step_num, tool_name=tool_name, status="denied", trace_id=trace_id,
+                    ))
+                    continue
+
+                # Execute tool
+                t0 = time.perf_counter()
+                try:
+                    data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
+                    dur = int((time.perf_counter() - t0) * 1000)
+                    all_sources.extend(sources)
+                    all_metrics.update(data)
+                    if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
+                        topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": tool_name, "response": data}}],
+                    })
+                    step_events.append({"step": step_num, "tool": tool_name, "status": "ok",
+                                        "metric_keys": sorted(data.keys()), "source_count": len(sources)})
+                    yield _sse(ToolResultEvent(
+                        step=step_num, tool_name=tool_name, status="ok",
+                        metric_keys=sorted(data.keys()), duration_ms=dur, trace_id=trace_id,
+                    ))
+                except DatabricksDataUnavailableError:
+                    raise
+                except Exception as tool_err:
+                    dur = int((time.perf_counter() - t0) * 1000)
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {
+                            "name": tool_name,
+                            "response": {"error": str(tool_err)},
+                        }}],
+                    })
+                    step_events.append({"step": step_num, "tool": tool_name, "status": "error",
+                                        "detail": str(tool_err)})
+                    yield _sse(ToolResultEvent(
+                        step=step_num, tool_name=tool_name, status="error", duration_ms=dur, trace_id=trace_id,
+                    ))
+
+            # Force synthesis if loop exhausted
+            if answer is None:
+                _SYNTH_STEP_A = len(step_events)
+                yield _sse(StatusUpdateEvent(text="Finalizing answer…"))
+                yield _sse(ThinkingStepEvent(
+                    step=_SYNTH_STEP_A, tool_name="synthesize",
+                    label="Synthesizing answer", trace_id=trace_id,
+                ))
+                t_syn = time.perf_counter()
+                try:
+                    force_result = self._model_router.generate_with_tools(
+                        messages, [],
+                        max_output_tokens=self._synthesis_max_output_tokens,
+                    )
+                    answer = force_result.text or build_data_only_summary(all_metrics, all_sources, language)
+                    model_used = force_result.model_used
+                    fallback_used = force_result.fallback_used
+                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                    step_events.append({"step": _SYNTH_STEP_A, "tool": "synthesize", "status": "ok", "duration_ms": dur_syn, "detail": f"via {model_used}"})
+                    yield _sse(ToolResultEvent(step=_SYNTH_STEP_A, tool_name="synthesize", status="ok", duration_ms=dur_syn, trace_id=trace_id))
+                except Exception:
+                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
+                    answer = build_data_only_summary(all_metrics, all_sources, language)
+                    fallback_used = True
+                    step_events.append({"step": _SYNTH_STEP_A, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
+                    yield _sse(ToolResultEvent(step=_SYNTH_STEP_A, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
+
+
+            def _fmt_step_detail(ev: dict) -> str:
+                """Return a clean human-readable detail string for a step event."""
+                keys = ev.get("metric_keys")
+                if keys and isinstance(keys, list):
+                    return f"{len(keys)} metric{'s' if len(keys) != 1 else ''} retrieved"
+                rc = ev.get("result_count")
+                if rc is not None:
+                    return f"{rc} result{'s' if int(rc) != 1 else ''} found"
+                detail = ev.get("detail")
+                if detail:
+                    return str(detail)[:120]
+                return ev.get("status", "ok")
+
+            def _fmt_step_label(ev: dict) -> str:
+                return tool_label(ev.get("tool", ""))
+
+            topic_label = topic.value.replace("_", " ").title()
+            thinking_trace = ThinkingTrace(
+                summary=f"{len(step_events)} tool call{'s' if len(step_events) != 1 else ''} · {topic_label} · {model_used}",
+                steps=[
+                    ThinkingStep(
+                        step=_fmt_step_label(ev),
+                        detail=_fmt_step_detail(ev),
+                        status="success" if ev.get("status") in ("ok", "skipped") else "warning",
+                    )
+                    for ev in step_events
+                ],
+                trace_id=trace_id,
+            )
+
+            if locked_topic is not None:
+                topic = locked_topic
+
+            source_objects: list[SourceMetadata] = [
+                SourceMetadata(**s) if isinstance(s, dict) else s
+                for s in all_sources
+            ]
+
+            final_resp = self._finalize_response(
+                request=request,
+                answer=answer,
+                topic=topic,
+                metrics=all_metrics,
+                sources=source_objects,
+                model_used=model_used,
+                fallback_used=fallback_used,
+                started=started,
+                trace_id=trace_id,
+                intent_confidence=intent_confidence,
+                thinking_trace=thinking_trace,
+            )
+
+            yield _sse(DoneEvent(
+                answer=final_resp.answer,
+                topic=final_resp.topic.value,
+                role=final_resp.role.value,
+                sources=[s.model_dump() for s in final_resp.sources],
+                key_metrics=final_resp.key_metrics,
+                model_used=final_resp.model_used,
+                fallback_used=final_resp.fallback_used,
+                latency_ms=final_resp.latency_ms,
+                intent_confidence=final_resp.intent_confidence,
+                warning_message=final_resp.warning_message,
+                thinking_trace=(
+                    final_resp.thinking_trace.model_dump()
+                    if final_resp.thinking_trace else None
+                ),
+                trace_id=trace_id,
+            ))
+
+        except DatabricksDataUnavailableError as db_err:
+            yield _sse(ErrorEvent(
+                message="Databricks is temporarily unavailable. Please retry shortly.",
+                code="databricks_unavailable",
+            ))
+        except Exception as err:
+            logger.exception("solar_chat_stream_unhandled trace_id=%s error=%s", trace_id, err)
+            yield _sse(ErrorEvent(
+                message="Solar AI Chat is temporarily unavailable. Please retry shortly.",
+                code="stream_error",
+            ))
 
     # ------------------------------------------------------------------
     # Agentic tool-calling loop
@@ -986,25 +1553,32 @@ class SolarAIChatService:
                 answer = build_data_only_summary(all_metrics, all_sources, language)
                 fallback_used = True
 
+        def _fmt_detail(ev: dict) -> str:
+            keys = ev.get("metric_keys")
+            if keys and isinstance(keys, list):
+                return f"{len(keys)} metric{'s' if len(keys) != 1 else ''} retrieved"
+            rc = ev.get("result_count")
+            if rc is not None:
+                return f"{rc} result{'s' if int(rc) != 1 else ''} found"
+            det = ev.get("detail")
+            if det:
+                return str(det)[:120]
+            return ev.get("status", "ok")
+
+        topic_label_str = topic.value.replace("_", " ").title()
         thinking_trace = ThinkingTrace(
-            summary=(
-                f"Agentic loop: {len(step_events)} tool step(s), "
-                f"model='{model_used}', fallback={fallback_used}, topic='{topic.value}'."
-            ),
+            summary=f"{len(step_events)} tool call{'s' if len(step_events) != 1 else ''} · {topic_label_str} · {model_used}",
             steps=[
                 ThinkingStep(
-                    step=f"Step {ev['step']}: {ev['tool']}",
-                    detail=str(
-                        ev.get("metric_keys",
-                        ev.get("result_count",
-                        ev.get("detail", ev.get("status", ""))))
-                    ),
+                    step=tool_label(ev.get("tool", "")),
+                    detail=_fmt_detail(ev),
                     status="success" if ev.get("status") in ("ok", "skipped") else "warning",
                 )
                 for ev in step_events
             ],
             trace_id=trace_id,
         )
+
 
         source_objects: list[SourceMetadata] = [
             SourceMetadata(**s) if isinstance(s, dict) else s
@@ -1084,6 +1658,7 @@ class SolarAIChatService:
                 answer=answer,
                 topic=topic,
                 sources=sources,
+                thinking_trace=thinking_trace,
             )
         except Exception as persist_error:
             logger.warning(
@@ -1134,6 +1709,7 @@ class SolarAIChatService:
         answer: str,
         topic: ChatTopic,
         sources: list[SourceMetadata],
+        thinking_trace: ThinkingTrace | None = None,
     ) -> None:
         if not session_id or not self._history_repository:
             return
@@ -1144,6 +1720,7 @@ class SolarAIChatService:
             content=answer,
             topic=topic,
             sources=sources,
+            thinking_trace=thinking_trace,
         )
 
     # ------------------------------------------------------------------

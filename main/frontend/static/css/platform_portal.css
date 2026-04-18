@@ -1630,6 +1630,10 @@ body.panels-hidden .solar-chat-layout {
   gap: 8px;
 }
 
+.solar-chat-feedback[hidden] {
+  display: none !important;
+}
+
 .solar-chat-feedback .solar-chat-loading,
 .solar-chat-feedback .solar-chat-error {
   margin-top: 0;
