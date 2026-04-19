@@ -81,7 +81,7 @@ class KpiRepository(BaseRepository):
             safe_date = anchor_date.replace("'", "''") 
             where_clauses.append(f"CAST({primary_date_col} AS DATE) = CAST('{safe_date}' AS DATE)")
 
-        if station_name and facility_cols:
+        if station_name and str(station_name).lower() not in ("all", "any", "none", "null") and facility_cols:
             primary_fac_col = facility_cols[0]
             safe_station = station_name.replace("'", "''")
             where_clauses.append(f"LOWER({primary_fac_col}) LIKE LOWER('%{safe_station}%')")
@@ -103,11 +103,27 @@ class KpiRepository(BaseRepository):
              logger.error(f"Failed to execute dynamic KPI query: {sql} - {exc}")
              raise DatabricksDataUnavailableError(f"Query on {table_short_name} failed.")
 
+        # Serialize dates and decimals for JSON compatibility
+        from datetime import date, datetime
+        from decimal import Decimal
+        
+        serialized_rows = []
+        for row in data_rows:
+            new_row = {}
+            for k, v in row.items():
+                if isinstance(v, (date, datetime)):
+                    new_row[k] = v.isoformat()
+                elif isinstance(v, Decimal):
+                    new_row[k] = float(v)
+                else:
+                    new_row[k] = v
+            serialized_rows.append(new_row)
+
         # Combine results into the standard metric format expected by prompt_builder
         metrics = {
             "table_name": table_path,
             "discovered_columns": columns,
-            "rows": data_rows,
+            "rows": serialized_rows,
             "filters_applied": {
                 "date_filter": anchor_date if where_clauses and anchor_date else None,
                 "station_filter": station_name if where_clauses and station_name else None

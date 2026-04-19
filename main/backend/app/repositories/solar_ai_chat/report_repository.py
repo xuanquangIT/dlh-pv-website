@@ -111,7 +111,7 @@ class ReportRepository(BaseRepository):
         if not raw:
             return None
         value = raw.strip()
-        if not value:
+        if not value or str(value).lower() in ("all", "any", "none", "null"):
             return None
         # Short codes like AVLSF / DARLSF are kept unchanged
         if len(value) <= 8 and value.replace("_", "").replace("-", "").isalnum():
