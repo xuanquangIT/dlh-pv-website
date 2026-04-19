@@ -50,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(model_registry.router)
     app.include_router(forecast.router)
     app.include_router(solar_ai_chat.router)
+    app.include_router(solar_ai_chat.stream_router)
     app.include_router(frontend.router)
 
     return app

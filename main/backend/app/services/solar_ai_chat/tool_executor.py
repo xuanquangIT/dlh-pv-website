@@ -112,6 +112,7 @@ class ToolExecutor:
             "get_extreme_energy": self._get_extreme_energy,
             "get_extreme_weather": self._get_extreme_weather,
             "get_station_daily_report": self._get_station_daily_report,
+            "get_station_hourly_report": self._get_station_hourly_report,
             "get_facility_info": self._get_facility_info,
             "search_documents": self._search_documents,
             "query_gold_kpi": self._query_gold_kpi,
@@ -193,6 +194,16 @@ class ToolExecutor:
             weather_metric_label=label,
             weather_unit=unit,
             specific_hour=arguments.get("specific_hour"),
+        )
+
+    def _get_station_hourly_report(
+        self, arguments: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        anchor = self._parse_date(arguments.get("anchor_date"))
+        station_name = arguments.get("station_name")
+        return self._repository.fetch_station_hourly_report(
+            station_name=station_name,
+            anchor_date=anchor,
         )
 
     def _get_station_daily_report(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:

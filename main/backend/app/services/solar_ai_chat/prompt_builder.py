@@ -77,6 +77,7 @@ These tables have **dynamic schemas**. They contain detailed KPIs, impact factor
 | `get_facility_info` | facilities (list: facility_name, latitude, longitude, capacity_mw, timezone, country, state) |
 | `get_extreme_aqi / get_extreme_energy / get_extreme_weather` | facility, value, unit, metric, recorded_at |
 | `get_station_daily_report` | per-station rows with energy_mwh, aqi, temperature, wind, radiation for a date; pass station_name to filter for a single station |
+| `get_station_hourly_report` | HOURLY rows (hour 0-23, facility, energy_mwh, capacity_factor_pct) for a date; use for 'theo giờ / hourly' questions; anchor_date optional (latest day by default) |
 | `search_documents` | text chunks from knowledge base — use for definitions and explanations |
 | `query_gold_kpi` | **Dynamic fields**: You will receive a list of `discovered_columns` alongside `rows`. You must parse and interpret whatever columns are returned! |
 

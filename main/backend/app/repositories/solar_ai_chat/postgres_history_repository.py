@@ -15,6 +15,7 @@ from app.schemas.solar_ai_chat import (
     ChatSessionSummary,
     ChatTopic,
     SourceMetadata,
+    ThinkingTrace,
 )
 
 
@@ -35,6 +36,12 @@ class PostgresChatHistoryRepository:
         sources = None
         if model.sources:
             sources = [SourceMetadata.model_validate(row) for row in model.sources]
+        thinking_trace = None
+        if model.thinking_trace:
+            try:
+                thinking_trace = ThinkingTrace.model_validate(model.thinking_trace)
+            except Exception:
+                thinking_trace = None
         return ChatMessage(
             id=model.id,
             session_id=model.session_id,
@@ -43,6 +50,7 @@ class PostgresChatHistoryRepository:
             timestamp=model.timestamp,
             topic=topic,
             sources=sources,
+            thinking_trace=thinking_trace,
         )
 
     def _ensure_local_auth_user(self, owner_uuid: uuid.UUID) -> None:
@@ -245,6 +253,7 @@ class PostgresChatHistoryRepository:
         content: str,
         topic: ChatTopic | None = None,
         sources: list[SourceMetadata] | None = None,
+        thinking_trace: ThinkingTrace | None = None,
     ) -> ChatMessage | None:
         with SessionLocal() as db:
             session = (
@@ -264,6 +273,7 @@ class PostgresChatHistoryRepository:
                 timestamp=now,
                 topic=topic.value if topic else None,
                 sources=[row.model_dump() for row in sources] if sources else None,
+                thinking_trace=thinking_trace.model_dump() if thinking_trace else None,
             )
             session.updated_at = now
             db.add(message)
@@ -333,6 +343,7 @@ class PostgresChatHistoryRepository:
                         timestamp=message.timestamp,
                         topic=message.topic,
                         sources=message.sources,
+                        thinking_trace=message.thinking_trace,
                     )
                 )
 

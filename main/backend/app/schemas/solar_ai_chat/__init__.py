@@ -30,6 +30,16 @@ from app.schemas.solar_ai_chat.rag import (
     IngestDocumentResponse,
     RagStatsResponse,
 )
+from app.schemas.solar_ai_chat.stream import (
+    ThinkingStepEvent,
+    ToolResultEvent,
+    StatusUpdateEvent,
+    TextDeltaEvent,
+    DoneEvent,
+    ErrorEvent,
+    UiEvent,
+    tool_label,
+)
 
 __all__ = [
     "ChatRole",
@@ -58,4 +68,12 @@ __all__ = [
     "EvidenceItem",
     "EvidenceStore",
     "ToolResultEnvelope",
+    "ThinkingStepEvent",
+    "ToolResultEvent",
+    "StatusUpdateEvent",
+    "TextDeltaEvent",
+    "DoneEvent",
+    "ErrorEvent",
+    "UiEvent",
+    "tool_label",
 ]

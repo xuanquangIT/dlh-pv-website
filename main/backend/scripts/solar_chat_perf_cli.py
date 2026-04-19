@@ -4,11 +4,19 @@ import argparse
 import json
 import math
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+# Force UTF-8 stdout so Vietnamese diacritics render on Windows consoles.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,6 +45,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--connect-timeout-seconds", type=float, default=10.0, help="Connection timeout.")
     parser.add_argument("--print-answer", action="store_true", help="Print assistant answer text.")
     parser.add_argument("--print-metrics", action="store_true", help="Print key_metrics JSON from chat response.")
+    parser.add_argument(
+        "--print-thinking",
+        action="store_true",
+        help="Print the full thinking_trace (planner actions, tool calls, reflection).",
+    )
+    parser.add_argument(
+        "--print-sources",
+        action="store_true",
+        help="Print the list of data sources cited for the answer.",
+    )
     parser.add_argument(
         "--expect-thinking-trace",
         action="store_true",
@@ -171,6 +189,18 @@ def chat_once(
 
     payload = response.json()
     trace_summary, trace_id, trace_step_count = _extract_trace_fields(payload)
+    trace_steps_raw: list[dict[str, Any]] = []
+    trace = payload.get("thinking_trace")
+    if isinstance(trace, dict):
+        raw_steps = trace.get("steps")
+        if isinstance(raw_steps, list):
+            for s in raw_steps:
+                if isinstance(s, dict):
+                    trace_steps_raw.append({
+                        "step": str(s.get("step", "")),
+                        "detail": str(s.get("detail", "")),
+                        "status": str(s.get("status", "")),
+                    })
     return {
         "benchmark_type": "chat",
         "roundtrip_ms": roundtrip_ms,
@@ -186,6 +216,7 @@ def chat_once(
         "thinking_trace_summary": trace_summary,
         "thinking_trace_id": trace_id,
         "thinking_step_count": trace_step_count,
+        "thinking_steps": trace_steps_raw,
     }
 
 
@@ -383,6 +414,29 @@ def main() -> int:
             if args.expect_thinking_trace:
                 print(f"  thinking_trace_violations={trace_violations}")
 
+        if args.print_thinking and results:
+            steps = results[-1].get("thinking_steps") or []
+            print("thinking_trace:")
+            if steps:
+                for idx, s in enumerate(steps, 1):
+                    print(f"  [{idx}] {s.get('step', '')} — {s.get('status', '')}: {s.get('detail', '')}")
+            else:
+                print("  (no thinking_trace steps returned by backend)")
+        if args.print_sources and results:
+            srcs = results[-1].get("sources") or []
+            print("sources:")
+            if srcs:
+                for s in srcs:
+                    if isinstance(s, dict):
+                        layer = s.get("layer", "")
+                        dataset = s.get("dataset", "")
+                        url = s.get("url", "")
+                        tail = f" ({url})" if url else ""
+                        print(f"  - {layer}:{dataset}{tail}")
+                    else:
+                        print(f"  - {s}")
+            else:
+                print("  (no sources returned)")
         if args.print_answer and results:
             print("answer:")
             print(results[-1]["answer"])

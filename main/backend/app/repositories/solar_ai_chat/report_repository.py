@@ -30,6 +30,15 @@ _TABLE_TIMESTAMP_COLUMN: dict[str, str] = {
     "silver.air_quality": "aqi_timestamp",
 }
 
+# Silver tables expose a pre-computed station-local DATE column so callers
+# can filter by "ngày X" without converting timezones at query time. Prefer
+# these over CAST(<utc_ts> AS DATE) for any user-facing day grouping.
+_TABLE_LOCAL_DATE_COLUMN: dict[str, str] = {
+    "silver.energy_readings": "reading_date_local",
+    "silver.weather": "weather_date_local",
+    "silver.air_quality": "aqi_date_local",
+}
+
 
 class ReportRepository(BaseRepository):
     """Handles fetch_station_daily_report using Databricks SQL only."""
@@ -89,6 +98,121 @@ class ReportRepository(BaseRepository):
 
         return result, sources
 
+    @staticmethod
+    def _normalize_station_filter(raw: str | None) -> str | None:
+        """Strip common suffixes so 'Avonlie Solar Farm' still matches 'Avonlie'.
+
+        The canonical facility_name values in dim_facility are short
+        (e.g. 'Avonlie', 'Darlington Point'); LLMs often append marketing
+        words like 'Solar Farm', 'Station', 'Plant'. We reduce the filter to
+        the non-boilerplate remainder, but only if that remainder is
+        meaningful (>=3 chars). Also accepts short facility codes unchanged.
+        """
+        if not raw:
+            return None
+        value = raw.strip()
+        if not value:
+            return None
+        # Short codes like AVLSF / DARLSF are kept unchanged
+        if len(value) <= 8 and value.replace("_", "").replace("-", "").isalnum():
+            return value
+        import re as _re
+        stripped = _re.sub(
+            r"\b(solar\s+farm|solar|farm|station|plant|park|power\s+station)\b",
+            "", value, flags=_re.IGNORECASE,
+        )
+        stripped = _re.sub(r"\s+", " ", stripped).strip(" ,-_")
+        return stripped if len(stripped) >= 3 else value
+
+    def fetch_station_hourly_report(
+        self,
+        station_name: str | None,
+        anchor_date: date | None = None,
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        """Return per-hour energy breakdown for a station on a given date.
+
+        Queries gold.fact_energy (which already stores hourly rows keyed by
+        date_hour).  When anchor_date is None the latest date available for
+        the station is used.  Missing station -> aggregate across all
+        facilities for that date.
+        """
+        facility_filter_sql = ""
+        normalized_station = self._normalize_station_filter(station_name)
+        if normalized_station:
+            safe = normalized_station.replace("'", "''").replace("%", "\\%").replace("_", "\\_")
+            facility_filter_sql = (
+                " AND ("
+                f"LOWER(COALESCE(d.facility_name, f.facility_id)) LIKE LOWER('%{safe}%')"
+                f" OR LOWER(f.facility_id) LIKE LOWER('%{safe}%')"
+                ")"
+            )
+
+        # Lakehouse stores UTC (date_hour) + station-local (date_hour_local,
+        # reading_date_local) keys.  Hourly / daily reports MUST use the
+        # local-time columns so "ngày X / giờ Y" matches what operators see
+        # on station wall-clocks (e.g. Australian AEST/AEDT). UTC grouping
+        # shifts peak hours 10 hours to the "wrong" side of midnight.
+        if anchor_date is None:
+            row = self._execute_query(
+                "SELECT MAX(f.reading_date_local) AS max_date"
+                " FROM gold.fact_energy f"
+                " LEFT JOIN gold.dim_facility d"
+                "   ON f.facility_id = d.facility_id AND d.is_current = true"
+                f" WHERE f.energy_mwh IS NOT NULL{facility_filter_sql}"
+            )
+            max_date_raw = row[0].get("max_date") if row else None
+            if isinstance(max_date_raw, date):
+                anchor_date = max_date_raw
+            elif isinstance(max_date_raw, str):
+                try:
+                    anchor_date = date.fromisoformat(max_date_raw[:10])
+                except ValueError:
+                    anchor_date = date.today()
+            else:
+                anchor_date = date.today()
+
+        date_str = anchor_date.isoformat()
+        rows = self._execute_query(
+            "SELECT EXTRACT(HOUR FROM f.date_hour_local) AS hr,"
+            "       COALESCE(d.facility_name, f.facility_id) AS facility,"
+            "       SUM(f.energy_mwh) AS energy_mwh,"
+            "       AVG(f.capacity_factor_pct) AS capacity_factor_pct"
+            " FROM gold.fact_energy f"
+            " LEFT JOIN gold.dim_facility d"
+            "   ON f.facility_id = d.facility_id AND d.is_current = true"
+            f" WHERE f.reading_date_local = DATE '{date_str}'"
+            f"{facility_filter_sql}"
+            " GROUP BY EXTRACT(HOUR FROM f.date_hour_local), COALESCE(d.facility_name, f.facility_id)"
+            " ORDER BY facility, hr"
+        )
+
+        hourly: list[dict[str, Any]] = []
+        for r in rows:
+            hourly.append({
+                "hour": int(r["hr"]) if r.get("hr") is not None else None,
+                "facility": r.get("facility"),
+                "energy_mwh": round(float(r["energy_mwh"]), 4) if r.get("energy_mwh") is not None else 0.0,
+                "capacity_factor_pct": (
+                    round(float(r["capacity_factor_pct"]), 2)
+                    if r.get("capacity_factor_pct") is not None else None
+                ),
+            })
+
+        total_mwh = round(sum(h["energy_mwh"] for h in hourly), 4)
+        result: dict[str, Any] = {
+            "report_date": date_str,
+            "station_filter": station_name or "",
+            "hourly_rows": hourly,
+            "row_count": len(hourly),
+            "total_energy_mwh": total_mwh,
+            "has_data": bool(hourly),
+        }
+        sources = [
+            {"layer": "Gold", "dataset": "gold.fact_energy", "data_source": "databricks"},
+            {"layer": "Gold", "dataset": "gold.dim_facility", "data_source": "databricks"},
+        ]
+        return result, sources
+
     # Legacy aliases retained for compatibility with existing tests/call sites.
     def _station_report_date_range_trino(self, requested: set[str]) -> tuple[str | None, str | None]:
         return self._station_report_date_range_databricks(requested)
@@ -139,13 +263,22 @@ class ReportRepository(BaseRepository):
         max_date: str | None = None
 
         for table_name, _ in self._report_sources_for_metrics(requested):
-            timestamp_column = _TABLE_TIMESTAMP_COLUMN.get(table_name, "date_hour")
+            # Prefer station-local DATE column so the range matches
+            # user-facing dates (wall-clock), not UTC.
+            local_date_column = _TABLE_LOCAL_DATE_COLUMN.get(table_name)
+            ts_column = _TABLE_TIMESTAMP_COLUMN.get(table_name, "date_hour")
+            if local_date_column:
+                date_expr = local_date_column
+                filter_col = local_date_column
+            else:
+                date_expr = f"CAST({ts_column} AS DATE)"
+                filter_col = ts_column
             rows = self._execute_query(
                 "SELECT"
-                f" MIN(CAST({timestamp_column} AS DATE)) AS min_date,"
-                f" MAX(CAST({timestamp_column} AS DATE)) AS max_date"
+                f" MIN({date_expr}) AS min_date,"
+                f" MAX({date_expr}) AS max_date"
                 f" FROM {table_name}"
-                f" WHERE {timestamp_column} IS NOT NULL"
+                f" WHERE {filter_col} IS NOT NULL"
             )
             if not rows:
                 continue
@@ -181,10 +314,11 @@ class ReportRepository(BaseRepository):
         Uses LOWER + LIKE for case-insensitive partial matching.
         Returns an empty string if no station filter is requested.
         """
-        if not station_name or not station_name.strip():
+        normalized = ReportRepository._normalize_station_filter(station_name)
+        if not normalized:
             return ""
         # Escape SQL wildcards in user input to prevent injection
-        safe_name = station_name.strip().replace("'", "''").replace("%", "\\%").replace("_", "\\_")
+        safe_name = normalized.replace("'", "''").replace("%", "\\%").replace("_", "\\_")
         return f" AND LOWER({facility_expr}) LIKE LOWER('%{safe_name}%')"
 
     def _station_daily_report_databricks(

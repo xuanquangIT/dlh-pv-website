@@ -72,6 +72,7 @@ class ChatMessage(Base):
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     topic = Column(String(50), nullable=True)
     sources = Column(JSON, nullable=True)
+    thinking_trace = Column(JSON, nullable=True)  # ← persisted ThinkingTrace dict
 
     session = relationship("ChatSession", back_populates="messages")
 

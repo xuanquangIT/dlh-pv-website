@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content    TEXT NOT NULL,
     "timestamp" TIMESTAMPTZ DEFAULT now() NOT NULL,
     topic      VARCHAR(50),
-    sources    JSONB
+    sources    JSONB,
+    thinking_trace JSONB   -- persisted ThinkingTrace: {summary, steps, trace_id}
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id

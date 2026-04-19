@@ -1,0 +1,18 @@
+# Ensure all files use LF line endings (Unix style)
+* text=auto eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.db binary
