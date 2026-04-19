@@ -56,6 +56,7 @@ class DoneEvent(BaseModel):
     intent_confidence: float = 0.0
     warning_message: str | None = None
     thinking_trace: dict[str, Any] | None = None
+    ui_features: dict[str, bool] = Field(default_factory=dict)
     trace_id: str = ""
 
 

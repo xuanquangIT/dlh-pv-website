@@ -31,6 +31,7 @@ from app.schemas.solar_ai_chat import (
     SourceMetadata,
     ThinkingStep,
     ThinkingTrace,
+    resolve_ui_features,
     tool_label,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
@@ -480,6 +481,7 @@ class SolarAIChatService:
                     latency_ms=final_resp.latency_ms,
                     intent_confidence=final_resp.intent_confidence,
                     warning_message=final_resp.warning_message,
+                    ui_features=final_resp.ui_features,
                     trace_id=trace_id,
                 ))
                 return
@@ -527,6 +529,7 @@ class SolarAIChatService:
                     fallback_used=final_resp.fallback_used,
                     latency_ms=final_resp.latency_ms,
                     intent_confidence=final_resp.intent_confidence,
+                    ui_features=final_resp.ui_features,
                     trace_id=trace_id,
                 ))
                 return
@@ -1073,6 +1076,7 @@ class SolarAIChatService:
                     final_resp.thinking_trace.model_dump()
                     if final_resp.thinking_trace else None
                 ),
+                ui_features=final_resp.ui_features,
                 trace_id=trace_id,
             ))
 
@@ -1960,6 +1964,7 @@ class SolarAIChatService:
             intent_confidence=intent_confidence,
             warning_message=warning_message,
             thinking_trace=thinking_trace,
+            ui_features=resolve_ui_features(request.role),
         )
 
     # ------------------------------------------------------------------

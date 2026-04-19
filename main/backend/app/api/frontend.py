@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 
 from app.api.dependencies import get_current_user, require_role
 from app.db.database import AuthUser
+from app.schemas.solar_ai_chat import ChatRole, resolve_ui_features
 
 router = APIRouter(tags=["Frontend"], include_in_schema=False)
 
@@ -103,6 +104,11 @@ def _render_refactored_page(
     current_user: AuthUser,
 ) -> HTMLResponse:
     user_name = current_user.full_name or current_user.username
+    chat_role_str = _to_chat_role(current_user.role_id)
+    try:
+        chat_role_enum = ChatRole(chat_role_str)
+    except ValueError:
+        chat_role_enum = None
     base_context = {
         "current_page": current_page,
         "page_title": page_title,
@@ -110,7 +116,8 @@ def _render_refactored_page(
         "user_name": user_name,
         "user_role": current_user.role.name if getattr(current_user, 'role') else current_user.role_id,
         "api_role": current_user.role_id,
-        "chat_role": _to_chat_role(current_user.role_id),
+        "chat_role": chat_role_str,
+        "chat_ui_features": resolve_ui_features(chat_role_enum),
         "user_initials": "".join([part[0] for part in user_name.split()[:2]]).upper() or "U",
     }
     return templates.TemplateResponse(

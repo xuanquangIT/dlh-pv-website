@@ -395,6 +395,10 @@
     if (!thinkingTrace || !thinkingTrace.steps || thinkingTrace.steps.length === 0) {
       return "";
     }
+    // Feature-flag gate: SHOW_THINKING_TRACE.
+    if (window.ToolStatusCard && !window.ToolStatusCard.canShowTrace()) {
+      return "";
+    }
 
     // Parse the summary — format is "N tool calls · Topic · model-name"
     const summary = String(thinkingTrace.summary || "");
@@ -423,10 +427,21 @@
     html.push('<div class="msg-thinking-list">');
 
     thinkingTrace.steps.forEach(function(step) {
+      if (window.ToolStatusCard) {
+        const rowHtml = window.ToolStatusCard.renderRow({
+          step: step.step,
+          tool_name: step.tool_name,
+          label: step.step || step.tool_name || "",
+          status: step.status,
+          detail: step.detail
+        });
+        if (rowHtml) html.push(rowHtml);
+        return;
+      }
+      // Fallback path (component not loaded): legacy renderer.
       const isOk = step.status === "success" || step.status === "ok";
       const isWarn = step.status === "warning" || step.status === "error";
       const isRunning = step.status === "running";
-
       let icon;
       if (isRunning) {
         icon = '<span class="task-tracker-spinner" aria-hidden="true"></span>';
@@ -437,13 +452,9 @@
       } else {
         icon = '<span class="task-tracker-icon skipped" aria-hidden="true">–</span>';
       }
-
       const rowClass = isRunning ? "task-tracker-row running" : "task-tracker-row";
-      // step.step is now the human label e.g. "Fetching energy performance"
       const label = step.step || step.tool_name || "";
-      // step.detail is now "7 metrics retrieved" or "3 results found"
       const detail = step.detail ? ' <span class="task-tracker-dur">' + escapeHtml(step.detail) + "</span>" : "";
-
       html.push(
         '<div class="' + rowClass + '">',
         "  " + icon,
@@ -1266,6 +1277,10 @@
       ];
 
       var tasksHtml = this._tasks.map(function (task) {
+        if (window.ToolStatusCard) {
+          return window.ToolStatusCard.renderRow(task);
+        }
+        // Fallback (component not loaded): legacy inline renderer.
         var iconHtml;
         var rowClass = "task-tracker-row";
         if (task.status === "running") {
@@ -1415,8 +1430,11 @@
                 }
               },
               onDone: function (evt) {
+                if (window.ToolStatusCard && evt.ui_features) {
+                  window.ToolStatusCard.updateFeatures(evt.ui_features);
+                }
                 if (taskTracker) taskTracker.setOpen(false); // Collapse when done
-                
+
                 state.modelUsed = evt.model_used || state.modelUsed;
                 var assistantMessage = {
                   role: "assistant",

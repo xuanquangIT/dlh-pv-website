@@ -90,9 +90,6 @@ class LLMModelRouter:
         max_output_tokens: int | None = None,
         temperature: float = 0.1,
     ) -> LLMGenerationResult:
-        if not self._api_key:
-            raise ModelUnavailableError("LLM API key is not configured.")
-
         effective_max_tokens = self._resolve_max_output_tokens(
             value=max_output_tokens,
             default_value=self._default_max_output_tokens,
@@ -155,9 +152,6 @@ class LLMModelRouter:
         require_function_call: bool = False,
         max_output_tokens: int | None = None,
     ) -> LLMToolResult:
-        if not self._api_key:
-            raise ModelUnavailableError("LLM API key is not configured.")
-
         payload, skip_models = self._build_tool_generation_payload(
             messages,
             tools,
@@ -180,9 +174,6 @@ class LLMModelRouter:
         max_output_tokens: int | None = None,
     ) -> LLMToolResult:
         """Backward-compatible helper for tests and legacy call sites."""
-        if not self._api_key:
-            raise ModelUnavailableError("LLM API key is not configured.")
-
         payload = self._build_tool_result_payload(
             messages,
             max_output_tokens=max_output_tokens,
@@ -912,10 +903,9 @@ class LLMModelRouter:
             endpoint = f"{self._base_url}/models/{model_name}:generateContent"
             if self._request_executor is not None:
                 return self._request_executor(endpoint, payload, self._timeout)
-            headers = {
-                "Content-Type": "application/json",
-                "x-goog-api-key": self._api_key,
-            }
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if self._api_key:
+                headers["x-goog-api-key"] = self._api_key
             return self._execute_request(endpoint, payload, self._timeout, headers)
 
         if self._api_format == "anthropic":
@@ -926,9 +916,10 @@ class LLMModelRouter:
                 return self._request_executor(endpoint, request_payload, self._timeout)
             headers = {
                 "Content-Type": "application/json",
-                "x-api-key": self._api_key,
                 "anthropic-version": self._anthropic_version,
             }
+            if self._api_key:
+                headers["x-api-key"] = self._api_key
             return self._execute_request(endpoint, request_payload, self._timeout, headers)
 
         endpoint = f"{self._base_url}/chat/completions"
@@ -936,10 +927,9 @@ class LLMModelRouter:
         request_payload["model"] = model_name
         if self._request_executor is not None:
             return self._request_executor(endpoint, request_payload, self._timeout)
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self._api_key}",
-        }
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         return self._execute_request(endpoint, request_payload, self._timeout, headers)
 
     @staticmethod

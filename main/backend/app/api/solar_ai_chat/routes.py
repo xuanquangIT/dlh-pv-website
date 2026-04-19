@@ -95,7 +95,7 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
     settings = get_solar_chat_settings()
 
     model_router: LLMModelRouter | None = None
-    if settings.llm_api_key:
+    if settings.llm_api_key or settings.llm_base_url:
         model_router = LLMModelRouter(settings=settings)
 
     embedding_client = _get_embedding_client()
@@ -249,7 +249,7 @@ def benchmark_solar_ai_chat_model_only(
     effective_role = _resolve_user_chat_role(current_user)
 
     settings = get_solar_chat_settings()
-    if not settings.llm_api_key:
+    if not settings.llm_api_key and not settings.llm_base_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="LLM API key is not configured.",

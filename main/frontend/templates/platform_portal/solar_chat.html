@@ -163,5 +163,7 @@
 {% block scripts %}
 <script>
     window.PV_ROUTE = "solar_chat";
+    window.SOLAR_CHAT_UI_FEATURES = {{ chat_ui_features | tojson }};
+    window.SOLAR_CHAT_ROLE = {{ chat_role | tojson }};
 </script>
 {% endblock %}

@@ -44,3 +44,4 @@ class SolarChatResponse(BaseModel):
     intent_confidence: float
     warning_message: str | None = None
     thinking_trace: ThinkingTrace | None = None
+    ui_features: dict[str, bool] = Field(default_factory=dict)
