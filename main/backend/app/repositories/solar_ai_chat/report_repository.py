@@ -356,6 +356,65 @@ class ReportRepository(BaseRepository):
             if "aqi_value" in requested and r.get("aqi_value") is not None:
                 facility_data[name]["aqi_value"] = round(float(r["aqi_value"]), 2)
 
+        if not facility_data:
+            if "energy_mwh" in requested:
+                station_filter = self._build_station_filter_clause(
+                    station_name, "COALESCE(facility_name, facility_id)",
+                )
+                rows = self._execute_query(
+                    f"SELECT COALESCE(facility_name, facility_id) AS facility,"
+                    f"       SUM(energy_kwh) AS total_energy_kwh"
+                    f" FROM silver.energy_readings"
+                    f" WHERE reading_date_local = DATE '{date_str}'"
+                    f"{station_filter}"
+                    f" GROUP BY COALESCE(facility_name, facility_id)"
+                )
+                for r in rows:
+                    name = r["facility"]
+                    facility_data.setdefault(name, {"facility": name})
+                    facility_data[name]["energy_mwh"] = round(float(r["total_energy_kwh"]) / 1000.0, 4)
+
+            weather_cols = requested & {"shortwave_radiation", "temperature_2m", "wind_speed_10m", "cloud_cover"}
+            if weather_cols:
+                agg_parts = ", ".join(
+                    f"AVG({_WEATHER_METRIC_COLUMN_MAP[col]}) AS avg_{col}"
+                    for col in sorted(weather_cols)
+                )
+                station_filter = self._build_station_filter_clause(
+                    station_name, "COALESCE(facility_name, location_id)",
+                )
+                rows = self._execute_query(
+                    f"SELECT COALESCE(facility_name, location_id) AS facility, {agg_parts}"
+                    f" FROM silver.weather"
+                    f" WHERE weather_date_local = DATE '{date_str}'"
+                    f"{station_filter}"
+                    f" GROUP BY COALESCE(facility_name, location_id)"
+                )
+                for r in rows:
+                    name = r["facility"]
+                    facility_data.setdefault(name, {"facility": name})
+                    for col in weather_cols:
+                        val = r.get(f"avg_{col}")
+                        if val is not None:
+                            facility_data[name][col] = round(float(val), 2)
+
+            if "aqi_value" in requested:
+                station_filter = self._build_station_filter_clause(
+                    station_name, "COALESCE(facility_name, location_id)",
+                )
+                rows = self._execute_query(
+                    f"SELECT COALESCE(facility_name, location_id) AS facility,"
+                    f"       AVG(aqi_value) AS avg_aqi"
+                    f" FROM silver.air_quality"
+                    f" WHERE aqi_date_local = DATE '{date_str}'"
+                    f"{station_filter}"
+                    f" GROUP BY COALESCE(facility_name, location_id)"
+                )
+                for r in rows:
+                    name = r["facility"]
+                    facility_data.setdefault(name, {"facility": name})
+                    facility_data[name]["aqi_value"] = round(float(r["avg_aqi"]), 2)
+
         return sorted(facility_data.values(), key=lambda x: x["facility"])
 
     def _station_daily_report_csv(self, anchor_date: date, requested: set[str]) -> list[dict[str, Any]]:
