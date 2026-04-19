@@ -115,6 +115,7 @@ class ToolExecutor:
             "get_station_hourly_report": self._get_station_hourly_report,
             "get_facility_info": self._get_facility_info,
             "search_documents": self._search_documents,
+            "query_gold_kpi": self._query_gold_kpi,
         }
 
         handler = topic_handlers.get(function_name)
@@ -125,7 +126,10 @@ class ToolExecutor:
 
         if function_name in TOOL_NAME_TO_TOPIC and handler == self._get_topic_metrics:
             topic = ChatTopic(TOOL_NAME_TO_TOPIC[function_name])
-            metrics, sources = self._repository.fetch_topic_metrics(topic)
+            if arguments:
+                metrics, sources = self._repository.fetch_topic_metrics(topic, arguments)
+            else:
+                metrics, sources = self._repository.fetch_topic_metrics(topic)
             logger.info(
                 "solar_chat_tool_executor_done tool=%s topic=%s metric_keys=%s source_count=%d",
                 function_name,
@@ -304,3 +308,14 @@ class ToolExecutor:
             for c in chunks
         ]
         return metrics, sources
+
+    def _query_gold_kpi(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        if not hasattr(self._repository, "fetch_gold_kpi"):
+             return {"message": "KPI Mart querying is not supported by the current repository."}, []
+
+        return self._repository.fetch_gold_kpi(
+            table_short_name=arguments.get("table_name", ""),
+            anchor_date=arguments.get("anchor_date"),
+            station_name=arguments.get("station_name"),
+            limit=arguments.get("limit", 30),
+        )

@@ -44,6 +44,7 @@ class TextDeltaEvent(BaseModel):
 
 
 class DoneEvent(BaseModel):
+    model_config = {"protected_namespaces": ()}
     event: Literal["done"] = "done"
     answer: str
     topic: str
@@ -57,6 +58,9 @@ class DoneEvent(BaseModel):
     warning_message: str | None = None
     thinking_trace: dict[str, Any] | None = None
     ui_features: dict[str, bool] = Field(default_factory=dict)
+    data_table: dict[str, Any] | None = None
+    chart: dict[str, Any] | None = None
+    kpi_cards: dict[str, Any] | None = None
     trace_id: str = ""
 
 

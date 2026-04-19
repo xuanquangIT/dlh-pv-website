@@ -5,6 +5,17 @@
   const PROJECT_STORAGE_KEY = "pv_solar_chat_projects";
   const PROJECT_SESSION_MAP_STORAGE_KEY = "pv_solar_chat_project_session_map";
   const ACTIVE_PROJECT_STORAGE_KEY = "pv_solar_chat_active_project";
+  const LAST_SESSION_STORAGE_KEY = "pv_solar_chat_last_session_id";
+
+  function loadStoredLastSessionId() {
+    try { return localStorage.getItem(LAST_SESSION_STORAGE_KEY) || ""; } catch (_) { return ""; }
+  }
+  function saveStoredLastSessionId(sessionId) {
+    try {
+      if (sessionId) localStorage.setItem(LAST_SESSION_STORAGE_KEY, sessionId);
+      else localStorage.removeItem(LAST_SESSION_STORAGE_KEY);
+    } catch (_) { /* ignore */ }
+  }
   const NO_PROJECT_KEY = "__no_project__";
   const NO_PROJECT_LABEL = "No Project";
 
@@ -131,8 +142,8 @@
       });
     },
 
-    async listSessions() {
-      return requestJson("/solar-ai-chat/sessions", {
+    async listSessions(limit = 20, offset = 0) {
+      return requestJson("/solar-ai-chat/sessions?limit=" + encodeURIComponent(limit) + "&offset=" + encodeURIComponent(offset), {
         method: "GET"
       });
     },
@@ -549,6 +560,45 @@
     }
   }
 
+  function mountVizExtras(messageId, viz) {
+    if (!viz) return;
+    if (!viz.data_table && !viz.chart && !viz.kpi_cards) return;
+    const row = document.querySelector('[data-message-id="' + messageId + '"]');
+    if (!row) return;
+
+    row.classList.add("msg-row-has-viz");
+    let extras = row.querySelector(".solar-viz-extras");
+    if (!extras) {
+      extras = document.createElement("div");
+      extras.className = "solar-viz-extras";
+      const msg = row.querySelector(".msg");
+      if (msg && msg.parentNode === row) {
+        row.insertBefore(extras, msg.nextSibling);
+      } else {
+        row.appendChild(extras);
+      }
+    } else {
+      extras.innerHTML = "";
+    }
+
+    if (viz.kpi_cards && window.KpiCards) {
+      const kpiEl = document.createElement("div");
+      kpiEl.className = "solar-kpi-cards";
+      extras.appendChild(kpiEl);
+      window.KpiCards.render(kpiEl, viz.kpi_cards);
+    }
+    if (viz.chart && window.ChartRenderer) {
+      const chartEl = document.createElement("div");
+      extras.appendChild(chartEl);
+      window.ChartRenderer.render(chartEl, viz.chart);
+    }
+    if (viz.data_table && window.DataTable) {
+      const tblEl = document.createElement("div");
+      extras.appendChild(tblEl);
+      window.DataTable.render(tblEl, viz.data_table);
+    }
+  }
+
   function MessageList(container) {
     this.container = container;
   }
@@ -564,6 +614,13 @@
       const isPending = Boolean(message.isPending);
       this.container.appendChild(createMessageElement(role, content, message.timestamp, thinkingTrace, messageId, isPending));
     }, this);
+    // Re-attach any viz payloads (KPI/chart/table) that were previously computed
+    // so they survive a full re-render (e.g. after sending a follow-up message).
+    messages.forEach(function (message) {
+      if (message && message.viz && message.id) {
+        try { mountVizExtras(message.id, message.viz); } catch (_) {}
+      }
+    });
     this.scrollToBottom();
   };
 
@@ -695,7 +752,6 @@
       !sendButton ||
       !statusElement ||
       !errorElement ||
-      !exportButton ||
       !pipelineButton ||
       !newChatButton ||
       !sessionListElement ||
@@ -748,6 +804,10 @@
       filteredSessions: [],
       projects: initialProjects,
       sessionQuery: "",
+      sessionsLimit: 20,
+      sessionsOffset: 0,
+      hasMoreSessions: true,
+      loadingHistory: false,
       projectSessionMap: getStoredProjectSessionMap(),
       activeProject: initialActiveProject,
       pendingDeleteProject: "",
@@ -1073,6 +1133,7 @@
     }
 
     function renderSessionGroups() {
+      const currentScrollTop = sessionListElement.scrollTop;
       sessionListElement.innerHTML = "";
       const groups = groupSessionsByDate(state.filteredSessions);
       const orderedKeys = ["Today", "Yesterday", "Previous 7 days"];
@@ -1131,6 +1192,9 @@
           sessionListElement.appendChild(row);
         });
       });
+
+      // Restore scroll position after recreating DOM to prevent jumping during infinite scroll
+      sessionListElement.scrollTop = currentScrollTop;
     }
 
     function applySessionFilter(query) {
@@ -1156,6 +1220,7 @@
       }
       const created = await SolarChatApi.createSession(sanitizeSessionTitle(titleHint));
       state.sessionId = created.session_id;
+      saveStoredLastSessionId(state.sessionId);
       state.projectSessionMap[state.sessionId] = state.activeProject;
       saveStoredProjectSessionMap(state.projectSessionMap);
       updateContext();
@@ -1163,9 +1228,25 @@
       return state.sessionId;
     }
 
-    async function refreshSessionList() {
-      const sessions = await SolarChatApi.listSessions();
-      state.sessions = sessions;
+    async function refreshSessionList(append = false) {
+      if (!append) {
+        state.sessionsOffset = 0;
+        state.hasMoreSessions = true;
+      }
+      if (!state.hasMoreSessions) return;
+
+      const newSessions = await SolarChatApi.listSessions(state.sessionsLimit, state.sessionsOffset);
+      if (newSessions.length < state.sessionsLimit) {
+        state.hasMoreSessions = false;
+      }
+
+      if (append) {
+        state.sessions = state.sessions.concat(newSessions);
+      } else {
+        state.sessions = newSessions;
+      }
+      state.sessionsOffset += newSessions.length;
+      
       ensureProjectSessionMap(state.sessions);
       applySessionFilter(state.sessionQuery);
     }
@@ -1174,14 +1255,26 @@
       const detail = await SolarChatApi.getSession(sessionId);
       const loadedMessages = (detail.messages || []).map(function (message) {
         return {
+          id: message.id || "",
           role: message.sender === "assistant" ? "assistant" : "user",
           content: message.content || "",
           timestamp: message.timestamp,
-          thinkingTrace: message.thinking_trace || null
+          thinkingTrace: message.thinking_trace || null,
+          viz: (message.data_table || message.chart || message.kpi_cards) ? {
+            data_table: message.data_table || null,
+            chart: message.chart || null,
+            kpi_cards: message.kpi_cards || null
+          } : null
         };
       });
       state.messages = withWelcomeMessage(loadedMessages);
       messageList.render(state.messages);
+      // Re-attach viz extras for any assistant messages that carry them.
+      loadedMessages.forEach(function (m) {
+        if (m.viz && m.id) {
+          try { mountVizExtras(m.id, m.viz); } catch (_) {}
+        }
+      });
       updateContext();
     }
 
@@ -1193,6 +1286,7 @@
         setError("");
         setLoading(true, "Loading selected conversation...");
         state.sessionId = sessionId;
+        saveStoredLastSessionId(sessionId);
 
         const mappedProject = getSessionProject(sessionId);
         if (mappedProject !== state.activeProject) {
@@ -1407,8 +1501,16 @@
         const sessionId = await ensureSession(text);
 
         await new Promise(function (resolve, reject) {
+          const toolSelection = (window.SolarToolPicker && window.SolarToolPicker.getSelection())
+            || { tool_mode: "auto", allowed_tools: null, tool_hints: [] };
           streamController = SolarChatApi.queryStream(
-            { message: text, session_id: sessionId },
+            {
+              message: text,
+              session_id: sessionId,
+              tool_mode: toolSelection.tool_mode || "auto",
+              allowed_tools: toolSelection.allowed_tools || null,
+              tool_hints: toolSelection.tool_hints || [],
+            },
             {
               onStatus: function (evt) {
                 setStatus(evt.text || "Processing");
@@ -1436,11 +1538,18 @@
                 if (taskTracker) taskTracker.setOpen(false); // Collapse when done
 
                 state.modelUsed = evt.model_used || state.modelUsed;
+                var vizPayload = (evt.data_table || evt.chart || evt.kpi_cards) ? {
+                  data_table: evt.data_table || null,
+                  chart: evt.chart || null,
+                  kpi_cards: evt.kpi_cards || null
+                } : null;
                 var assistantMessage = {
+                  id: pendingMessageId,
                   role: "assistant",
                   content: evt.answer || "",
                   timestamp: new Date().toISOString(),
-                  thinkingTrace: evt.thinking_trace || null
+                  thinkingTrace: evt.thinking_trace || null,
+                  viz: vizPayload
                 };
                 var pendingIndex = state.messages.findIndex(function (item) {
                   return item.id === pendingMessageId && item.isPending;
@@ -1474,6 +1583,16 @@
                   setError(evt.warning_message);
                 }
 
+                try {
+                  mountVizExtras(pendingMessageId, {
+                    data_table: evt.data_table || null,
+                    chart: evt.chart || null,
+                    kpi_cards: evt.kpi_cards || null
+                  });
+                } catch (vizErr) {
+                  if (window.console && console.warn) console.warn("viz mount failed", vizErr);
+                }
+
                 refreshSessionList().catch(function () {});
                 setStatus("Ready");
                 resolve();
@@ -1504,6 +1623,7 @@
 
     async function resetConversation() {
       state.sessionId = "";
+      saveStoredLastSessionId("");
       state.messages = [createWelcomeMessage()];
       state.modelUsed = "";
       messageList.render(state.messages);
@@ -1513,8 +1633,51 @@
       renderSessionGroups();
     }
 
-    exportButton.addEventListener("click", function () {
-      setStatus("Export is not implemented yet.");
+    if (exportButton) {
+      exportButton.addEventListener("click", function () {
+        setStatus("Export is not implemented yet.");
+      });
+    }
+
+    // Right-drawer history toggle
+    const historyToggle = document.getElementById("solar-chat-history-toggle");
+    const historyDrawer = document.getElementById("solar-chat-history-drawer");
+    const historyScrim = document.getElementById("solar-chat-drawer-scrim");
+    const historyClose = document.getElementById("solar-chat-drawer-close");
+    function openHistoryDrawer() {
+      if (!historyDrawer) return;
+      historyDrawer.hidden = false;
+      historyDrawer.classList.add("is-open");
+      if (historyScrim) { historyScrim.hidden = false; historyScrim.classList.add("is-visible"); }
+      if (historyToggle) historyToggle.setAttribute("aria-expanded", "true");
+    }
+    function closeHistoryDrawer() {
+      if (!historyDrawer) return;
+      historyDrawer.classList.remove("is-open");
+      if (historyScrim) historyScrim.classList.remove("is-visible");
+      if (historyToggle) historyToggle.setAttribute("aria-expanded", "false");
+      window.setTimeout(function () {
+        if (!historyDrawer.classList.contains("is-open")) {
+          historyDrawer.hidden = true;
+          if (historyScrim) historyScrim.hidden = true;
+        }
+      }, 260);
+    }
+    if (historyToggle) {
+      historyToggle.addEventListener("click", function () {
+        if (historyDrawer && historyDrawer.classList.contains("is-open")) {
+          closeHistoryDrawer();
+        } else {
+          openHistoryDrawer();
+        }
+      });
+    }
+    if (historyClose) historyClose.addEventListener("click", closeHistoryDrawer);
+    if (historyScrim) historyScrim.addEventListener("click", closeHistoryDrawer);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && historyDrawer && historyDrawer.classList.contains("is-open")) {
+        closeHistoryDrawer();
+      }
     });
 
     pipelineButton.addEventListener("click", async function () {
@@ -1737,12 +1900,50 @@
       });
     });
 
+    sessionListElement.addEventListener("scroll", async function () {
+      if (state.loadingHistory || !state.hasMoreSessions || state.sessionQuery) {
+        return;
+      }
+      
+      const distanceToBottom = sessionListElement.scrollHeight - sessionListElement.scrollTop - sessionListElement.clientHeight;
+      if (distanceToBottom <= 20) {
+        state.loadingHistory = true;
+        
+        // Add a visual loading spinner at the bottom
+        const spinnerRow = document.createElement("div");
+        spinnerRow.id = "session-list-spinner";
+        spinnerRow.style.padding = "15px";
+        spinnerRow.style.display = "flex";
+        spinnerRow.style.justifyContent = "center";
+        spinnerRow.innerHTML = '<span class="task-tracker-spinner" aria-hidden="true" style="width:16px;height:16px;opacity:0.7;"></span>';
+        sessionListElement.appendChild(spinnerRow);
+        
+        try {
+          await refreshSessionList(true);
+        } catch (error) {
+          // ignore scroll errors
+          if (spinnerRow.parentNode) {
+            spinnerRow.remove();
+          }
+        } finally {
+          state.loadingHistory = false;
+        }
+      }
+    });
+
     renderProjects();
     updateContext();
     setStatus("Loading conversations");
     refreshSessionList()
-      .then(function () {
-        setStatus("Online · Ready to assist");
+      .then(async function () {
+        // Restore last-used session if it still exists on the server.
+        const lastId = loadStoredLastSessionId();
+        if (lastId && state.sessions.some(function (s) { return s.session_id === lastId; })) {
+          try { await openSession(lastId); } catch (_) { saveStoredLastSessionId(""); }
+        } else {
+          if (lastId) saveStoredLastSessionId("");
+          setStatus("Online · Ready to assist");
+        }
       })
       .catch(function (error) {
         setStatus("Error");

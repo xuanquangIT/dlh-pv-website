@@ -6,9 +6,17 @@ TOOL_DECLARATIONS: list[dict] = [
             "ML model R-squared score, average data quality score, "
             "and total number of facilities/solar stations. "
             "Use this when the user asks about the overall system status, "
-            "general situation, or system-wide metrics."
+            "general situation, or system-wide metrics. If a timeframe is specified (e.g. 'today', 'last week'), pass timeframe_days."
         ),
-        "parameters": {"type": "object", "properties": {}},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "timeframe_days": {
+                    "type": "integer",
+                    "description": "Number of days to look back (default is 30). For example, 1 for 'today', 7 for 'last week'."
+                }
+            }
+        },
     },
     {
         "name": "get_energy_performance",
@@ -16,9 +24,17 @@ TOOL_DECLARATIONS: list[dict] = [
             "Retrieve solar energy performance: top producing facilities, "
             "peak hour energy production, and tomorrow's energy forecast (MWh). "
             "Use this when the user asks about performance, comparing stations, "
-            "peak hours, or short-term forecasts."
+            "peak hours, or short-term forecasts. If the user specifies a timeframe (e.g. 'last week'), pass the number of days."
         ),
-        "parameters": {"type": "object", "properties": {}},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "timeframe_days": {
+                    "type": "integer",
+                    "description": "Number of days to look back (default is 30). For example, 7 for 'tuần qua' or 'last week'."
+                }
+            }
+        },
     },
     {
         "name": "get_ml_model_info",
@@ -56,9 +72,17 @@ TOOL_DECLARATIONS: list[dict] = [
             "Retrieve data quality issues: facilities with the lowest quality scores, "
             "and possible causes (missing data, equipment failure, anomalies). "
             "Use this when the user asks about data quality, errors, "
-            "which facilities have issues, or abnormal AQI metrics."
+            "which facilities have issues, or abnormal AQI metrics. If a timeframe is specified, pass timeframe_days."
         ),
-        "parameters": {"type": "object", "properties": {}},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "timeframe_days": {
+                    "type": "integer",
+                    "description": "Number of days to look back (default is 30)."
+                }
+            }
+        },
     },
     {
         "name": "get_extreme_aqi",
@@ -312,6 +336,44 @@ TOOL_DECLARATIONS: list[dict] = [
             "required": ["query"],
         },
     },
+    {
+        "name": "query_gold_kpi",
+        "description": (
+            "Dynamically query Gold-layer KPI mart tables. "
+            "Use this when the user asks about specific KPIs such as AQI impact, "
+            "daily energy KPIs, forecast accuracy, system-wide KPIs, or weather impact. "
+            "The schema is dynamically discovered, so you must interpret whatever columns are returned."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "table_name": {
+                    "type": "string",
+                    "enum": [
+                        "aqi_impact",
+                        "energy",
+                        "forecast_accuracy",
+                        "system_kpi",
+                        "weather_impact",
+                    ],
+                    "description": "Short name of the KPI mart table.",
+                },
+                "anchor_date": {
+                    "type": "string",
+                    "description": "Optional date filter (YYYY-MM-DD).",
+                },
+                "station_name": {
+                    "type": "string",
+                    "description": "Optional station/facility filter.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of rows to return (default 30, max 100).",
+                },
+            },
+            "required": ["table_name"],
+        },
+    },
 ]
 
 TOOL_NAME_TO_TOPIC: dict[str, str] = {
@@ -328,5 +390,6 @@ TOOL_NAME_TO_TOPIC: dict[str, str] = {
     "get_station_hourly_report": "energy_performance",
     "get_facility_info": "facility_info",
     "search_documents": "general",
+    "query_gold_kpi": "energy_performance",
 }
 

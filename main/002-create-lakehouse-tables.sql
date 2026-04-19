@@ -76,8 +76,15 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     "timestamp" TIMESTAMPTZ DEFAULT now() NOT NULL,
     topic      VARCHAR(50),
     sources    JSONB,
-    thinking_trace JSONB   -- persisted ThinkingTrace: {summary, steps, trace_id}
+    thinking_trace JSONB,  -- persisted ThinkingTrace: {summary, steps, trace_id}
+    key_metrics    JSONB,  -- compact tool outputs used to rebuild viz (data_table/chart/kpi_cards) on fetch
+    viz_requested  BOOLEAN DEFAULT FALSE NOT NULL  -- whether user asked for a chart (gates chart rendering on hydrate)
 );
+
+-- Forward-compatible add for databases created before key_metrics/viz_requested existed.
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS key_metrics JSONB;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_requested BOOLEAN DEFAULT FALSE NOT NULL;
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_payload JSONB;  -- exact rendered viz snapshot (data_table/chart/kpi_cards) for faithful reload
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
     ON chat_messages (session_id);

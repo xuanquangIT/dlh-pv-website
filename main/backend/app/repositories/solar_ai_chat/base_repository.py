@@ -40,6 +40,11 @@ class BaseRepository:
         "gold.dim_facility",
         "gold.forecast_daily",
         "gold.model_monitoring_daily",
+        "gold.mart_aqi_impact_daily",
+        "gold.mart_energy_daily",
+        "gold.mart_forecast_accuracy_daily",
+        "gold.mart_system_kpi_daily",
+        "gold.mart_weather_impact_daily",
     })
     _ALLOWED_COLUMNS: frozenset[str] = frozenset({
         "aqi_value", "aqi_category",
@@ -172,6 +177,11 @@ class BaseRepository:
         timestamp_column = {
             "silver.weather": "weather_timestamp",
             "silver.air_quality": "aqi_timestamp",
+            "gold.mart_energy_daily": "energy_date",
+            "gold.mart_system_kpi_daily": "kpi_date",
+            "gold.mart_forecast_accuracy_daily": "forecast_date",
+            "gold.mart_weather_impact_daily": "weather_date",
+            "gold.mart_aqi_impact_daily": "aqi_date",
         }.get(table, "date_hour")
         try:
             rows = self._execute_query(
@@ -189,6 +199,8 @@ class BaseRepository:
         timestamp_column = {
             "silver.weather": "weather_timestamp",
             "silver.air_quality": "aqi_timestamp",
+            "gold.mart_system_kpi_daily": "created_at",
+            "gold.mart_energy_daily": "energy_date",
         }.get(table, "date_hour")
         try:
             rows = self._execute_query(

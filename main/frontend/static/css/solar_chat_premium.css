@@ -795,3 +795,888 @@ html[data-theme="dark"] .task-tracker-row.running .task-tracker-label {
 html[data-theme="dark"] .task-tracker-dur {
   color: #8ea0b8;
 }
+/* ========================================================================
+ * Solar AI Chat — Data Visualization (Feature Group D)
+ * KPI Cards, DataTable, Chart
+ * ======================================================================== */
+
+.solar-viz-extras {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* KPI cards */
+.kpi-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7a90;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.kpi-card {
+  background: linear-gradient(145deg, rgba(255,255,255,0.7), rgba(235,240,250,0.35));
+  border: 1px solid rgba(120, 140, 180, 0.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+  box-shadow: 0 1px 4px rgba(16, 24, 40, 0.04);
+  min-width: 0;
+}
+.kpi-label {
+  font-size: 11.5px;
+  color: #6b7a90;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpi-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1b2742;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.kpi-unit {
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7a90;
+}
+.kpi-trend {
+  font-size: 12px;
+  margin-left: auto;
+}
+.kpi-trend-up { color: #16a34a; }
+.kpi-trend-down { color: #dc2626; }
+.kpi-description {
+  font-size: 11px;
+  color: #8190aa;
+  margin-top: 4px;
+}
+
+html[data-theme="dark"] .kpi-card {
+  background: linear-gradient(145deg, rgba(42, 52, 74, 0.6), rgba(28, 36, 56, 0.4));
+  border-color: rgba(120, 140, 180, 0.22);
+}
+html[data-theme="dark"] .kpi-label,
+html[data-theme="dark"] .kpi-unit,
+html[data-theme="dark"] .kpi-description { color: #8ea0b8; }
+html[data-theme="dark"] .kpi-value { color: #eaf0fb; }
+
+/* Data table */
+.solar-data-table {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(120, 140, 180, 0.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.sdt-header .sdt-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #1b2742;
+}
+.sdt-header .sdt-desc {
+  font-size: 11.5px;
+  color: #6b7a90;
+  margin-top: 2px;
+}
+.sdt-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.sdt-filter {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  border: 1px solid rgba(120, 140, 180, 0.3);
+  border-radius: 8px;
+  font-size: 12px;
+  background: rgba(255,255,255,0.85);
+}
+.sdt-export {
+  padding: 6px 10px;
+  border: 1px solid rgba(120, 140, 180, 0.3);
+  border-radius: 8px;
+  background: rgba(245, 248, 255, 0.95);
+  cursor: pointer;
+  font-size: 12px;
+}
+.sdt-export:hover { background: rgba(230, 240, 255, 0.95); }
+.sdt-wrap {
+  overflow-x: auto;
+  max-height: 360px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(120, 140, 180, 0.12);
+}
+.sdt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.sdt-table th, .sdt-table td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(120, 140, 180, 0.1);
+  white-space: nowrap;
+}
+.sdt-table th {
+  background: rgba(240, 244, 252, 0.9);
+  font-weight: 600;
+  color: #3a465f;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.sdt-table th.sdt-sortable { cursor: pointer; user-select: none; }
+.sdt-table th.sdt-sortable:hover { background: rgba(225, 232, 248, 0.95); }
+.sdt-table tbody tr:nth-child(odd) td { background: rgba(248, 250, 255, 0.55); }
+.sdt-empty { text-align: center; color: #8190aa; padding: 18px; }
+.sdt-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #6b7a90;
+}
+.sdt-pager {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.sdt-pager button {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  border: 1px solid rgba(120, 140, 180, 0.3);
+  background: rgba(255,255,255,0.9);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sdt-pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+html[data-theme="dark"] .solar-data-table {
+  background: rgba(28, 36, 56, 0.5);
+  border-color: rgba(120, 140, 180, 0.22);
+}
+html[data-theme="dark"] .sdt-header .sdt-title { color: #eaf0fb; }
+html[data-theme="dark"] .sdt-header .sdt-desc,
+html[data-theme="dark"] .sdt-footer { color: #8ea0b8; }
+html[data-theme="dark"] .sdt-filter,
+html[data-theme="dark"] .sdt-export,
+html[data-theme="dark"] .sdt-pager button {
+  background: rgba(42, 52, 74, 0.6);
+  color: #eaf0fb;
+  border-color: rgba(120, 140, 180, 0.3);
+}
+html[data-theme="dark"] .sdt-table th {
+  background: rgba(38, 48, 70, 0.95);
+  color: #c4d1e8;
+}
+html[data-theme="dark"] .sdt-table td { color: #dbe4f6; }
+html[data-theme="dark"] .sdt-table tbody tr:nth-child(odd) td {
+  background: rgba(34, 44, 66, 0.55);
+}
+
+/* Chart */
+.solar-chart-wrap {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(120, 140, 180, 0.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.solar-chart-title { font-size: 13px; font-weight: 700; color: #1b2742; }
+.solar-chart-desc { font-size: 11.5px; color: #6b7a90; margin-top: 2px; }
+.solar-chart-plot { margin-top: 8px; width: 100%; }
+.solar-chart-fallback {
+  padding: 14px;
+  font-size: 12px;
+  color: #a25050;
+  background: rgba(255, 235, 235, 0.6);
+  border-radius: 8px;
+  text-align: center;
+}
+html[data-theme="dark"] .solar-chart-wrap {
+  background: rgba(28, 36, 56, 0.5);
+  border-color: rgba(120, 140, 180, 0.22);
+}
+html[data-theme="dark"] .solar-chart-title { color: #eaf0fb; }
+html[data-theme="dark"] .solar-chart-desc { color: #8ea0b8; }
+
+/* Viz extras layout — must span wider than the msg bubble */
+.msg-row.msg-row-has-viz,
+.msg-row-assistant:has(.solar-viz-extras) {
+  max-width: 94% !important;
+  width: 94%;
+}
+.solar-viz-extras {
+  width: 100%;
+  align-self: stretch;
+}
+.solar-viz-extras > * {
+  width: 100%;
+  box-sizing: border-box;
+}
+.solar-chart-plot {
+  min-height: 340px;
+  width: 100% !important;
+}
+.solar-chart-plot .main-svg {
+  width: 100% !important;
+}
+
+/* =====================================================================
+ * Solar AI Chat — ChatGPT/Claude-style redesign
+ * Goal: eliminate wasted space; center message column; full-height shell;
+ *       composer anchored at bottom; messages take full readable width.
+ * ===================================================================== */
+
+:root {
+  --chat-max-width: 860px;
+  --chat-sidebar-width: 260px;
+}
+
+/* Shell fills the viewport below the sticky header */
+.solar-chat-shell {
+  height: calc(100vh - 90px) !important;
+  min-height: 480px !important;
+  max-height: none !important;
+  border-radius: 14px;
+}
+@media (max-width: 900px) {
+  .solar-chat-shell { height: calc(100vh - 110px) !important; }
+}
+
+.solar-chat-layout {
+  grid-template-columns: var(--chat-sidebar-width) 1fr !important;
+}
+body.panels-hidden .solar-chat-layout {
+  grid-template-columns: 0 1fr !important;
+}
+
+/* Sidebar — slimmer, quieter */
+.solar-chat-conversations {
+  padding: 10px 8px !important;
+  background: #f7f8fa !important;
+}
+html[data-theme="dark"] .solar-chat-conversations {
+  background: #171a21 !important;
+}
+.solar-chat-conv-new {
+  font-size: 14px !important;
+  padding: 9px 12px !important;
+  border-radius: 10px !important;
+}
+.solar-chat-conv-search-wrap {
+  height: 34px !important;
+  border-radius: 9px !important;
+}
+.solar-chat-conv-search { font-size: 13px !important; }
+.solar-chat-conv-item { padding: 8px 10px !important; font-size: 12.5px !important; }
+.solar-chat-conv-group-title { margin: 10px 4px 6px !important; }
+
+/* Main column — no header card, just scroll + composer */
+.solar-chat-main {
+  background: #ffffff;
+  position: relative;
+  display: flex !important;
+  flex-direction: column !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+}
+html[data-theme="dark"] .solar-chat-main { background: #0f1218; }
+
+/* Compact the top header row */
+.solar-chat-shell-header {
+  padding: 10px 20px !important;
+  background: transparent !important;
+  border-bottom: 1px solid rgba(0,0,0,0.06) !important;
+}
+.solar-chat-avatar { width: 34px !important; height: 34px !important; font-size: 12px !important; }
+.solar-chat-assistant-name { font-size: 14px !important; }
+.solar-chat-assistant-status { font-size: 10.5px !important; margin-top: 2px; }
+
+/* Messages — centered column, ChatGPT-like width */
+.solar-chat-messages {
+  padding: 24px 20px 16px 20px !important;
+  gap: 22px !important;
+  background: transparent !important;
+  border-bottom: none !important;
+}
+.solar-chat-messages > * {
+  width: 100%;
+  max-width: var(--chat-max-width);
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* Assistant messages = no bubble, full-width plain text (Claude/ChatGPT) */
+.msg-row {
+  max-width: var(--chat-max-width) !important;
+  width: 100% !important;
+}
+.msg-row-user {
+  align-items: flex-end !important;
+}
+.msg-row-assistant {
+  align-items: stretch !important;
+}
+.msg-row-assistant .msg.msg-bot {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  max-width: 100% !important;
+  width: 100% !important;
+  box-shadow: none !important;
+  font-size: 14.5px !important;
+  line-height: 1.7 !important;
+  color: #1d2433;
+}
+html[data-theme="dark"] .msg-row-assistant .msg.msg-bot {
+  color: #e7ecf5;
+}
+.msg-row-assistant .msg.msg-bot:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* User messages = right-aligned green pill */
+.msg-row-user .msg.msg-user {
+  background: linear-gradient(135deg, #e9f6ee, #dff1e6) !important;
+  border: 1px solid rgba(46, 175, 111, 0.25) !important;
+  border-radius: 18px !important;
+  padding: 10px 16px !important;
+  font-size: 14px !important;
+  line-height: 1.55 !important;
+  max-width: 75% !important;
+  width: fit-content !important;
+  color: #143822;
+}
+html[data-theme="dark"] .msg-row-user .msg.msg-user {
+  background: linear-gradient(135deg, rgba(50, 140, 90, 0.35), rgba(40, 110, 72, 0.25)) !important;
+  border-color: rgba(90, 200, 140, 0.25) !important;
+  color: #e7ecf5 !important;
+}
+
+/* Time stamps — smaller, muted */
+.msg-time {
+  font-size: 10.5px !important;
+  opacity: 0.55;
+  padding: 0 2px !important;
+}
+.msg-row-assistant .msg-time { text-align: left; }
+
+/* Starter chip row — center, wrap multi-line like brick tiles */
+.solar-chat-chip-row {
+  width: 100% !important;
+  max-width: var(--chat-max-width) !important;
+  margin: 0 auto 6px !important;
+  padding: 8px 20px !important;
+  background: transparent !important;
+  border: none !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  display: flex !important;
+  flex-wrap: wrap !important;
+  justify-content: center !important;
+  gap: 8px 10px !important;
+  overflow: visible !important;
+  overflow-x: visible !important;
+}
+.solar-chat-chip {
+  white-space: normal !important;
+  flex: 0 0 auto;
+  max-width: 260px;
+  text-align: center;
+}
+
+/* Composer = the bottom input row; full-width, center pill */
+.solar-chat-input-wrap {
+  width: 100% !important;
+  max-width: calc(var(--chat-max-width) + 40px) !important;
+  margin: 0 auto !important;
+  padding: 10px 20px 16px !important;
+  background: transparent !important;
+  border-top: none !important;
+  border-radius: 0 !important;
+  display: flex !important;
+  gap: 10px !important;
+  align-items: stretch !important;
+  box-sizing: border-box !important;
+}
+
+.solar-chat-input-wrap > .solar-chat-input {
+  flex: 1 1 0 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  border: 1px solid rgba(0,0,0,0.12) !important;
+  background: #ffffff !important;
+  border-radius: 20px !important;
+  padding: 12px 18px !important;
+  font-size: 14.5px !important;
+  line-height: 1.5 !important;
+  min-height: 48px !important;
+  max-height: 180px !important;
+  resize: none !important;
+  box-shadow: 0 4px 16px rgba(16, 24, 40, 0.06) !important;
+  outline: none !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+.solar-chat-input-wrap > .solar-chat-input:focus {
+  border-color: rgba(46, 175, 111, 0.55) !important;
+  box-shadow: 0 6px 20px rgba(46, 175, 111, 0.18) !important;
+}
+html[data-theme="dark"] .solar-chat-input-wrap > .solar-chat-input {
+  background: #1b2030 !important;
+  color: #e7ecf5 !important;
+  border-color: rgba(255,255,255,0.12) !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4) !important;
+}
+
+.solar-chat-input-wrap > .solar-chat-send {
+  flex: 0 0 auto !important;
+  border-radius: 16px !important;
+  padding: 0 20px !important;
+  font-size: 13.5px !important;
+  height: 48px !important;
+  min-width: 84px !important;
+}
+
+/* Thinking trace accordion — tighter for the unbubbled layout */
+.msg-row-assistant .msg-thinking-wrapper {
+  margin-bottom: 4px;
+}
+.msg-thinking {
+  background: rgba(243, 246, 251, 0.7) !important;
+  border-radius: 10px !important;
+  padding: 4px 10px !important;
+  font-size: 12px !important;
+}
+
+/* Viz extras — now free to span full message column */
+.msg-row.msg-row-has-viz,
+.msg-row-assistant:has(.solar-viz-extras) {
+  max-width: var(--chat-max-width) !important;
+  width: 100% !important;
+}
+.solar-viz-extras { margin-top: 14px !important; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  :root { --chat-sidebar-width: 0px; }
+  .solar-chat-layout { grid-template-columns: 0 1fr !important; }
+  .solar-chat-conversations { display: none; }
+  .solar-chat-messages { padding: 16px 14px !important; }
+  .msg-row-user .msg.msg-user { max-width: 90% !important; }
+}
+
+/* =====================================================================
+ * Solar AI Chat — Drawer redesign (no card shell, history as right drawer)
+ * ===================================================================== */
+
+.solar-chat-shell.solar-chat-shell--flat {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  height: calc(100vh - 70px) !important;
+  min-height: 520px !important;
+  margin-top: -10px;
+}
+
+.solar-chat-shell--flat .solar-chat-layout {
+  grid-template-columns: 1fr !important;
+  position: relative;
+  height: 100%;
+}
+.solar-chat-shell--flat .solar-chat-main {
+  grid-column: 1 / -1;
+}
+
+/* Hide default conv sidebar — history is a drawer now */
+.solar-chat-shell--flat .solar-chat-conversations { display: none !important; }
+
+/* Top toolbar with icon buttons */
+.solar-chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+  background: transparent;
+}
+.solar-chat-toolbar-spacer { flex: 1; }
+.solar-chat-status-inline {
+  font-family: "DM Mono", monospace;
+  font-size: 10.5px;
+  color: var(--green);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.solar-chat-status-inline::before {
+  content: "";
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--green);
+}
+.solar-chat-toolbar .solar-chat-counter {
+  font-family: "DM Mono", monospace;
+  font-size: 10.5px;
+  color: var(--txt3);
+}
+
+.solar-chat-icon-btn {
+  width: 36px; height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.08);
+  background: #ffffff;
+  color: #3a465f;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.solar-chat-icon-btn:hover {
+  background: #f4faf6;
+  color: var(--green);
+  border-color: rgba(46, 175, 111, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(26, 138, 90, 0.15);
+}
+.solar-chat-icon-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: #1b2742;
+  color: #fff;
+  font-size: 11px;
+  font-family: "Inter", sans-serif;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 40;
+}
+.solar-chat-icon-btn:hover[data-tooltip]::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+html[data-theme="dark"] .solar-chat-icon-btn {
+  background: #1b2030;
+  color: #c4d1e8;
+  border-color: rgba(255,255,255,0.1);
+}
+html[data-theme="dark"] .solar-chat-icon-btn:hover {
+  background: #263048;
+  color: #7be6b3;
+}
+
+/* Right-side sliding drawer */
+.solar-chat-history-drawer {
+  position: fixed !important;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  max-width: 90vw;
+  background: #ffffff;
+  border-left: 1px solid rgba(0,0,0,0.08);
+  box-shadow: -12px 0 32px rgba(16, 24, 40, 0.12);
+  display: flex !important;
+  flex-direction: column;
+  padding: 14px 12px 12px;
+  gap: 10px;
+  z-index: 60;
+  transform: translateX(100%);
+  transition: transform 0.26s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.solar-chat-history-drawer.is-open { transform: translateX(0); }
+html[data-theme="dark"] .solar-chat-history-drawer {
+  background: #141924;
+  border-left-color: rgba(255,255,255,0.08);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.5);
+}
+.solar-chat-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 6px;
+}
+.solar-chat-drawer-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1b2742;
+}
+html[data-theme="dark"] .solar-chat-drawer-title { color: #eaf0fb; }
+
+.solar-chat-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.35);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  z-index: 55;
+  pointer-events: none;
+}
+.solar-chat-drawer-scrim.is-visible { opacity: 1; pointer-events: auto; }
+
+/* Drawer panel inner content reuses existing list styles but tightened */
+.solar-chat-history-drawer .solar-chat-conv-groups { flex: 1; min-height: 0; overflow-y: auto; }
+.solar-chat-history-drawer .solar-chat-conv-search-wrap { height: 34px; }
+.solar-chat-history-drawer .solar-chat-projects-wrap { margin-top: 8px; border-top: 1px solid rgba(0,0,0,0.06); padding-top: 10px; }
+
+/* =====================================================================
+ * Solar AI Chat — Tool Picker (inside composer)
+ * ===================================================================== */
+.stp-root {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: stretch;
+  align-items: center;
+}
+
+.stp-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  margin: 4px 0;
+  padding: 0 12px 0 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #f5faf7;
+  color: #1b5c3a;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: "Inter", sans-serif;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+  max-width: 200px;
+  white-space: nowrap;
+}
+.stp-button:hover {
+  background: #e9f6ee;
+  border-color: rgba(46, 175, 111, 0.4);
+}
+.stp-button:active { transform: scale(0.98); }
+.stp-button[data-tool-preset="none"] {
+  background: #fff6ec;
+  color: #a05a00;
+  border-color: rgba(200, 110, 0, 0.25);
+}
+.stp-button[data-tool-preset="none"]:hover { background: #ffeed9; }
+.stp-icon { display: inline-flex; }
+.stp-caret { font-size: 10px; opacity: 0.65; }
+.stp-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+
+html[data-theme="dark"] .stp-button {
+  background: rgba(46, 175, 111, 0.12);
+  color: #9ee3bd;
+  border-color: rgba(90, 200, 140, 0.28);
+}
+html[data-theme="dark"] .stp-button:hover { background: rgba(46, 175, 111, 0.22); }
+html[data-theme="dark"] .stp-button[data-tool-preset="none"] {
+  background: rgba(200, 110, 0, 0.14);
+  color: #ffc27a;
+  border-color: rgba(200, 110, 0, 0.35);
+}
+
+/* Dropdown menu */
+.stp-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 280px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  box-shadow: 0 14px 40px rgba(16, 24, 40, 0.18);
+  padding: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 65;
+}
+.stp-menu.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+.stp-menu-head {
+  font-size: 11px;
+  color: #6b7a90;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 10px 6px;
+  font-family: "DM Mono", monospace;
+}
+.stp-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  color: #1b2742;
+  transition: background 0.12s ease;
+}
+.stp-item:hover { background: #f3f6fb; }
+.stp-item.is-active { background: #eaf6f0; }
+.stp-item-icon {
+  flex: 0 0 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+  color: #2eaf6f;
+}
+.stp-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.stp-item-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.stp-item-desc {
+  font-size: 11.5px;
+  color: #6b7a90;
+  line-height: 1.35;
+}
+.stp-check {
+  color: #2eaf6f;
+  font-weight: 700;
+  font-size: 13px;
+  align-self: center;
+}
+
+html[data-theme="dark"] .stp-menu {
+  background: #1b2030;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+html[data-theme="dark"] .stp-menu-head { color: #8ea0b8; }
+html[data-theme="dark"] .stp-item { color: #e7ecf5; }
+html[data-theme="dark"] .stp-item:hover { background: rgba(255, 255, 255, 0.05); }
+html[data-theme="dark"] .stp-item.is-active { background: rgba(46, 175, 111, 0.16); }
+html[data-theme="dark"] .stp-item-desc { color: #8ea0b8; }
+
+/* Tweak composer to fit the picker on small screens */
+@media (max-width: 640px) {
+  .stp-button .stp-label { display: none; }
+  .stp-button { padding: 0 10px; }
+}
+
+/* =====================================================================
+ * Tool picker — inline toggle pills above the composer
+ * ===================================================================== */
+.stp-toolbar {
+  width: 100%;
+  max-width: calc(var(--chat-max-width) + 40px);
+  margin: 0 auto 2px;
+  padding: 4px 24px 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+}
+
+.stp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #ffffff;
+  color: #3a465f;
+  font-size: 12px;
+  font-family: "Inter", sans-serif;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  line-height: 1;
+}
+.stp-pill:hover {
+  background: #f2f7f4;
+  color: var(--green);
+  border-color: rgba(46, 175, 111, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(26, 138, 90, 0.1);
+}
+.stp-pill.is-active {
+  background: linear-gradient(135deg, rgba(46, 175, 111, 0.14), rgba(46, 175, 111, 0.08));
+  color: var(--green);
+  border-color: rgba(46, 175, 111, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(46, 175, 111, 0.25);
+}
+.stp-pill.is-active::before {
+  content: "✓";
+  font-size: 11px;
+  font-weight: 700;
+  margin-right: 1px;
+}
+.stp-pill-icon { display: inline-flex; align-items: center; }
+.stp-pill-label { white-space: nowrap; }
+
+.stp-hint-text {
+  font-family: "DM Mono", monospace;
+  font-size: 10.5px;
+  color: var(--txt3);
+  margin-left: auto;
+  opacity: 0.8;
+}
+
+html[data-theme="dark"] .stp-pill {
+  background: #1b2030;
+  color: #c4d1e8;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+html[data-theme="dark"] .stp-pill:hover {
+  background: #263048;
+  color: #7be6b3;
+  border-color: rgba(90, 200, 140, 0.4);
+}
+html[data-theme="dark"] .stp-pill.is-active {
+  background: linear-gradient(135deg, rgba(90, 200, 140, 0.2), rgba(90, 200, 140, 0.1));
+  color: #7be6b3;
+  border-color: rgba(90, 200, 140, 0.55);
+}
+
+@media (max-width: 640px) {
+  .stp-toolbar { padding: 4px 14px 2px; }
+  .stp-hint-text { display: none; }
+}

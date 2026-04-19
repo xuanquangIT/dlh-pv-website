@@ -73,6 +73,9 @@ class ChatMessage(Base):
     topic = Column(String(50), nullable=True)
     sources = Column(JSON, nullable=True)
     thinking_trace = Column(JSON, nullable=True)  # ← persisted ThinkingTrace dict
+    key_metrics = Column(JSON, nullable=True)  # ← compact tool outputs, used to rebuild viz on hydrate (legacy fallback)
+    viz_requested = Column(Boolean, nullable=False, default=False, server_default="false")
+    viz_payload = Column(JSON, nullable=True)  # ← exact viz snapshot (data_table/chart/kpi_cards) for faithful reload
 
     session = relationship("ChatSession", back_populates="messages")
 
@@ -83,3 +86,31 @@ def get_db() -> Generator:
         yield db
     finally:
         db.close()
+
+
+def _apply_runtime_migrations() -> None:
+    """Idempotent forward-compatible column adds for pre-existing databases.
+
+    Keeps Solar AI Chat working when the operator hasn't re-run
+    ``002-create-lakehouse-tables.sql`` after pulling new columns. Safe to
+    call multiple times — the SQL uses IF NOT EXISTS.
+    """
+    from sqlalchemy import text
+    statements = (
+        "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS key_metrics JSONB",
+        "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_requested BOOLEAN DEFAULT FALSE NOT NULL",
+        "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_payload JSONB",
+    )
+    try:
+        with engine.begin() as conn:
+            for stmt in statements:
+                try:
+                    conn.execute(text(stmt))
+                except Exception:
+                    # Best-effort — not Postgres, or permissions denied. Don't block startup.
+                    pass
+    except Exception:
+        pass
+
+
+_apply_runtime_migrations()

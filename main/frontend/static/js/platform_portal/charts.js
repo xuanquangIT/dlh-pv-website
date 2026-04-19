@@ -90,23 +90,6 @@
     });
   }
 
-  function initAnalyticsChart() {
-    const canvas = document.getElementById("analyticsChart");
-    if (!canvas || typeof Chart === "undefined") return;
-    new Chart(canvas, {
-      type: "bar",
-      data: {
-        labels: ["Jan 6", "Jan 7", "Jan 8"],
-        datasets: [
-          { label: "RSA", data: [1312, 1198, 1240], backgroundColor: "rgba(244,185,66,.8)" },
-          { label: "MVB", data: [1042, 994, 1018], backgroundColor: "rgba(27,108,168,.8)" },
-          { label: "DPC", data: [902, 861, 882], backgroundColor: "rgba(26,138,90,.8)" }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
-    });
-  }
-
   function initCompareChart() {
     const canvas = document.getElementById("compareChart");
     if (!canvas || typeof Chart === "undefined") return;
@@ -141,9 +124,7 @@
       case "dashboard":
         initDashboardCharts();
         break;
-      case "analytics":
-        initAnalyticsChart();
-        break;
+
       default:
         break;
     }
