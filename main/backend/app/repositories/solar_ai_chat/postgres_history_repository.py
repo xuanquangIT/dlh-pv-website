@@ -124,10 +124,10 @@ class PostgresChatHistoryRepository:
             message_count=0,
         )
 
-    def list_sessions(self, owner_user_id: str) -> list[ChatSessionSummary]:
+    def list_sessions(self, owner_user_id: str, limit: int = 50, offset: int = 0) -> list[ChatSessionSummary]:
         owner_uuid = self._to_uuid(owner_user_id)
         with SessionLocal() as db:
-            rows = (
+            query = (
                 db.query(
                     ChatSessionModel,
                     func.count(ChatMessageModel.id).label("message_count"),
@@ -139,8 +139,12 @@ class PostgresChatHistoryRepository:
                 .filter(ChatSessionModel.owner_user_id == owner_uuid)
                 .group_by(ChatSessionModel.session_id)
                 .order_by(ChatSessionModel.updated_at.desc())
-                .all()
             )
+            if limit:
+                query = query.limit(limit)
+            if offset:
+                query = query.offset(offset)
+            rows = query.all()
             results: list[ChatSessionSummary] = []
             for session, message_count in rows:
                 results.append(

@@ -531,7 +531,14 @@ class SolarAIChatService:
                 ))
                 return
 
-            messages = build_agentic_messages(request.message, language, history_messages)
+            try:
+                latest_mart_date = self._repo._resolve_latest_date("gold.mart_energy_daily")
+                today_str = latest_mart_date.isoformat()
+            except Exception:
+                latest_mart_date = None
+                today_str = None
+                
+            messages = build_agentic_messages(request.message, language, history_messages, today_str=today_str)
             all_sources: list[dict[str, str]] = []
             all_metrics: dict[str, Any] = {}
             topic = ChatTopic.GENERAL
@@ -540,8 +547,8 @@ class SolarAIChatService:
             model_used = "llm-agentic"
             fallback_used = False
             locked_topic: ChatTopic | None = None
-            user_query_date = extract_query_date(request.message)
-
+            user_query_date = extract_query_date(request.message, base_date=latest_mart_date)
+            
             # ----------------------------------------------------------
             # Deep planner (stream path): structured plan with all tools
             # needed for compound/multi-intent prompts.  Each planned tool
@@ -1142,7 +1149,14 @@ class SolarAIChatService:
                 ),
             )
 
-        messages = build_agentic_messages(request.message, language, history_messages)
+        try:
+            latest_mart_date = self._repo._resolve_latest_date("gold.mart_energy_daily")
+            today_str = latest_mart_date.isoformat()
+        except Exception:
+            latest_mart_date = None
+            today_str = None
+            
+        messages = build_agentic_messages(request.message, language, history_messages, today_str=today_str)
         all_sources: list[dict[str, str]] = []
         all_metrics: dict[str, Any] = {}
         topic = ChatTopic.GENERAL
@@ -1298,7 +1312,7 @@ class SolarAIChatService:
         # get_energy_performance don't accept date parameters, so their
         # results would be irrelevant.  Instead, directly pre-fetch
         # get_station_daily_report with the extracted anchor_date.
-        user_query_date = extract_query_date(request.message)
+        user_query_date = extract_query_date(request.message, base_date=latest_mart_date)
 
         if planner_used:
             # Planner has already satisfied retrieval — fall through to the

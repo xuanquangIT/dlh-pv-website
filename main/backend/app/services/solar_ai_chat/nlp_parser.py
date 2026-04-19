@@ -281,10 +281,10 @@ def extract_specific_hour(normalized_message: str) -> int | None:
     return None
 
 
-def extract_query_date(message: str) -> date | None:
+def extract_query_date(message: str, base_date: date | None = None) -> date | None:
     normalized = normalize_vietnamese_text(message)
     # Relative-day keywords (Vietnamese + English). Ordered longest-first.
-    today = date.today()
+    today = base_date if base_date is not None else date.today()
     if any(kw in normalized for kw in ("hom nay", "ngay nay", "today")):
         return today
     if any(kw in normalized for kw in ("hom qua", "yesterday")):

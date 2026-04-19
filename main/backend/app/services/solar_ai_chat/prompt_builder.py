@@ -161,6 +161,7 @@ def build_agentic_messages(
     request_message: str,
     language: str = "en",
     history: list[ChatMessage] | None = None,
+    today_str: str | None = None,
 ) -> list[dict[str, object]]:
     """Build message list for the native agentic tool-calling loop.
 
@@ -170,7 +171,8 @@ def build_agentic_messages(
     for OpenAI and Anthropic the system role is natively supported.
     """
     # Inject today's date so the LLM can distinguish past vs future dates.
-    today_str = date.today().isoformat()
+    if not today_str:
+        today_str = date.today().isoformat()
     system_text = (
         f"Today's date: {today_str}\n\n"
         + _LAKEHOUSE_ARCHITECTURE_CONTEXT

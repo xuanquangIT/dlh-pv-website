@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.dependencies import require_role
 from app.db.database import AuthUser
 from app.core.settings import get_solar_chat_settings
-from app.repositories.solar_ai_chat.databricks_history_repository import DatabricksChatHistoryRepository
 from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
@@ -52,11 +51,8 @@ def _resolve_user_chat_role(current_user: AuthUser) -> ChatRole:
 # ------------------------------------------------------------------
 
 @lru_cache(maxsize=1)
-def _get_history_repository() -> DatabricksChatHistoryRepository | PostgresChatHistoryRepository:
-    settings = get_solar_chat_settings()
-    if settings.history_backend.strip().lower() == "postgres":
-        return PostgresChatHistoryRepository()
-    return DatabricksChatHistoryRepository(settings=settings)
+def _get_history_repository() -> PostgresChatHistoryRepository:
+    return PostgresChatHistoryRepository()
 
 
 @lru_cache(maxsize=1)
@@ -147,7 +143,7 @@ def query_solar_ai_chat(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     service: SolarAIChatService = Depends(get_solar_ai_chat_service),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> SolarChatResponse:
     effective_role = _resolve_user_chat_role(current_user)
     if request.session_id:
@@ -190,7 +186,7 @@ def benchmark_solar_ai_chat_query(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
     service: SolarAIChatService = Depends(get_solar_ai_chat_service),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> dict[str, object]:
     endpoint_started = time.perf_counter()
     effective_role = _resolve_user_chat_role(current_user)
@@ -303,7 +299,7 @@ def benchmark_solar_ai_chat_model_only(
 def create_session(
     request: CreateSessionRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     effective_role = _resolve_user_chat_role(current_user)
     return history.create_session(
@@ -315,17 +311,19 @@ def create_session(
 
 @router.get("/sessions", response_model=list[ChatSessionSummary])
 def list_sessions(
+    limit: int = 50,
+    offset: int = 0,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> list[ChatSessionSummary]:
-    return history.list_sessions(owner_user_id=str(current_user.id))
+    return history.list_sessions(owner_user_id=str(current_user.id), limit=limit, offset=offset)
 
 
 @router.get("/sessions/{session_id}", response_model=ChatSessionDetail)
 def get_session(
     session_id: str,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionDetail:
     session = history.get_session(session_id=session_id, owner_user_id=str(current_user.id))
     if session is None:
@@ -337,7 +335,7 @@ def get_session(
 def delete_session(
     session_id: str,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> None:
     if not history.delete_session(session_id=session_id, owner_user_id=str(current_user.id)):
         raise HTTPException(status_code=404, detail="Session not found.")
@@ -348,7 +346,7 @@ def update_session_title(
     session_id: str,
     request: UpdateSessionTitleRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     updated = history.update_session_title(
         session_id=session_id,
@@ -365,7 +363,7 @@ def rename_session(
     session_id: str,
     request: UpdateSessionTitleRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     updated = history.update_session_title(
         session_id=session_id,
@@ -386,7 +384,7 @@ def fork_session(
     session_id: str,
     request: ForkSessionRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    history: DatabricksChatHistoryRepository | PostgresChatHistoryRepository = Depends(_get_history_repository),
+    history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> ChatSessionSummary:
     effective_role = _resolve_user_chat_role(current_user)
     result = history.fork_session(

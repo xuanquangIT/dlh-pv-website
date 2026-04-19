@@ -55,52 +55,43 @@ class TopicRepository(BaseRepository):
         )
 
     def _system_overview_databricks(self, lookback_days: int) -> dict[str, Any]:
-        """Fetch high-level system overall KPI from the dedicated Gold mart."""
-        
-        # If the user asks for exact "today" (lookback_days=0), we query today.
-        # Otherwise, for rolling windows (e.g. 30 days), we exclude the partial "current_date()" 
-        # to ensure the totals precisely match verified dashboards.
-        where_clause = f"kpi_date = current_date()"
-        if lookback_days > 0:
-            where_clause = (
-                f"kpi_date >= current_date() - INTERVAL {lookback_days} DAYS "
-                f"AND kpi_date < current_date()"
-            )
-            
-        agg = self._execute_query(
+        """Fetch high-level system overall KPI from the dedicated Gold mart (single latest row)."""
+        row = self._execute_query(
             "SELECT "
-            "  SUM(total_energy_mwh) AS total_mwh,"
-            "  AVG(champion_r2) AS avg_r2,"
-            "  AVG(data_completeness_pct) AS avg_quality,"
-            "  MAX(total_facility_count) AS facility_count,"
-            "  MAX(created_at) AS latest_timestamp "
+            "  total_energy_mwh,"
+            "  champion_r2,"
+            "  data_completeness_pct,"
+            "  active_facility_count,"
+            "  total_facility_count,"
+            "  avg_capacity_factor_pct,"
+            "  created_at "
             "FROM gold.mart_system_kpi_daily "
-            f"WHERE {where_clause}"
+            "ORDER BY kpi_date DESC LIMIT 1"
         )
         
-        total_mwh = 0.0
-        r_squared = 0.0
-        avg_quality = 0.0
-        facility_count = 0
-        latest_data_ts = None
+        if not row:
+            return {
+                "production_output_mwh": 0.0,
+                "r_squared": None,
+                "data_quality_score": 0.0,
+                "facility_count": 0,
+                "active_facility_count": 0,
+                "avg_capacity_factor_pct": 0.0,
+                "window_days": lookback_days,
+                "latest_data_timestamp": None,
+            }
+            
+        r = row[0]
         
-        if agg and agg[0].get("total_mwh") is not None:
-            row = agg[0]
-            total_mwh = float(row["total_mwh"] or 0.0)
-            r_squared = float(row["avg_r2"] or 0.0)
-            avg_quality = float(row["avg_quality"] or 0.0)
-            facility_count = int(row["facility_count"] or 0)
-            
-            # The timestamp from max(created_at). Fallback to standard resolve if None.
-            latest_data_ts = self._resolve_latest_datetime("gold.mart_system_kpi_daily")
-            
         return {
-            "production_output_mwh": round(total_mwh, 2),
-            "r_squared": round(r_squared, 4),
-            "data_quality_score": round(avg_quality, 2),
-            "facility_count": facility_count,
+            "production_output_mwh": round(float(r.get("total_energy_mwh") or 0.0), 2),
+            "r_squared": round(float(r["champion_r2"]), 4) if r.get("champion_r2") is not None else None,
+            "data_quality_score": round(float(r.get("data_completeness_pct") or 0.0), 2),
+            "facility_count": int(r.get("total_facility_count") or 0),
+            "active_facility_count": int(r.get("active_facility_count") or 0),
+            "avg_capacity_factor_pct": round(float(r.get("avg_capacity_factor_pct") or 0.0), 2),
             "window_days": lookback_days,
-            "latest_data_timestamp": latest_data_ts,
+            "latest_data_timestamp": self._resolve_latest_datetime("gold.mart_system_kpi_daily"),
         }
 
     def _system_overview_csv(self, lookback_days: int) -> dict[str, Any]:
@@ -146,30 +137,30 @@ class TopicRepository(BaseRepository):
         )
 
     def _energy_performance_databricks(self, lookback_days: int) -> dict[str, Any]:
+        anchor_date = self._resolve_latest_date("gold.mart_energy_daily")
+        anchor_str = anchor_date.isoformat()
+        
         # Fetch all facilities (no LIMIT) so we can derive both top-N and bottom-N.
-        # Include capacity_mw and capacity_factor_pct for richer per-facility context.
         all_fac_rows = self._execute_query(
-            "SELECT COALESCE(d.facility_name, f.facility_id) AS facility,"
-            "       SUM(f.energy_mwh) AS total_mwh,"
-            "       AVG(f.capacity_factor_pct) AS capacity_factor_pct,"
-            "       MAX(d.total_capacity_mw) AS capacity_mw"
-            " FROM gold.fact_energy f"
-            " LEFT JOIN gold.dim_facility d"
-            "   ON f.facility_id = d.facility_id AND d.is_current = true"
-            f" WHERE f.date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
-            " GROUP BY COALESCE(d.facility_name, f.facility_id)"
+            "SELECT facility_id, facility_name,"
+            "       SUM(energy_mwh_daily) AS total_mwh,"
+            "       AVG(avg_capacity_factor_pct) AS capacity_factor_pct"
+            " FROM gold.mart_energy_daily"
+            f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
+            f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
+            " GROUP BY facility_id, facility_name"
             " ORDER BY total_mwh DESC"
         )
 
         def _to_facility_dict(r: dict[str, Any]) -> dict[str, Any]:
+            name = str(r.get("facility_name") or r.get("facility_id") or "Unknown")
             entry: dict[str, Any] = {
-                "facility": r["facility"],
+                "facility_id": r["facility_id"],
+                "facility": name,
                 "energy_mwh": round(float(r["total_mwh"]), 2),
             }
             if r.get("capacity_factor_pct") is not None:
                 entry["capacity_factor_pct"] = round(float(r["capacity_factor_pct"]), 2)
-            if r.get("capacity_mw") is not None:
-                entry["capacity_mw"] = round(float(r["capacity_mw"]), 2)
             return entry
 
         all_facilities = [_to_facility_dict(r) for r in all_fac_rows]
@@ -191,14 +182,13 @@ class TopicRepository(BaseRepository):
             " ORDER BY total_mwh DESC LIMIT 3"
         )
         top_performance_ratio = self._safe_execute_query(
-            "SELECT COALESCE(d.facility_name, f.facility_id) AS facility,"
-            "       AVG(f.capacity_factor_pct) AS performance_ratio_pct"
-            " FROM gold.fact_energy f"
-            " LEFT JOIN gold.dim_facility d"
-            "   ON f.facility_id = d.facility_id AND d.is_current = true"
-            f" WHERE f.date_hour >= current_date() - INTERVAL {lookback_days} DAYS"
-            "   AND f.capacity_factor_pct IS NOT NULL"
-            " GROUP BY COALESCE(d.facility_name, f.facility_id)"
+            "SELECT facility_id, facility_name AS facility,"
+            "       AVG(avg_capacity_factor_pct) AS performance_ratio_pct"
+            " FROM gold.mart_energy_daily"
+            f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
+            f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
+            "   AND avg_capacity_factor_pct IS NOT NULL"
+            " GROUP BY facility_id, facility_name"
             " ORDER BY performance_ratio_pct DESC LIMIT 3"
         )
         forecast_rows = self._safe_execute_query(
@@ -917,7 +907,7 @@ class TopicRepository(BaseRepository):
         self, facility_name: str | None = None,
     ) -> dict[str, Any]:
         """Query dim_facility via Databricks SQL."""
-        sql = (
+        base_sql = (
             "SELECT facility_code, facility_name,"
             " region, state,"
             " location_lat, location_lng,"
@@ -929,12 +919,23 @@ class TopicRepository(BaseRepository):
         )
         if facility_name:
             safe_name = facility_name.replace("'", "''")
-            sql += (
+            
+            # First, try an exact match on facility_code (BUG-03)
+            exact_sql = base_sql + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
+            rows = self._execute_query(exact_sql)
+            if rows:
+                return self._build_facility_result(rows)
+                
+            # Fall back to substring match
+            sql = base_sql + (
                 f" AND (LOWER(facility_name)"
                 f" LIKE LOWER('%{safe_name}%')"
                 f" OR LOWER(facility_code)"
                 f" LIKE LOWER('%{safe_name}%'))"
             )
+        else:
+            sql = base_sql
+            
         sql += " ORDER BY facility_name"
         rows = self._execute_query(sql)
         return self._build_facility_result(rows)
@@ -1000,7 +1001,7 @@ class TopicRepository(BaseRepository):
                 "timezone_utc_offset": timezone_offset,
                 "total_capacity_mw": round(
                     self._to_float(
-                        str(r.get("total_capacity_mw", "")),
+                        str(r.get("total_capacity_maximum_mw") or r.get("total_capacity_mw", "")),
                     ), 2,
                 ),
             })
