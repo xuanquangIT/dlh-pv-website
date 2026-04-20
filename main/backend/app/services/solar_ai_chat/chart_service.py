@@ -350,6 +350,14 @@ def _format_for_kpi(key: str, value: Any) -> KpiCard | None:
 
 
 def _build_kpi_cards(metrics: dict[str, Any]) -> KpiCardsPayload | None:
+    # Keep scalar cards consistent with list payloads for common facility/station outputs.
+    facilities = metrics.get("facilities")
+    if isinstance(facilities, list):
+        inferred_count = len(facilities)
+        current_count = metrics.get("facility_count")
+        if inferred_count > 0 and (not isinstance(current_count, (int, float)) or int(current_count) <= 0):
+            metrics = {**metrics, "facility_count": inferred_count}
+
     cards: list[KpiCard] = []
     seen: set[str] = set()
 

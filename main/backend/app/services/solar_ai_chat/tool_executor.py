@@ -313,9 +313,15 @@ class ToolExecutor:
         if not hasattr(self._repository, "fetch_gold_kpi"):
              return {"message": "KPI Mart querying is not supported by the current repository."}, []
 
+        raw_limit = arguments.get("limit", 30)
+        try:
+            safe_limit = int(raw_limit) if raw_limit is not None else 30
+        except (TypeError, ValueError):
+            safe_limit = 30
+
         return self._repository.fetch_gold_kpi(
             table_short_name=arguments.get("table_name", ""),
             anchor_date=arguments.get("anchor_date"),
             station_name=arguments.get("station_name"),
-            limit=arguments.get("limit", 30),
+            limit=safe_limit,
         )

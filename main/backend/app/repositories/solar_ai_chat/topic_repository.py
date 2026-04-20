@@ -144,7 +144,7 @@ class TopicRepository(BaseRepository):
         all_fac_rows = self._execute_query(
             "SELECT facility_id, facility_name,"
             "       SUM(energy_mwh_daily) AS total_mwh,"
-            "       AVG(avg_capacity_factor_pct) AS capacity_factor_pct"
+            "       AVG(weighted_capacity_factor_pct) AS capacity_factor_pct"
             " FROM gold.mart_energy_daily"
             f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
             f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
@@ -183,11 +183,11 @@ class TopicRepository(BaseRepository):
         )
         top_performance_ratio = self._safe_execute_query(
             "SELECT facility_id, facility_name AS facility,"
-            "       AVG(avg_capacity_factor_pct) AS performance_ratio_pct"
+            "       AVG(weighted_capacity_factor_pct) AS performance_ratio_pct"
             " FROM gold.mart_energy_daily"
             f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
             f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
-            "   AND avg_capacity_factor_pct IS NOT NULL"
+            "   AND weighted_capacity_factor_pct IS NOT NULL"
             " GROUP BY facility_id, facility_name"
             " ORDER BY performance_ratio_pct DESC LIMIT 3"
         )
@@ -215,6 +215,7 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = mean(daily_values) if daily_values else 0.0
 
         return {
+            "all_facilities": all_facilities,
             "top_facilities": top_fac,
             "bottom_facilities": bottom_fac,
             "facility_count": len(all_facilities),
@@ -285,6 +286,7 @@ class TopicRepository(BaseRepository):
         bottom_fac_csv = [f for f in reversed(all_fac_sorted) if f["facility"] not in top_names_csv][:3]
 
         return {
+            "all_facilities": all_fac_sorted,
             "top_facilities": top_fac_csv,
             "bottom_facilities": bottom_fac_csv,
             "facility_count": len(all_fac_sorted),
@@ -907,7 +909,7 @@ class TopicRepository(BaseRepository):
         self, facility_name: str | None = None,
     ) -> dict[str, Any]:
         """Query dim_facility via Databricks SQL."""
-        base_sql = (
+        select_sql = (
             "SELECT facility_code, facility_name,"
             " region, state,"
             " location_lat, location_lng,"
@@ -915,29 +917,58 @@ class TopicRepository(BaseRepository):
             " total_capacity_registered_mw,"
             " total_capacity_maximum_mw"
             " FROM gold.dim_facility"
-            " WHERE is_current = true"
         )
+        base_current = select_sql + " WHERE is_current = true"
+        base_all = select_sql + " WHERE 1=1"
+
+        def _run_with_retry(current_sql: str, all_sql: str) -> list[dict[str, Any]]:
+            rows = self._safe_execute_query(current_sql)
+            if rows:
+                return rows
+            logger.warning(
+                "facility_info_current_filter_empty_or_failed; retrying without is_current filter",
+            )
+            return self._safe_execute_query(all_sql)
+
         if facility_name:
             safe_name = facility_name.replace("'", "''")
             
             # First, try an exact match on facility_code (BUG-03)
-            exact_sql = base_sql + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
-            rows = self._execute_query(exact_sql)
+            exact_current = base_current + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
+            exact_all = base_all + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
+            rows = _run_with_retry(exact_current, exact_all)
             if rows:
                 return self._build_facility_result(rows)
                 
             # Fall back to substring match
-            sql = base_sql + (
+            like_current = base_current + (
                 f" AND (LOWER(facility_name)"
                 f" LIKE LOWER('%{safe_name}%')"
                 f" OR LOWER(facility_code)"
                 f" LIKE LOWER('%{safe_name}%'))"
             )
+            like_all = base_all + (
+                f" AND (LOWER(facility_name)"
+                f" LIKE LOWER('%{safe_name}%')"
+                f" OR LOWER(facility_code)"
+                f" LIKE LOWER('%{safe_name}%'))"
+            )
+            rows = _run_with_retry(
+                like_current + " ORDER BY facility_name",
+                like_all + " ORDER BY facility_name",
+            )
         else:
-            sql = base_sql
-            
-        sql += " ORDER BY facility_name"
-        rows = self._execute_query(sql)
+            rows = _run_with_retry(
+                base_current + " ORDER BY facility_name",
+                base_all + " ORDER BY facility_name",
+            )
+
+        if not rows:
+            logger.warning(
+                "facility_info_databricks_empty_rows facility_name=%r; falling back to CSV",
+                facility_name,
+            )
+            return self._facility_info_csv(facility_name)
         return self._build_facility_result(rows)
 
     def _facility_info_csv(

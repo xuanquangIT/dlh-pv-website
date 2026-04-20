@@ -88,7 +88,11 @@ class KpiRepository(BaseRepository):
 
         where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         
-        safe_limit = max(1, min(100, limit))
+        try:
+            limit_value = int(limit) if limit is not None else 30
+        except (TypeError, ValueError):
+            limit_value = 30
+        safe_limit = max(1, min(100, limit_value))
         
         order_clause = ""
         if date_cols:
