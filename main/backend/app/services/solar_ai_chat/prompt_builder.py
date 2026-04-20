@@ -69,7 +69,7 @@ These tables have **dynamic schemas**. They contain detailed KPIs, impact factor
 | Tool | Key fields returned |
 |---|---|
 | `get_system_overview` | production_output_mwh, r_squared, data_quality_score, facility_count, latest_data_timestamp |
-| `get_energy_performance` | **top_facilities** (list: facility, energy_mwh, capacity_factor_pct, capacity_mw), **bottom_facilities** (same shape — lowest producers), facility_count, peak_hours, tomorrow_forecast_mwh, window_days |
+| `get_energy_performance` | **all_facilities** (full list of all facilities sorted by energy desc — use this for complete breakdowns), **top_facilities** (top 3 subset), **bottom_facilities** (bottom 3 subset), facility_count, peak_hours, tomorrow_forecast_mwh, window_days |
 | `get_ml_model_info` | model_name, model_version, parameters.approach, comparison (current_r_squared, previous_r_squared, delta_r_squared, skill_score, nrmse_pct, evaluated_on) |
 | `get_pipeline_status` | stage_progress (bronze/silver/gold/serving %), eta_minutes, alerts (list: **pipeline_name** = Databricks job name — NOT a facility, quality_flag, issue) |
 | `get_forecast_72h` | daily_forecast (list: date, expected_mwh, confidence_interval.low/high) |

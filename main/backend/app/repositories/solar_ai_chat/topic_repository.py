@@ -215,6 +215,7 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = mean(daily_values) if daily_values else 0.0
 
         return {
+            "all_facilities": all_facilities,
             "top_facilities": top_fac,
             "bottom_facilities": bottom_fac,
             "facility_count": len(all_facilities),
@@ -285,6 +286,7 @@ class TopicRepository(BaseRepository):
         bottom_fac_csv = [f for f in reversed(all_fac_sorted) if f["facility"] not in top_names_csv][:3]
 
         return {
+            "all_facilities": all_fac_sorted,
             "top_facilities": top_fac_csv,
             "bottom_facilities": bottom_fac_csv,
             "facility_count": len(all_fac_sorted),
