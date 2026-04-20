@@ -31,7 +31,6 @@ from app.schemas.solar_ai_chat import (
     SourceMetadata,
     ThinkingStep,
     ThinkingTrace,
-    resolve_ui_features,
     tool_label,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
@@ -60,7 +59,6 @@ from app.services.solar_ai_chat.prompt_builder import (
     format_source_text,
 )
 from app.services.solar_ai_chat.query_rewriter import QueryRewriter
-from app.services.solar_ai_chat.chart_service import ChartSpecBuilder
 from app.services.solar_ai_chat.tool_executor import ToolExecutor
 from app.services.solar_ai_chat.answer_verifier import AnswerVerifier
 from app.services.solar_ai_chat.deep_planner import DeepPlanner
@@ -122,38 +120,6 @@ def _needs_web_search(message: str) -> bool:
     """Return True if the user's message explicitly requests a web search."""
     lowered = message.lower()
     return any(kw in lowered for kw in _WEB_SEARCH_KEYWORDS)
-
-
-_VISUALIZE_KEYWORDS: tuple[str, ...] = (
-    "visualize", "visualise", "visualization", "visualisation",
-    "chart", "charts", "plot", "graph", "graphs", "diagram",
-    "biểu đồ", "bieu do", "vẽ", "ve ",
-    "trực quan", "truc quan", "hình ảnh hóa", "hinh anh hoa",
-    "đồ thị", "do thi",
-)
-
-
-def _should_visualize(message: str, tool_hints: list[str] | None) -> bool:
-    """Return True iff the user explicitly asked for a visualization via:
-    - the "visualize" tool hint pill, or
-    - viz-related keywords in the message.
-
-    The chart payload is suppressed otherwise, even if the data would support
-    a chart (avoids generating misleading 1-bar plots etc).
-    """
-    if tool_hints and "visualize" in tool_hints:
-        return True
-    lowered = (message or "").lower()
-    return any(kw in lowered for kw in _VISUALIZE_KEYWORDS)
-
-
-def _apply_tool_hints(request: "SolarChatRequest") -> "SolarChatRequest":
-    """Kept as a pass-through for compatibility. Tool hints are now carried
-    via ``request.tool_hints`` straight through to the prompt builder (see
-    :func:`build_agentic_messages`) so the user's original message is never
-    mutated (keeps the persisted transcript clean).
-    """
-    return request
 
 
 def _has_any_marker(message: str, markers: tuple[str, ...]) -> bool:
@@ -385,7 +351,6 @@ class SolarAIChatService:
         self._max_tool_steps = max(1, max_tool_steps)
         self._synthesis_max_output_tokens = synthesis_max_output_tokens
         self._query_rewriter = QueryRewriter()
-        self._chart_spec_builder = ChartSpecBuilder()
         self._answer_verifier = (
             AnswerVerifier(model_router, max_output_tokens=verifier_max_output_tokens)
             if verifier_enabled and model_router is not None
@@ -404,14 +369,11 @@ class SolarAIChatService:
     def handle_query(self, request: SolarChatRequest) -> SolarChatResponse:
         started = time.perf_counter()
         trace_id = uuid.uuid4().hex[:8]
-        request = _apply_tool_hints(request)
         logger.info(
-            "solar_chat_trace_start trace_id=%s session_id=%s role=%s tool_mode=%s hints=%s message=%s",
+            "solar_chat_trace_start trace_id=%s session_id=%s role=%s message=%s",
             trace_id,
             request.session_id,
             request.role.value if request.role else "unknown",
-            getattr(request, "tool_mode", "auto"),
-            getattr(request, "tool_hints", None),
             self._short(request.message, 200),
         )
         history_messages = self._load_history(request.session_id)
@@ -450,29 +412,6 @@ class SolarAIChatService:
                 ),
             )
 
-    @staticmethod
-    def _select_tool_declarations(request: SolarChatRequest) -> list:
-        """Filter TOOL_DECLARATIONS based on the caller's tool_mode.
-
-        - auto      → full palette (default)
-        - selected  → only tools whose name is in request.allowed_tools
-        - none      → no tools (caller should short-circuit before calling this)
-        """
-        mode = getattr(request, "tool_mode", "auto") or "auto"
-        if mode != "selected":
-            return list(TOOL_DECLARATIONS)
-        allowed = set(request.allowed_tools or [])
-        if not allowed:
-            return list(TOOL_DECLARATIONS)
-
-        def _tool_name(decl: Any) -> str:
-            if isinstance(decl, dict):
-                return str(decl.get("name") or decl.get("function", {}).get("name", ""))
-            return str(getattr(decl, "name", ""))
-
-        filtered = [d for d in TOOL_DECLARATIONS if _tool_name(d) in allowed]
-        return filtered or list(TOOL_DECLARATIONS)
-
     def handle_query_stream(self, request: SolarChatRequest):
         """Streaming variant — yields SSE-ready JSON strings.
 
@@ -498,7 +437,6 @@ class SolarAIChatService:
 
         started = time.perf_counter()
         trace_id = uuid.uuid4().hex[:8]
-        request = _apply_tool_hints(request)
 
         try:
             yield _sse(StatusUpdateEvent(text="Analyzing your request…"))
@@ -542,7 +480,6 @@ class SolarAIChatService:
                     latency_ms=final_resp.latency_ms,
                     intent_confidence=final_resp.intent_confidence,
                     warning_message=final_resp.warning_message,
-                    ui_features=final_resp.ui_features,
                     trace_id=trace_id,
                 ))
                 return
@@ -590,7 +527,6 @@ class SolarAIChatService:
                     fallback_used=final_resp.fallback_used,
                     latency_ms=final_resp.latency_ms,
                     intent_confidence=final_resp.intent_confidence,
-                    ui_features=final_resp.ui_features,
                     trace_id=trace_id,
                 ))
                 return
@@ -602,10 +538,7 @@ class SolarAIChatService:
                 latest_mart_date = None
                 today_str = None
                 
-            messages = build_agentic_messages(
-                request.message, language, history_messages, today_str=today_str,
-                tool_hints=getattr(request, "tool_hints", None),
-            )
+            messages = build_agentic_messages(request.message, language, history_messages, today_str=today_str)
             all_sources: list[dict[str, str]] = []
             all_metrics: dict[str, Any] = {}
             topic = ChatTopic.GENERAL
@@ -615,78 +548,6 @@ class SolarAIChatService:
             fallback_used = False
             locked_topic: ChatTopic | None = None
             user_query_date = extract_query_date(request.message, base_date=latest_mart_date)
-
-            # ----------------------------------------------------------
-            # Tool-mode override: user explicitly selected "no tools"
-            # in the UI — answer directly from LLM knowledge. Matches
-            # ChatGPT/Claude "Default" mode without web/tools.
-            # ----------------------------------------------------------
-            if getattr(request, "tool_mode", "auto") == "none":
-                _NO_TOOL_STEP = 0
-                yield _sse(StatusUpdateEvent(text="Answering without tools…"))
-                yield _sse(ThinkingStepEvent(
-                    step=_NO_TOOL_STEP, tool_name="answer_directly",
-                    label="Answering without tools", trace_id=trace_id,
-                ))
-                t_dir = time.perf_counter()
-                try:
-                    synthesis_prompt = build_synthesis_prompt(
-                        user_message=request.message,
-                        evidence_text="",
-                        language=language,
-                        history=history_messages or None,
-                    )
-                    gen = self._model_router.generate(
-                        synthesis_prompt,
-                        max_output_tokens=self._synthesis_max_output_tokens,
-                        temperature=0.2,
-                    )
-                    answer = gen.text
-                    model_used = gen.model_used
-                    fallback_used = gen.fallback_used
-                    dur_dir = int((time.perf_counter() - t_dir) * 1000)
-                    step_events.append({"step": _NO_TOOL_STEP, "tool": "answer_directly",
-                                        "status": "ok", "duration_ms": dur_dir, "detail": f"via {model_used}"})
-                    yield _sse(ToolResultEvent(
-                        step=_NO_TOOL_STEP, tool_name="answer_directly",
-                        status="ok", duration_ms=dur_dir, trace_id=trace_id,
-                    ))
-                except Exception as direct_err:
-                    dur_dir = int((time.perf_counter() - t_dir) * 1000)
-                    logger.warning("solar_chat_no_tools_direct_failed trace_id=%s err=%s", trace_id, direct_err)
-                    answer = build_insufficient_data_response(language)
-                    fallback_used = True
-                    step_events.append({"step": _NO_TOOL_STEP, "tool": "answer_directly",
-                                        "status": "error", "duration_ms": dur_dir})
-                    yield _sse(ToolResultEvent(
-                        step=_NO_TOOL_STEP, tool_name="answer_directly",
-                        status="error", duration_ms=dur_dir, trace_id=trace_id,
-                    ))
-
-                thinking_trace = ThinkingTrace(
-                    summary="Direct answer (no tools).",
-                    steps=[ThinkingStep(step="answer_directly", detail=f"duration_ms={dur_dir}",
-                                         status="success" if answer else "warning")],
-                    trace_id=trace_id,
-                )
-                final_resp = self._finalize_response(
-                    request=request, answer=answer or "",
-                    topic=ChatTopic.GENERAL, metrics={}, sources=[],
-                    model_used=model_used, fallback_used=fallback_used,
-                    started=started, trace_id=trace_id, intent_confidence=0.0,
-                    thinking_trace=thinking_trace,
-                )
-                yield _sse(DoneEvent(
-                    answer=final_resp.answer, topic=final_resp.topic.value,
-                    role=final_resp.role.value, sources=[],
-                    key_metrics={}, model_used=final_resp.model_used,
-                    fallback_used=final_resp.fallback_used, latency_ms=final_resp.latency_ms,
-                    intent_confidence=0.0, warning_message=final_resp.warning_message,
-                    thinking_trace=final_resp.thinking_trace.model_dump() if final_resp.thinking_trace else None,
-                    ui_features=final_resp.ui_features,
-                    trace_id=trace_id,
-                ))
-                return
             
             # ----------------------------------------------------------
             # Deep planner (stream path): structured plan with all tools
@@ -921,7 +782,7 @@ class SolarAIChatService:
 
                 evidence_parts: list[str] = []
                 if all_metrics:
-                    evidence_parts.append("## System data\n" + json.dumps(all_metrics, ensure_ascii=False))
+                    evidence_parts.append("## System data\n" + json.dumps(all_metrics, ensure_ascii=False)[:2000])
                 if web_results:
                     snippets = "\n".join(
                         f"- [{r.get('title', '')}]({r.get('url', '')}): {r.get('snippet', '')[:300]}"
@@ -977,7 +838,7 @@ class SolarAIChatService:
                 try:
                     result = self._model_router.generate_with_tools(
                         messages,
-                        self._select_tool_declarations(request),
+                        TOOL_DECLARATIONS,
                         max_output_tokens=self._synthesis_max_output_tokens,
                         require_function_call=(step_num == 1 and not all_metrics),
                     )
@@ -1219,10 +1080,6 @@ class SolarAIChatService:
                     final_resp.thinking_trace.model_dump()
                     if final_resp.thinking_trace else None
                 ),
-                ui_features=final_resp.ui_features,
-                data_table=final_resp.data_table.model_dump() if final_resp.data_table else None,
-                chart=final_resp.chart.model_dump() if final_resp.chart else None,
-                kpi_cards=final_resp.kpi_cards.model_dump() if final_resp.kpi_cards else None,
                 trace_id=trace_id,
             ))
 
@@ -1270,41 +1127,6 @@ class SolarAIChatService:
             request = request.model_copy(update={"message": expanded_message})
 
         language = self._query_rewriter.rewrite(request.message).language
-
-        # Tool-mode override: answer directly without calling tools.
-        if getattr(request, "tool_mode", "auto") == "none" and self._model_router is not None:
-            try:
-                synthesis_prompt = build_synthesis_prompt(
-                    user_message=request.message,
-                    evidence_text="",
-                    language=language,
-                    history=history_messages or None,
-                )
-                gen = self._model_router.generate(
-                    synthesis_prompt,
-                    max_output_tokens=self._synthesis_max_output_tokens,
-                    temperature=0.2,
-                )
-                return self._finalize_response(
-                    request=request, answer=gen.text,
-                    topic=ChatTopic.GENERAL, metrics={}, sources=[],
-                    model_used=gen.model_used, fallback_used=gen.fallback_used,
-                    started=started, trace_id=trace_id, intent_confidence=0.0,
-                    thinking_trace=ThinkingTrace(
-                        summary="Direct answer (no tools).",
-                        steps=[ThinkingStep(step="answer_directly", detail=f"via {gen.model_used}",
-                                             status="success")],
-                        trace_id=trace_id,
-                    ),
-                )
-            except Exception as direct_err:
-                logger.warning("solar_chat_no_tools_sync_failed trace_id=%s err=%s", trace_id, direct_err)
-                return self._finalize_response(
-                    request=request, answer=build_insufficient_data_response(language),
-                    topic=ChatTopic.GENERAL, metrics={}, sources=[],
-                    model_used="none", fallback_used=True,
-                    started=started, trace_id=trace_id, intent_confidence=0.0,
-                )
 
         # No LLM -> cannot do agentic reasoning
         if self._model_router is None:
@@ -1675,7 +1497,7 @@ class SolarAIChatService:
             if all_metrics:
                 evidence_parts.append(
                     "## Dữ liệu hệ thống (30 ngày gần nhất)\n"
-                    + json.dumps(all_metrics, ensure_ascii=False)
+                    + json.dumps(all_metrics, ensure_ascii=False)[:2000]
                 )
             web_results = web_response.get("results", [])
             if web_results:
@@ -1741,12 +1563,6 @@ class SolarAIChatService:
         # ------------------------------------------------------------------
         allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
         role_tool_declarations = [td for td in TOOL_DECLARATIONS if td.get("name") in allowed_tools]
-        # Apply caller-side tool_mode filter on top of RBAC palette
-        if getattr(request, "tool_mode", "auto") == "selected" and request.allowed_tools:
-            _user_allowed = set(request.allowed_tools)
-            filtered = [td for td in role_tool_declarations if td.get("name") in _user_allowed]
-            if filtered:
-                role_tool_declarations = filtered
 
         for step_num in range(1, self._max_tool_steps + 1):
             if answer is not None:
@@ -2129,38 +1945,6 @@ class SolarAIChatService:
         thinking_trace: ThinkingTrace | None = None,
     ) -> SolarChatResponse:
         latency_ms = int((time.perf_counter() - started) * 1000)
-        viz_requested_flag = _should_visualize(
-            request.message, getattr(request, "tool_hints", None),
-        )
-
-        # Build viz FIRST so we persist the exact same snapshot we render live.
-        data_table = None
-        chart = None
-        kpi_cards = None
-        try:
-            data_table, chart, kpi_cards = self._chart_spec_builder.build(
-                metrics, topic=topic.value if hasattr(topic, "value") else str(topic),
-            )
-            # Chart is opt-in: only keep it when the user explicitly asked
-            # (via the Visualize pill or a viz-related keyword in the prompt).
-            if not viz_requested_flag:
-                chart = None
-        except Exception as viz_err:
-            logger.warning(
-                "solar_chat_viz_build_failed trace_id=%s error_type=%s error=%s",
-                trace_id,
-                type(viz_err).__name__,
-                viz_err,
-            )
-
-        viz_snapshot: dict | None = None
-        if data_table or chart or kpi_cards:
-            viz_snapshot = {
-                "data_table": data_table.model_dump() if data_table else None,
-                "chart": chart.model_dump() if chart else None,
-                "kpi_cards": kpi_cards.model_dump() if kpi_cards else None,
-            }
-
         try:
             self._persist_exchange(
                 session_id=request.session_id,
@@ -2169,9 +1953,6 @@ class SolarAIChatService:
                 topic=topic,
                 sources=sources,
                 thinking_trace=thinking_trace,
-                key_metrics=metrics if metrics else None,
-                viz_requested=viz_requested_flag,
-                viz_payload=viz_snapshot,
             )
         except Exception as persist_error:
             logger.warning(
@@ -2204,10 +1985,6 @@ class SolarAIChatService:
             intent_confidence=intent_confidence,
             warning_message=warning_message,
             thinking_trace=thinking_trace,
-            ui_features=resolve_ui_features(request.role),
-            data_table=data_table,
-            chart=chart,
-            kpi_cards=kpi_cards,
         )
 
     # ------------------------------------------------------------------
@@ -2227,36 +2004,18 @@ class SolarAIChatService:
         topic: ChatTopic,
         sources: list[SourceMetadata],
         thinking_trace: ThinkingTrace | None = None,
-        key_metrics: dict | None = None,
-        viz_requested: bool = False,
-        viz_payload: dict | None = None,
     ) -> None:
         if not session_id or not self._history_repository:
             return
         self._history_repository.add_message(session_id=session_id, sender="user", content=user_message)
-        # Some repository implementations (e.g. tests, Databricks) may not
-        # accept the extra kwargs — fall back gracefully.
-        try:
-            self._history_repository.add_message(
-                session_id=session_id,
-                sender="assistant",
-                content=answer,
-                topic=topic,
-                sources=sources,
-                thinking_trace=thinking_trace,
-                key_metrics=key_metrics,
-                viz_requested=viz_requested,
-                viz_payload=viz_payload,
-            )
-        except TypeError:
-            self._history_repository.add_message(
-                session_id=session_id,
-                sender="assistant",
-                content=answer,
-                topic=topic,
-                sources=sources,
-                thinking_trace=thinking_trace,
-            )
+        self._history_repository.add_message(
+            session_id=session_id,
+            sender="assistant",
+            content=answer,
+            topic=topic,
+            sources=sources,
+            thinking_trace=thinking_trace,
+        )
 
     # ------------------------------------------------------------------
     # Backward-compat static helpers (used by existing unit tests)

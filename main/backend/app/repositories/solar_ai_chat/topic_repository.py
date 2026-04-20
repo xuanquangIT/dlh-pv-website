@@ -144,7 +144,7 @@ class TopicRepository(BaseRepository):
         all_fac_rows = self._execute_query(
             "SELECT facility_id, facility_name,"
             "       SUM(energy_mwh_daily) AS total_mwh,"
-            "       AVG(weighted_capacity_factor_pct) AS capacity_factor_pct"
+            "       AVG(avg_capacity_factor_pct) AS capacity_factor_pct"
             " FROM gold.mart_energy_daily"
             f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
             f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
@@ -183,11 +183,11 @@ class TopicRepository(BaseRepository):
         )
         top_performance_ratio = self._safe_execute_query(
             "SELECT facility_id, facility_name AS facility,"
-            "       AVG(weighted_capacity_factor_pct) AS performance_ratio_pct"
+            "       AVG(avg_capacity_factor_pct) AS performance_ratio_pct"
             " FROM gold.mart_energy_daily"
             f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
             f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
-            "   AND weighted_capacity_factor_pct IS NOT NULL"
+            "   AND avg_capacity_factor_pct IS NOT NULL"
             " GROUP BY facility_id, facility_name"
             " ORDER BY performance_ratio_pct DESC LIMIT 3"
         )
@@ -215,7 +215,6 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = mean(daily_values) if daily_values else 0.0
 
         return {
-            "all_facilities": all_facilities,
             "top_facilities": top_fac,
             "bottom_facilities": bottom_fac,
             "facility_count": len(all_facilities),
@@ -286,7 +285,6 @@ class TopicRepository(BaseRepository):
         bottom_fac_csv = [f for f in reversed(all_fac_sorted) if f["facility"] not in top_names_csv][:3]
 
         return {
-            "all_facilities": all_fac_sorted,
             "top_facilities": top_fac_csv,
             "bottom_facilities": bottom_fac_csv,
             "facility_count": len(all_fac_sorted),

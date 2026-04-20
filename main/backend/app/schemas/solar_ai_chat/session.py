@@ -5,11 +5,6 @@ from pydantic import BaseModel, Field
 
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 from app.schemas.solar_ai_chat.chat import SourceMetadata, ThinkingTrace
-from app.schemas.solar_ai_chat.visualization import (
-    ChartPayload,
-    DataTablePayload,
-    KpiCardsPayload,
-)
 
 
 class ChatMessage(BaseModel):
@@ -21,12 +16,6 @@ class ChatMessage(BaseModel):
     topic: ChatTopic | None = None
     sources: list[SourceMetadata] | None = None
     thinking_trace: ThinkingTrace | None = None  # ← persisted tool steps
-    # Viz payloads are rebuilt on fetch from persisted `key_metrics`; they are not
-    # written to the DB directly (optimized storage — only the raw metrics dict +
-    # a viz_requested flag are persisted).
-    data_table: DataTablePayload | None = None
-    chart: ChartPayload | None = None
-    kpi_cards: KpiCardsPayload | None = None
 
 
 

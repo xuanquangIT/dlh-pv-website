@@ -69,7 +69,7 @@ These tables have **dynamic schemas**. They contain detailed KPIs, impact factor
 | Tool | Key fields returned |
 |---|---|
 | `get_system_overview` | production_output_mwh, r_squared, data_quality_score, facility_count, latest_data_timestamp |
-| `get_energy_performance` | **all_facilities** (full list of all facilities sorted by energy desc — use this for complete breakdowns), **top_facilities** (top 3 subset), **bottom_facilities** (bottom 3 subset), facility_count, peak_hours, tomorrow_forecast_mwh, window_days |
+| `get_energy_performance` | **top_facilities** (list: facility, energy_mwh, capacity_factor_pct, capacity_mw), **bottom_facilities** (same shape — lowest producers), facility_count, peak_hours, tomorrow_forecast_mwh, window_days |
 | `get_ml_model_info` | model_name, model_version, parameters.approach, comparison (current_r_squared, previous_r_squared, delta_r_squared, skill_score, nrmse_pct, evaluated_on) |
 | `get_pipeline_status` | stage_progress (bronze/silver/gold/serving %), eta_minutes, alerts (list: **pipeline_name** = Databricks job name — NOT a facility, quality_flag, issue) |
 | `get_forecast_72h` | daily_forecast (list: date, expected_mwh, confidence_interval.low/high) |
@@ -91,15 +91,7 @@ sequentially and address every part in the final answer.
 5. For **definitions / explanations** (e.g., "what is PR?") try \
 `search_documents` first; supplement with domain knowledge if insufficient.
 6. For **Detailed, analytical domain KPIs** (e.g., "what is the correlation between AQI and energy?", "show daily forecast accuracy metrics") use `query_gold_kpi`. Only use existing summary tools (like `get_system_overview`) for high-level summaries.
-6. **Formatting** — use GitHub-flavoured Markdown for short narrative prose. \
-**Do NOT emit Markdown tables or repeat row-level tabular data in the answer.** \
-The frontend automatically renders an interactive DataTable, Plotly chart, and \
-KPI cards from the tool outputs below your answer, so including the same numbers \
-as a Markdown table is redundant and creates visual clutter. Instead, write a \
-concise (2-5 sentence) narrative that highlights 2-3 key insights (peak hour, \
-top/bottom station, notable trend) and refer to "the table / chart below" for \
-details. Do **not** use LaTeX math notation (`$$`, `\\frac`, `\\text`, `\\times`); \
-write formulas as plain inline text, e.g. `PR = Actual_MWh / (Capacity_MW × Irradiation_kWh/m²)`.
+6. **Formatting** — use GitHub-flavoured Markdown; use tables when comparing multiple values. Do **not** use LaTeX math notation (`$$`, `\\frac`, `\\text`, `\\times`). Write all formulas as plain inline text, e.g. `PR = Actual_MWh / (Capacity_MW × Irradiation_kWh/m²)`.
 7. **Never expose** internal table names, column names, SQL, Databricks details, or tool/function names (e.g. `get_facility_info`, `get_energy_performance`) to the user. Do **not** say "Đã gọi", "called", "fetched from tool", or any statement describing which tools were used.
 8. **Language** — reply in Vietnamese (with full diacritics) if the user writes \
 in Vietnamese; otherwise reply in English.
@@ -165,27 +157,11 @@ def _format_history_messages(
     return out
 
 
-_TOOL_HINT_PROMPT_SNIPPETS: dict[str, str] = {
-    "web_search": (
-        "The user has enabled the **Web search** hint. Consider using web lookup "
-        "when up-to-date external info would help answer their question, but you "
-        "may skip it if the internal data alone is sufficient."
-    ),
-    "visualize": (
-        "The user has enabled the **Visualize** hint. Prefer tools that return "
-        "time-series or per-station tabular data (e.g. get_station_hourly_report, "
-        "get_station_daily_report, get_energy_performance) so the frontend can "
-        "render a chart and data table alongside your narrative answer."
-    ),
-}
-
-
 def build_agentic_messages(
     request_message: str,
     language: str = "en",
     history: list[ChatMessage] | None = None,
     today_str: str | None = None,
-    tool_hints: list[str] | None = None,
 ) -> list[dict[str, object]]:
     """Build message list for the native agentic tool-calling loop.
 
@@ -197,14 +173,10 @@ def build_agentic_messages(
     # Inject today's date so the LLM can distinguish past vs future dates.
     if not today_str:
         today_str = date.today().isoformat()
-    system_text = f"Today's date: {today_str}\n\n" + _LAKEHOUSE_ARCHITECTURE_CONTEXT
-    hint_snippets = [
-        _TOOL_HINT_PROMPT_SNIPPETS[h]
-        for h in (tool_hints or [])
-        if h in _TOOL_HINT_PROMPT_SNIPPETS
-    ]
-    if hint_snippets:
-        system_text += "\n\n## Active user hints\n- " + "\n- ".join(hint_snippets)
+    system_text = (
+        f"Today's date: {today_str}\n\n"
+        + _LAKEHOUSE_ARCHITECTURE_CONTEXT
+    )
     messages: list[dict[str, object]] = [
         {"role": "system", "parts": [{"text": system_text}]},
     ]
@@ -241,7 +213,7 @@ def build_data_only_summary(
             header = "**Dữ liệu truy xuất được** *(LLM không khả dụng — hiển thị dữ liệu thô)*:\n\n"
         else:
             header = "**Retrieved data** *(LLM unavailable — raw data shown)*:\n\n"
-        body = f"```json\n{metrics_text[:20000]}\n```"
+        body = f"```json\n{metrics_text[:3000]}\n```"
         footer = f"\n\n*Nguồn / Sources: {source_names}*" if source_names else ""
         return header + body + footer
     except Exception:
@@ -293,7 +265,7 @@ def build_synthesis_prompt(
     return (
         f"Today's date: {today_str}\n\n"
         f"{_LAKEHOUSE_ARCHITECTURE_CONTEXT}\n\n"
-        f"## Retrieved evidence\n{evidence_text[:24000] if evidence_text else '(none)'}\n\n"
+        f"## Retrieved evidence\n{evidence_text[:4000] if evidence_text else '(none)'}\n\n"
         f"{history_section}"
         f"## User question\n{user_message}\n\n"
         f"## Instructions\n"
@@ -319,7 +291,7 @@ def build_verifier_prompt(answer: str, evidence_text: str) -> str:
     return (
         "You are a strict fact-checker. Your only task is to verify whether "
         "the answer below is grounded in the provided evidence.\n\n"
-        f"## Evidence\n{evidence_text[:20000] if evidence_text else '(none)'}\n\n"
+        f"## Evidence\n{evidence_text[:3000] if evidence_text else '(none)'}\n\n"
         f"## Answer to verify\n{answer[:1500]}\n\n"
         "Reply with EXACTLY one word: GROUNDED or UNGROUNDED.\n"
         "- GROUNDED: every factual claim in the answer appears in the evidence.\n"
