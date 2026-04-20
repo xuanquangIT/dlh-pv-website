@@ -44,6 +44,7 @@ class TextDeltaEvent(BaseModel):
 
 
 class DoneEvent(BaseModel):
+    model_config = {"protected_namespaces": ()}
     event: Literal["done"] = "done"
     answer: str
     topic: str

@@ -50,12 +50,6 @@ MODULE_CARDS = [
         "ui_path": "/forecast",
     },
     {
-        "name": "Analytics",
-        "description": "Analytical query history and insights.",
-        "endpoint": "/analytics/query-history",
-        "ui_path": "/analytics",
-    },
-    {
         "name": "Solar AI Chat",
         "description": "Natural language assistant for platform users.",
         "endpoint": "/solar-ai-chat/topics",
@@ -73,7 +67,6 @@ UI_TEST_PAGES: dict[str, str] = {
     "training": "ML Training",
     "registry": "Model Registry",
     "forecast": "Forecast",
-    "analytics": "Analytics",
     "solar_chat": "Solar AI Chat",
 }
 
@@ -250,21 +243,6 @@ def forecast_page(
         page_title=UI_TEST_PAGES["forecast"],
         current_user=current_user,
     )
-
-
-@router.get("/analytics", response_class=HTMLResponse)
-def analytics_page(
-    request: Request,
-    current_user: AuthUser = Depends(require_role(["admin", "analyst"])),
-) -> HTMLResponse:
-    return _render_refactored_page(
-        request=request,
-        template_name="platform_portal/analytics.html",
-        current_page="analytics",
-        page_title=UI_TEST_PAGES["analytics"],
-        current_user=current_user,
-    )
-
 
 @router.get("/settings/accounts", response_class=HTMLResponse)
 def accounts_page(request: Request, current_user: AuthUser = Depends(get_current_user)) -> HTMLResponse:

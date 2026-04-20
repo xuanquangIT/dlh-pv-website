@@ -131,8 +131,8 @@
       });
     },
 
-    async listSessions() {
-      return requestJson("/solar-ai-chat/sessions", {
+    async listSessions(limit = 20, offset = 0) {
+      return requestJson("/solar-ai-chat/sessions?limit=" + encodeURIComponent(limit) + "&offset=" + encodeURIComponent(offset), {
         method: "GET"
       });
     },
@@ -737,6 +737,10 @@
       filteredSessions: [],
       projects: initialProjects,
       sessionQuery: "",
+      sessionsLimit: 20,
+      sessionsOffset: 0,
+      hasMoreSessions: true,
+      loadingHistory: false,
       projectSessionMap: getStoredProjectSessionMap(),
       activeProject: initialActiveProject,
       pendingDeleteProject: "",
@@ -1062,6 +1066,7 @@
     }
 
     function renderSessionGroups() {
+      const currentScrollTop = sessionListElement.scrollTop;
       sessionListElement.innerHTML = "";
       const groups = groupSessionsByDate(state.filteredSessions);
       const orderedKeys = ["Today", "Yesterday", "Previous 7 days"];
@@ -1120,6 +1125,9 @@
           sessionListElement.appendChild(row);
         });
       });
+
+      // Restore scroll position after recreating DOM to prevent jumping during infinite scroll
+      sessionListElement.scrollTop = currentScrollTop;
     }
 
     function applySessionFilter(query) {
@@ -1152,9 +1160,25 @@
       return state.sessionId;
     }
 
-    async function refreshSessionList() {
-      const sessions = await SolarChatApi.listSessions();
-      state.sessions = sessions;
+    async function refreshSessionList(append = false) {
+      if (!append) {
+        state.sessionsOffset = 0;
+        state.hasMoreSessions = true;
+      }
+      if (!state.hasMoreSessions) return;
+
+      const newSessions = await SolarChatApi.listSessions(state.sessionsLimit, state.sessionsOffset);
+      if (newSessions.length < state.sessionsLimit) {
+        state.hasMoreSessions = false;
+      }
+
+      if (append) {
+        state.sessions = state.sessions.concat(newSessions);
+      } else {
+        state.sessions = newSessions;
+      }
+      state.sessionsOffset += newSessions.length;
+      
       ensureProjectSessionMap(state.sessions);
       applySessionFilter(state.sessionQuery);
     }
@@ -1717,6 +1741,37 @@
         messageInput.setValue(prompt);
         await sendMessageFlow(prompt);
       });
+    });
+
+    sessionListElement.addEventListener("scroll", async function () {
+      if (state.loadingHistory || !state.hasMoreSessions || state.sessionQuery) {
+        return;
+      }
+      
+      const distanceToBottom = sessionListElement.scrollHeight - sessionListElement.scrollTop - sessionListElement.clientHeight;
+      if (distanceToBottom <= 20) {
+        state.loadingHistory = true;
+        
+        // Add a visual loading spinner at the bottom
+        const spinnerRow = document.createElement("div");
+        spinnerRow.id = "session-list-spinner";
+        spinnerRow.style.padding = "15px";
+        spinnerRow.style.display = "flex";
+        spinnerRow.style.justifyContent = "center";
+        spinnerRow.innerHTML = '<span class="task-tracker-spinner" aria-hidden="true" style="width:16px;height:16px;opacity:0.7;"></span>';
+        sessionListElement.appendChild(spinnerRow);
+        
+        try {
+          await refreshSessionList(true);
+        } catch (error) {
+          // ignore scroll errors
+          if (spinnerRow.parentNode) {
+            spinnerRow.remove();
+          }
+        } finally {
+          state.loadingHistory = false;
+        }
+      }
     });
 
     renderProjects();

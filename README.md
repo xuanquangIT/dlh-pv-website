@@ -8,7 +8,7 @@ A full-stack analytics dashboard for solar photovoltaic (PV) energy monitoring, 
 ┌─────────────────────────────────────────────────────────┐
 │                    Frontend (Jinja2)                     │
 │  Dashboard · Solar Chat · Quality · Forecast · Pipeline │
-│  Training · Registry · Analytics · Accounts             │
+│  Training · Registry · Accounts                         │
 ├─────────────────────────────────────────────────────────┤
 │                FastAPI Backend (Python)                  │
 │  Auth (JWT) · REST API · Solar AI Chat Service          │
@@ -48,7 +48,6 @@ dlh-pv-website/
     │       │   ├── forecast/            # Forecast data API
     │       │   ├── ml_training/         # Training metrics API
     │       │   ├── model_registry/      # Model registry API
-    │       │   ├── analytics/           # Analytics data API
     │       │   └── frontend.py          # Template rendering routes
     │       ├── core/                    # Settings, config
     │       ├── db/                      # Database connections
@@ -89,7 +88,6 @@ dlh-pv-website/
         │       ├── pipeline.html        # Pipeline monitoring
         │       ├── training.html        # ML training dashboard
         │       ├── registry.html        # Model registry
-        │       ├── analytics.html       # Analytics page
         │       ├── accounts.html        # User management
         │       ├── login.html           # Login page
         │       └── components/          # Shared UI components
@@ -127,7 +125,6 @@ dlh-pv-website/
 | Pipeline | `/platform/pipeline` | Medallion pipeline stage progress & diagnostics |
 | ML Training | `/platform/training` | Model training metrics & evaluation |
 | Model Registry | `/platform/registry` | Model version registry & comparison |
-| Analytics | `/platform/analytics` | Extended analytics views |
 | Accounts | `/platform/accounts` | User management (admin only) |
 
 ## Solar AI Chat — Agentic Tool-Calling
@@ -152,10 +149,10 @@ The chat module implements an **agentic loop** where the LLM can call backend to
 **Key features:**
 
 - **Intent pre-fetch**: Automatically detects topic from user message and pre-loads relevant data
-- **Date-aware queries**: Extracts dates from natural language (`DD/MM/YYYY`, `YYYY-MM-DD`) and directly queries the correct day
-- **Dynamic date context**: System prompt includes today's date so the LLM correctly handles past vs. future dates
+- **Date-aware queries**: Extracts dates and applies timezone-aware query logic
+- **Strict RBAC Tool Isolation**: Roles (Data Engineer, ML Engineer, Data Analyst, Admin) are structurally isolated; the LLM engine physically cannot see or invoke tools outside the authenticated user's permission domain.
+- **Dynamic Gold KPI Querying**: Parses and searches dynamic Gold-layer schema attributes safely, effectively replacing hardcoded rules.
 - **Multi-provider LLM**: Supports OpenAI, Gemini, and Anthropic APIs with automatic fallback
-- **RBAC**: Role-based tool permissions (admin, data_engineer, ml_engineer, data_analyst)
 - **Bilingual**: Vietnamese and English
 
 ## Prerequisites
