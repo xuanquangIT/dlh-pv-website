@@ -15,16 +15,13 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
     ChatRole.DATA_ENGINEER: {
         ChatTopic.GENERAL,
         ChatTopic.SYSTEM_OVERVIEW,
-        ChatTopic.ENERGY_PERFORMANCE,
         ChatTopic.PIPELINE_STATUS,
-        ChatTopic.FORECAST_72H,
         ChatTopic.DATA_QUALITY_ISSUES,
         ChatTopic.FACILITY_INFO,
     },
     ChatRole.ML_ENGINEER: {
         ChatTopic.GENERAL,
         ChatTopic.SYSTEM_OVERVIEW,
-        ChatTopic.ENERGY_PERFORMANCE,
         ChatTopic.ML_MODEL,
         ChatTopic.FORECAST_72H,
         ChatTopic.FACILITY_INFO,
@@ -33,9 +30,7 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.GENERAL,
         ChatTopic.SYSTEM_OVERVIEW,
         ChatTopic.ENERGY_PERFORMANCE,
-        ChatTopic.ML_MODEL,
         ChatTopic.FORECAST_72H,
-        ChatTopic.DATA_QUALITY_ISSUES,
         ChatTopic.FACILITY_INFO,
     },
     ChatRole.ADMIN: {
@@ -53,10 +48,10 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
 # Extra tool-level grants that have no ChatTopic equivalent (extreme metrics).
 # These are appended to each role's derived tool permissions below.
 _EXTRA_TOOL_GRANTS: dict[ChatRole, set[str]] = {
-    ChatRole.DATA_ENGINEER: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather"},
-    ChatRole.ML_ENGINEER: {"get_extreme_energy", "get_extreme_weather"},
-    ChatRole.DATA_ANALYST: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather"},
-    ChatRole.ADMIN: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather"},
+    ChatRole.DATA_ENGINEER: {"get_extreme_aqi", "get_extreme_weather"},
+    ChatRole.ML_ENGINEER: {"query_gold_kpi"},
+    ChatRole.DATA_ANALYST: {"get_extreme_energy", "query_gold_kpi"},
+    ChatRole.ADMIN: {"get_extreme_aqi", "get_extreme_energy", "get_extreme_weather", "query_gold_kpi"},
 }
 
 

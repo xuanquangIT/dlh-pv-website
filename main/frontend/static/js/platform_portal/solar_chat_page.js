@@ -131,8 +131,8 @@
       });
     },
 
-    async listSessions() {
-      return requestJson("/solar-ai-chat/sessions", {
+    async listSessions(limit = 20, offset = 0) {
+      return requestJson("/solar-ai-chat/sessions?limit=" + encodeURIComponent(limit) + "&offset=" + encodeURIComponent(offset), {
         method: "GET"
       });
     },
@@ -395,10 +395,6 @@
     if (!thinkingTrace || !thinkingTrace.steps || thinkingTrace.steps.length === 0) {
       return "";
     }
-    // Feature-flag gate: SHOW_THINKING_TRACE.
-    if (window.ToolStatusCard && !window.ToolStatusCard.canShowTrace()) {
-      return "";
-    }
 
     // Parse the summary — format is "N tool calls · Topic · model-name"
     const summary = String(thinkingTrace.summary || "");
@@ -427,21 +423,10 @@
     html.push('<div class="msg-thinking-list">');
 
     thinkingTrace.steps.forEach(function(step) {
-      if (window.ToolStatusCard) {
-        const rowHtml = window.ToolStatusCard.renderRow({
-          step: step.step,
-          tool_name: step.tool_name,
-          label: step.step || step.tool_name || "",
-          status: step.status,
-          detail: step.detail
-        });
-        if (rowHtml) html.push(rowHtml);
-        return;
-      }
-      // Fallback path (component not loaded): legacy renderer.
       const isOk = step.status === "success" || step.status === "ok";
       const isWarn = step.status === "warning" || step.status === "error";
       const isRunning = step.status === "running";
+
       let icon;
       if (isRunning) {
         icon = '<span class="task-tracker-spinner" aria-hidden="true"></span>';
@@ -452,9 +437,13 @@
       } else {
         icon = '<span class="task-tracker-icon skipped" aria-hidden="true">–</span>';
       }
+
       const rowClass = isRunning ? "task-tracker-row running" : "task-tracker-row";
+      // step.step is now the human label e.g. "Fetching energy performance"
       const label = step.step || step.tool_name || "";
+      // step.detail is now "7 metrics retrieved" or "3 results found"
       const detail = step.detail ? ' <span class="task-tracker-dur">' + escapeHtml(step.detail) + "</span>" : "";
+
       html.push(
         '<div class="' + rowClass + '">',
         "  " + icon,
@@ -748,6 +737,10 @@
       filteredSessions: [],
       projects: initialProjects,
       sessionQuery: "",
+      sessionsLimit: 20,
+      sessionsOffset: 0,
+      hasMoreSessions: true,
+      loadingHistory: false,
       projectSessionMap: getStoredProjectSessionMap(),
       activeProject: initialActiveProject,
       pendingDeleteProject: "",
@@ -1073,6 +1066,7 @@
     }
 
     function renderSessionGroups() {
+      const currentScrollTop = sessionListElement.scrollTop;
       sessionListElement.innerHTML = "";
       const groups = groupSessionsByDate(state.filteredSessions);
       const orderedKeys = ["Today", "Yesterday", "Previous 7 days"];
@@ -1131,6 +1125,9 @@
           sessionListElement.appendChild(row);
         });
       });
+
+      // Restore scroll position after recreating DOM to prevent jumping during infinite scroll
+      sessionListElement.scrollTop = currentScrollTop;
     }
 
     function applySessionFilter(query) {
@@ -1163,9 +1160,25 @@
       return state.sessionId;
     }
 
-    async function refreshSessionList() {
-      const sessions = await SolarChatApi.listSessions();
-      state.sessions = sessions;
+    async function refreshSessionList(append = false) {
+      if (!append) {
+        state.sessionsOffset = 0;
+        state.hasMoreSessions = true;
+      }
+      if (!state.hasMoreSessions) return;
+
+      const newSessions = await SolarChatApi.listSessions(state.sessionsLimit, state.sessionsOffset);
+      if (newSessions.length < state.sessionsLimit) {
+        state.hasMoreSessions = false;
+      }
+
+      if (append) {
+        state.sessions = state.sessions.concat(newSessions);
+      } else {
+        state.sessions = newSessions;
+      }
+      state.sessionsOffset += newSessions.length;
+      
       ensureProjectSessionMap(state.sessions);
       applySessionFilter(state.sessionQuery);
     }
@@ -1277,10 +1290,6 @@
       ];
 
       var tasksHtml = this._tasks.map(function (task) {
-        if (window.ToolStatusCard) {
-          return window.ToolStatusCard.renderRow(task);
-        }
-        // Fallback (component not loaded): legacy inline renderer.
         var iconHtml;
         var rowClass = "task-tracker-row";
         if (task.status === "running") {
@@ -1430,11 +1439,8 @@
                 }
               },
               onDone: function (evt) {
-                if (window.ToolStatusCard && evt.ui_features) {
-                  window.ToolStatusCard.updateFeatures(evt.ui_features);
-                }
                 if (taskTracker) taskTracker.setOpen(false); // Collapse when done
-
+                
                 state.modelUsed = evt.model_used || state.modelUsed;
                 var assistantMessage = {
                   role: "assistant",
@@ -1735,6 +1741,37 @@
         messageInput.setValue(prompt);
         await sendMessageFlow(prompt);
       });
+    });
+
+    sessionListElement.addEventListener("scroll", async function () {
+      if (state.loadingHistory || !state.hasMoreSessions || state.sessionQuery) {
+        return;
+      }
+      
+      const distanceToBottom = sessionListElement.scrollHeight - sessionListElement.scrollTop - sessionListElement.clientHeight;
+      if (distanceToBottom <= 20) {
+        state.loadingHistory = true;
+        
+        // Add a visual loading spinner at the bottom
+        const spinnerRow = document.createElement("div");
+        spinnerRow.id = "session-list-spinner";
+        spinnerRow.style.padding = "15px";
+        spinnerRow.style.display = "flex";
+        spinnerRow.style.justifyContent = "center";
+        spinnerRow.innerHTML = '<span class="task-tracker-spinner" aria-hidden="true" style="width:16px;height:16px;opacity:0.7;"></span>';
+        sessionListElement.appendChild(spinnerRow);
+        
+        try {
+          await refreshSessionList(true);
+        } catch (error) {
+          // ignore scroll errors
+          if (spinnerRow.parentNode) {
+            spinnerRow.remove();
+          }
+        } finally {
+          state.loadingHistory = false;
+        }
+      }
     });
 
     renderProjects();

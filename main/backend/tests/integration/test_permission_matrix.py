@@ -39,7 +39,6 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
             "/training": {"ml_engineer"},
             "/registry": {"admin", "ml_engineer"},
             "/forecast": {"admin", "data_engineer", "ml_engineer", "analyst"},
-            "/analytics": {"admin", "analyst"},
             "/solar-chat": {"admin", "data_engineer", "ml_engineer"},
         }
 
@@ -63,7 +62,6 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
             "/ml-training/experiments": {"ml_engineer", "system"},
             "/model-registry/models": {"admin", "ml_engineer", "system"},
             "/forecast/next-72h": {"admin", "data_engineer", "ml_engineer", "analyst"},
-            "/analytics/query-history": {"admin", "analyst"},
             "/solar-ai-chat/topics": {"admin", "data_engineer", "ml_engineer"},
         }
 

@@ -230,6 +230,17 @@ def extract_timeframe(normalized_message: str, specific_hour: int | None = None)
         return "year"
     return "day"
 
+def parse_timeframe_days(message: str) -> int | None:
+    """Extract a timeframe in days from common user query phrases."""
+    norm = normalize_vietnamese_text(message)
+    # Most specific to least specific
+    if any(m in norm for m in ("hom nay", "today", "ngay nay")): return 0
+    if any(m in norm for m in ("hom qua", "yesterday", "1 ngay", "mot ngay", "24h", "24 gio")): return 1
+    if any(m in norm for m in ("tuan", "week", "7 ngay", "bay ngay")): return 7
+    if any(m in norm for m in ("thang", "month", "30 ngay", "ba muoi ngay")): return 30
+    if any(m in norm for m in ("nam", "year", "365 ngay")): return 365
+    return None
+
 
 def extract_specific_hour(normalized_message: str) -> int | None:
     for pattern in _HOUR_PATTERNS:
@@ -270,10 +281,10 @@ def extract_specific_hour(normalized_message: str) -> int | None:
     return None
 
 
-def extract_query_date(message: str) -> date | None:
+def extract_query_date(message: str, base_date: date | None = None) -> date | None:
     normalized = normalize_vietnamese_text(message)
     # Relative-day keywords (Vietnamese + English). Ordered longest-first.
-    today = date.today()
+    today = base_date if base_date is not None else date.today()
     if any(kw in normalized for kw in ("hom nay", "ngay nay", "today")):
         return today
     if any(kw in normalized for kw in ("hom qua", "yesterday")):

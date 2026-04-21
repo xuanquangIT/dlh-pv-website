@@ -11,7 +11,6 @@ from app.core.security import get_password_hash
 from app.db.database import AuthRole, AuthUser, Base, SessionLocal, engine
 
 from app.api import (
-    analytics,
     dashboard,
     data_pipeline,
     data_quality,
@@ -50,7 +49,6 @@ def create_app() -> FastAPI:
     app.include_router(ml_training.router)
     app.include_router(model_registry.router)
     app.include_router(forecast.router)
-    app.include_router(analytics.router)
     app.include_router(solar_ai_chat.router)
     app.include_router(solar_ai_chat.stream_router)
     app.include_router(frontend.router)
