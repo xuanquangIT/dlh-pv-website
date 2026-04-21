@@ -41,6 +41,10 @@ _LABELS: dict[str, tuple[str, str | None, ColumnType]] = {
     "station": ("Station", None, "string"),
     "latitude": ("Latitude", "°", "number"),
     "longitude": ("Longitude", "°", "number"),
+    "location_lat": ("Latitude", "°", "number"),
+    "location_lng": ("Longitude", "°", "number"),
+    "timezone_name": ("Timezone", None, "string"),
+    "timezone_utc_offset": ("UTC Offset", None, "string"),
     "capacity_mw": ("Capacity", "MW", "number"),
     "quality_score": ("Quality", None, "number"),
     "percent_complete": ("Complete", "%", "number"),
@@ -51,7 +55,11 @@ _LABELS: dict[str, tuple[str, str | None, ColumnType]] = {
     "avg_temperature_c": ("Avg Temperature", "°C", "number"),
     "avg_temperature": ("Avg Temperature", "°C", "number"),
     "avg_humidity": ("Avg Humidity", "%", "number"),
+    "avg_humidity_pct": ("Avg Humidity", "%", "number"),
     "avg_wind_speed_ms": ("Avg Wind Speed", "m/s", "number"),
+    "avg_wind_speed": ("Avg Wind Speed", "m/s", "number"),
+    "clear_sky_energy_loss_mwh": ("Clear Sky Energy Loss", "MWh", "number"),
+    "radiation_to_energy_ratio": ("Rad/Energy Ratio", None, "number"),
     "avg_wind_speed": ("Avg Wind Speed", "m/s", "number"),
     "avg_cloud_cover": ("Avg Cloud Cover", "%", "number"),
     "avg_shortwave_radiation": ("Avg Shortwave Rad", "W/m²", "number"),
@@ -98,6 +106,17 @@ _LABELS: dict[str, tuple[str, str | None, ColumnType]] = {
     "wind_gusts_10m": ("Wind Gust", "m/s", "number"),
     "cloud_cover": ("Cloud Cover", "%", "number"),
     "aqi_value": ("AQI", None, "number"),
+    "avg_aqi_value": ("Avg AQI", None, "number"),
+    "max_aqi_value": ("Max AQI", None, "number"),
+    "avg_pm25": ("Avg PM2.5", "µg/m³", "number"),
+    "avg_pm10": ("Avg PM10", "µg/m³", "number"),
+    "avg_no2": ("Avg NO2", "µg/m³", "number"),
+    "avg_o3": ("Avg O3", "µg/m³", "number"),
+    "avg_dust": ("Avg Dust", "µg/m³", "number"),
+    "aqi_date": ("Date", None, "date"),
+    "aqi_category": ("AQI Category", None, "string"),
+    "estimated_aqi_energy_loss_pct": ("Est. AQI Energy Loss", "%", "number"),
+    "radiation_efficiency_ratio": ("Radiation Efficiency", None, "number"),
     "score": ("Score", None, "number"),
     "similarity_score": ("Similarity", None, "number"),
     "source_file": ("Source", None, "string"),
@@ -135,13 +154,14 @@ _TIME_COLUMNS = {
     "hour", "hr",
     "date", "date_hour", "timestamp", "ts",
     "report_date", "reading_date",
-    "energy_date", "forecast_date", "weather_date", "event_date",
+    "energy_date", "forecast_date", "weather_date", "event_date", "aqi_date",
 }
 
 # Columns that are operational / metadata noise — they're numeric but the user
 # almost never wants them plotted. Keep them in the table, drop from chart.
 _METADATA_NUMERIC_KEYS = {
     "batch_id",
+    "aqi_category_key",  # integer code, not meaningful to user
     "observation_hours",
     "daytime_observation_hours",
     "row_count",  # row_count is a scalar KPI, not a chart series
@@ -160,7 +180,6 @@ _METADATA_STRING_KEYS = {
     "updated_at",
     "weather_condition_description",
     "region",
-    "state",
     "cloud_band",
     "temperature_band",
     "rain_band",
@@ -236,6 +255,11 @@ _COLOR_PALETTE = [
     "#c0392b",  # red
     "#5a7684",  # slate
 ]
+
+
+_LAT_KEYS: frozenset[str] = frozenset({"location_lat", "latitude", "lat"})
+_LNG_KEYS: frozenset[str] = frozenset({"location_lng", "longitude", "lng"})
+_GEO_KEYS: frozenset[str] = _LAT_KEYS | _LNG_KEYS
 
 
 def _humanize(key: str) -> str:
@@ -358,11 +382,123 @@ def _detect_category_column(columns: list[DataTableColumn]) -> DataTableColumn |
     return None
 
 
+def _detect_geo_columns(
+    columns: list[DataTableColumn],
+) -> tuple[DataTableColumn, DataTableColumn] | None:
+    """Return (lat_col, lng_col) if both lat and lng columns are present."""
+    by_key = {c.key: c for c in columns}
+    lat_col = next((by_key[k] for k in _LAT_KEYS if k in by_key), None)
+    lng_col = next((by_key[k] for k in _LNG_KEYS if k in by_key), None)
+    if lat_col and lng_col:
+        return lat_col, lng_col
+    return None
+
+
+def _build_geo_map_chart(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    columns: list[DataTableColumn],
+    lat_col: DataTableColumn,
+    lng_col: DataTableColumn,
+    cat_col: DataTableColumn | None,
+) -> ChartPayload:
+    """Build a scattergeo Plotly map with markers sized by capacity."""
+    by_key = {c.key: c for c in columns}
+    cap_col = next(
+        (by_key[k] for k in ("total_capacity_mw", "capacity_mw", "total_capacity_maximum_mw") if k in by_key),
+        None,
+    )
+
+    lats = [r.get(lat_col.key) for r in rows]
+    lons = [r.get(lng_col.key) for r in rows]
+    labels = [
+        str(r.get(cat_col.key, "")) if cat_col else str(i)
+        for i, r in enumerate(rows)
+    ]
+
+    # Size markers proportionally to capacity; default 14px if no capacity col.
+    sizes: list[int] = [14] * len(rows)
+    cap_values: list[Any] | None = None
+    if cap_col:
+        raw_caps = [r.get(cap_col.key) for r in rows]
+        valid_caps = [c for c in raw_caps if _is_numeric(c) and c > 0]
+        if valid_caps:
+            max_cap = max(valid_caps)
+            sizes = [int(10 + ((r.get(cap_col.key) or 0) / max_cap) * 25) for r in rows]
+            cap_values = raw_caps
+
+    state_col = by_key.get("state")
+    customdata = [
+        [r.get("state", ""), r.get(cap_col.key, "") if cap_col else ""]
+        for r in rows
+    ]
+    hover_parts = ["<b>%{text}</b>"]
+    if cap_col:
+        hover_parts.append(f"{cap_col.label}: %{{customdata[1]:.0f}} MW")
+    if state_col:
+        hover_parts.append("State: %{customdata[0]}")
+    hover_parts.append("<extra></extra>")
+
+    marker: dict[str, Any] = {"size": sizes, "sizemode": "diameter"}
+    if cap_values is not None:
+        marker.update({
+            "color": cap_values,
+            "colorscale": [[0, "#1a8a5a"], [0.5, "#f4b942"], [1, "#1b6ca8"]],
+            "showscale": True,
+            "colorbar": {"title": "Capacity<br>(MW)", "thickness": 12, "len": 0.6},
+        })
+    else:
+        marker["color"] = "#1a8a5a"
+
+    trace: dict[str, Any] = {
+        "type": "scattergeo",
+        "lat": lats,
+        "lon": lons,
+        "text": labels,
+        "mode": "markers+text",
+        "textposition": "top center",
+        "textfont": {"size": 10, "color": "#333333"},
+        "marker": marker,
+        "customdata": customdata,
+        "hovertemplate": "<br>".join(hover_parts),
+    }
+
+    layout: dict[str, Any] = {
+        "geo": {
+            "projection": {"type": "mercator"},
+            "showland": True,
+            "landcolor": "#f5f5f0",
+            "showocean": True,
+            "oceancolor": "#ddeef9",
+            "showcoastlines": True,
+            "coastlinecolor": "#aaaaaa",
+            "showcountries": True,
+            "countrycolor": "#cccccc",
+            "fitbounds": "locations",
+            "resolution": 50,
+        },
+        "hovermode": "closest",
+        "height": 420,
+        "margin": {"l": 0, "r": 0, "t": 10, "b": 0},
+        "paper_bgcolor": "#ffffff",
+    }
+
+    title = "Facility Locations & Capacity (MW)" if cap_col else "Facility Locations"
+    return ChartPayload(
+        chart_type="scatter_geo",
+        title=title,
+        plotly_spec={"data": [trace], "layout": layout},
+        source_metric_key=metric_key,
+    )
+
+
 def _detect_numeric_columns(columns: list[DataTableColumn]) -> list[DataTableColumn]:
-    """Return numeric columns suitable for charting (metadata filtered out)."""
+    """Return numeric columns suitable for charting (metadata and geo coords filtered out)."""
     return [
         c for c in columns
-        if c.type in ("number", "integer") and c.key not in _METADATA_NUMERIC_KEYS
+        if c.type in ("number", "integer")
+        and c.key not in _METADATA_NUMERIC_KEYS
+        and c.key not in _GEO_KEYS
     ]
 
 
@@ -420,6 +556,7 @@ def _build_chart(
     metric_key: str,
     rows: list[dict[str, Any]],
     columns: list[DataTableColumn],
+    user_query: str | None = None,
 ) -> ChartPayload | None:
     if not rows or not columns:
         return None
@@ -431,13 +568,19 @@ def _build_chart(
     time_col = _detect_time_column(columns)
     cat_col = _detect_category_column(columns)
 
-    # --- Correlation scatter (highest priority) -----------------------------
+    # --- Geo map: lat + lng present (highest priority) ----------------------
+    geo_pair = _detect_geo_columns(columns)
+    if geo_pair is not None:
+        lat_col, lng_col = geo_pair
+        return _build_geo_map_chart(metric_key, rows, columns, lat_col, lng_col, cat_col)
+
+    # --- Correlation scatter -------------------------------------------------
     # Check BEFORE time-series so that weather-impact data that happens to
     # include an `energy_date` column still renders as a per-facility X-Y
     # scatter rather than a time-series line per facility.
     if cat_col is not None and numeric_cols:
         candidate_y = [c for c in numeric_cols if c.key != cat_col.key]
-        correlation = _detect_correlation_axes(candidate_y)
+        correlation = _detect_correlation_axes(candidate_y, user_query)
         if correlation is not None:
             x_col, y_col = correlation
             return _build_correlation_scatter(metric_key, rows, cat_col, x_col, y_col)
@@ -640,6 +783,84 @@ _CORRELATION_X_PATTERNS = (
     "aqi", "pm2_5", "pm10",
     "precipitation",
 )
+
+# Maps query keywords → X-axis column patterns to try FIRST.
+# When a user asks "how does cloud cover affect PR?", cloud_cover must be
+# prioritised over temperature (which appears first in the default list above).
+_QUERY_TO_X_PRIORITY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("cloud",        ("cloud_cover", "cloud", "avg_cloud")),
+    ("mây",          ("cloud_cover", "cloud", "avg_cloud")),
+    ("humidity",     ("humidity", "avg_humidity")),
+    ("độ ẩm",        ("humidity", "avg_humidity")),
+    ("wind",         ("wind_speed", "wind", "avg_wind")),
+    ("gió",          ("wind_speed", "wind", "avg_wind")),
+    ("tốc độ gió",   ("wind_speed", "wind", "avg_wind")),
+    ("hướng gió",    ("wind_speed", "wind", "avg_wind")),
+    ("radiation",    ("shortwave", "radiation", "irradiance", "avg_shortwave")),
+    ("bức xạ",       ("shortwave", "radiation", "irradiance")),
+    ("precipitation", ("precipitation", "rain")),
+    ("mưa",          ("precipitation", "rain")),
+    ("aqi",          ("aqi", "pm2_5", "pm10", "aqi_value")),
+    ("temperature",  ("temperature", "avg_temperature")),
+    ("nhiệt độ",     ("temperature", "avg_temperature")),
+)
+
+
+def _reorder_x_patterns_for_query(user_query: str | None) -> tuple[str, ...]:
+    """Return _CORRELATION_X_PATTERNS with query-relevant entries promoted to front."""
+    if not user_query:
+        return _CORRELATION_X_PATTERNS
+    q = user_query.lower()
+    promoted: list[str] = []
+    for keyword, priority_pats in _QUERY_TO_X_PRIORITY:
+        if keyword in q:
+            for p in priority_pats:
+                if p not in promoted:
+                    promoted.append(p)
+    if not promoted:
+        return _CORRELATION_X_PATTERNS
+    remaining = [p for p in _CORRELATION_X_PATTERNS if p not in promoted]
+    return tuple(promoted) + tuple(remaining)
+
+
+# Same idea for the Y-axis: when user explicitly names the Y metric (e.g.
+# "năng lượng sản xuất"), energy columns must be preferred over capacity_factor
+# which appears earlier in the default _CORRELATION_Y_PATTERNS order.
+_QUERY_TO_Y_PRIORITY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Explicit energy-output intent → prefer energy cols over CF/PR
+    ("energy production", ("total_energy", "energy_mwh", "avg_energy", "energy")),
+    ("năng lượng sản xuất", ("total_energy", "energy_mwh", "avg_energy", "energy")),
+    ("sản lượng điện", ("total_energy", "energy_mwh", "avg_energy", "energy")),
+    ("sản lượng", ("total_energy", "energy_mwh", "avg_energy", "energy")),
+    ("energy output", ("total_energy", "energy_mwh", "avg_energy", "energy")),
+    ("energy generation", ("total_energy", "energy_mwh", "avg_energy", "energy")),
+    # Efficiency / performance intent (Vietnamese "hiệu suất") → PR first, then CF
+    ("hiệu suất", ("performance_ratio", "pr_ratio", "pr_pct", "capacity_factor", "weighted_capacity_factor")),
+    ("phát điện", ("performance_ratio", "pr_ratio", "pr_pct", "capacity_factor", "energy_mwh", "avg_energy", "energy")),
+    ("performance ratio", ("performance_ratio", "pr_ratio", "pr_pct")),
+    ("performance_ratio", ("performance_ratio", "pr_ratio", "pr_pct")),
+    ("pr ", ("performance_ratio", "pr_ratio", "pr_pct")),
+    (" pr", ("performance_ratio", "pr_ratio", "pr_pct")),
+    ("capacity factor", ("capacity_factor",)),
+    ("capacity_factor", ("capacity_factor",)),
+)
+
+
+def _reorder_y_patterns_for_query(user_query: str | None) -> tuple[str, ...]:
+    """Return _CORRELATION_Y_PATTERNS with query-relevant entries promoted to front."""
+    if not user_query:
+        return _CORRELATION_Y_PATTERNS
+    q = user_query.lower()
+    promoted: list[str] = []
+    for keyword, priority_pats in _QUERY_TO_Y_PRIORITY:
+        if keyword in q:
+            for p in priority_pats:
+                if p not in promoted:
+                    promoted.append(p)
+    if not promoted:
+        return _CORRELATION_Y_PATTERNS
+    remaining = [p for p in _CORRELATION_Y_PATTERNS if p not in promoted]
+    return tuple(promoted) + tuple(remaining)
 # Performance-like Y columns take precedence over raw-energy ones because a
 # correlation question is usually about efficiency, not absolute output.
 _CORRELATION_Y_PATTERNS = (
@@ -666,15 +887,22 @@ def _find_by_pattern(
 
 def _detect_correlation_axes(
     y_cols: list[DataTableColumn],
+    user_query: str | None = None,
 ) -> tuple[DataTableColumn, DataTableColumn] | None:
     """If the numeric columns include a weather-like X and a performance Y,
     return (x_col, y_col) for a scatter plot. Otherwise None.
+
+    user_query is used to reorder X-axis patterns so that the column the user
+    explicitly mentioned (cloud cover, AQI, humidity, …) is tried before the
+    default first-match pattern (temperature).
     """
-    x_col = _find_by_pattern(y_cols, _CORRELATION_X_PATTERNS)
+    x_patterns = _reorder_x_patterns_for_query(user_query)
+    x_col = _find_by_pattern(y_cols, x_patterns)
     if x_col is None:
         return None
     y_cols_minus_x = [c for c in y_cols if c.key != x_col.key]
-    y_col = _find_by_pattern(y_cols_minus_x, _CORRELATION_Y_PATTERNS)
+    y_patterns = _reorder_y_patterns_for_query(user_query)
+    y_col = _find_by_pattern(y_cols_minus_x, y_patterns)
     if y_col is None:
         return None
     return x_col, y_col
@@ -861,6 +1089,7 @@ class ChartSpecBuilder:
         metrics: dict[str, Any],
         *,
         topic: str | None = None,
+        user_query: str | None = None,
     ) -> tuple[DataTablePayload | None, ChartPayload | None, KpiCardsPayload | None]:
         if not isinstance(metrics, dict) or not metrics:
             return None, None, None
@@ -874,10 +1103,11 @@ class ChartSpecBuilder:
             try:
                 title_hint = _title_for_topic(topic, metric_key, rows)
                 table = _build_data_table(metric_key, rows, title_hint=title_hint)
-                chart = _build_chart(metric_key, rows, table.columns)
-                # When the chart is a correlation scatter (PR vs temperature,
-                # etc.), project the table to just the columns that answer the
-                # question: facility + date + X + Y. Everything else is noise.
+                chart = _build_chart(metric_key, rows, table.columns, user_query)
+                # When the chart is a correlation scatter (PR vs cloud cover,
+                # AQI vs energy, etc.), project the table to just the columns
+                # that answer the question: facility + date + X + Y. Everything
+                # else is noise.
                 if chart is not None and chart.chart_type == "scatter" and table is not None:
                     table = _project_table_for_scatter(table, rows, chart)
             except Exception as exc:
@@ -923,8 +1153,11 @@ def _project_table_for_scatter(
         {k: row.get(k) for k in keep_keys if k in row}
         for row in table.rows
     ]
+    # Use chart title so the table label matches the scatter relationship
+    # (e.g. "Performance Ratio vs Avg Cloud Cover" instead of a generic title).
+    scatter_title = chart.title or table.title
     return DataTablePayload(
-        title=table.title,
+        title=scatter_title,
         columns=projected_cols,
         rows=projected_rows,
         row_count=len(projected_rows),
@@ -932,7 +1165,7 @@ def _project_table_for_scatter(
 
 
 _FACILITY_LIKE_KEYS = {"facility", "facility_id", "facility_name", "station", "station_name"}
-_TIME_LIKE_KEYS = {"hour", "hr", "date", "date_hour", "timestamp", "report_date", "reading_date", "ts"}
+_TIME_LIKE_KEYS = {"hour", "hr", "date", "date_hour", "timestamp", "report_date", "reading_date", "ts", "aqi_date", "energy_date", "forecast_date", "weather_date"}
 
 
 def _title_for_topic(

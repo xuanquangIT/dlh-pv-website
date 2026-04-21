@@ -102,6 +102,12 @@ def _apply_energy_focus(
                 out[list_key] = projected
         for drop in ("tomorrow_forecast_mwh", "peak_hours", "top_performance_ratio_facilities"):
             out.pop(drop, None)
+        if limit is not None:
+            shown = len(out.get("all_facilities") or [])
+            if shown > 0:
+                out["facility_count"] = shown
+            out.pop("top_facilities", None)
+            out.pop("bottom_facilities", None)
         return out
 
     # overview / energy — default path.
@@ -119,6 +125,22 @@ def _apply_energy_focus(
     # Also drop performance_ratio list — it contains percentages that the LLM
     # routinely confuses with capacity factor, causing narrative/chart mismatch.
     out.pop("top_performance_ratio_facilities", None)
+
+    # Suppress zero tomorrow_forecast_mwh — it means no forecast data exists,
+    # showing "0.000 MWh" as a KPI would mislead the user.
+    if out.get("tomorrow_forecast_mwh", 1) == 0.0:
+        out.pop("tomorrow_forecast_mwh", None)
+
+    # When a limit is applied (e.g. top 5), reflect the actual count shown in
+    # facility_count so the KPI matches what the user asked for.
+    # Also drop top_facilities/bottom_facilities so _pick_best_list always picks
+    # the truncated all_facilities list for chart/table rendering.
+    if limit is not None:
+        shown = len(out.get("all_facilities") or [])
+        if shown > 0:
+            out["facility_count"] = shown
+        out.pop("top_facilities", None)
+        out.pop("bottom_facilities", None)
 
     return out
 
@@ -151,7 +173,9 @@ class TopicRepository(BaseRepository):
         lookback_days = self._lookback_days()
         if arguments is not None and "timeframe_days" in arguments:
             try:
-                lookback_days = max(0, int(arguments["timeframe_days"]))
+                # Never let the LLM shrink the window below the configured default
+                # (e.g. "hôm nay" → timeframe_days=1 is not meaningful for aggregates).
+                lookback_days = max(lookback_days, int(arguments["timeframe_days"]))
             except (ValueError, TypeError):
                 pass
                 
@@ -234,7 +258,8 @@ class TopicRepository(BaseRepository):
         if arguments is not None:
             if "timeframe_days" in arguments:
                 try:
-                    lookback_days = max(0, int(arguments["timeframe_days"]))
+                    # Never let the LLM shrink the window below the configured default.
+                    lookback_days = max(lookback_days, int(arguments["timeframe_days"]))
                 except (ValueError, TypeError):
                     pass
             focus = _normalize_focus(arguments.get("focus"))

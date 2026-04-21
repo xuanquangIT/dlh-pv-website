@@ -2218,7 +2218,9 @@ class SolarAIChatService:
         kpi_cards = None
         try:
             data_table, chart, kpi_cards = self._chart_spec_builder.build(
-                metrics, topic=topic.value if hasattr(topic, "value") else str(topic),
+                metrics,
+                topic=topic.value if hasattr(topic, "value") else str(topic),
+                user_query=request.message,
             )
             # Chart is opt-in: only keep it when the user explicitly asked
             # (via the Visualize pill or a viz-related keyword in the prompt).

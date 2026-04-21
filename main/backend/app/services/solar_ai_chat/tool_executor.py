@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import date
 from typing import Any
 
@@ -42,12 +43,39 @@ _CORRELATION_KEYWORDS = (
 _METRIC_KEYWORDS = (
     "performance ratio", "performance_ratio", "pr ", " pr",
     "capacity factor", "capacity_factor",
+    "hiệu suất",        # Vietnamese: efficiency / performance (covers "hiệu suất phát điện")
+    "phát điện",        # Vietnamese: power generation / electricity output
+    "sản xuất điện",    # Vietnamese: electricity production
     "energy", "năng lượng", "sản lượng",
     "temperature", "nhiệt độ",
     "aqi", "air quality", "chất lượng không khí",
     "cloud", "mây", "bức xạ", "radiation",
-    "humidity", "độ ẩm", "wind", "gió",
+    "humidity", "độ ẩm",
+    "wind", "gió", "tốc độ gió",   # covers "tốc độ và hướng gió"
 )
+
+
+_TOP_N_PATTERN = re.compile(
+    r"top\s*(\d+)"                  # "top 5", "top5"
+    r"|bottom\s*(\d+)"              # "bottom 3"
+    r"|(\d+)\s*(?:trạm|cơ sở|facility|facilities|nhà máy|stations?)"  # "5 trạm"
+    r"|(?:trạm|facility|facilities|nhà máy)\s*(?:top\s*)?(\d+)",       # "facility top 5"
+    re.IGNORECASE,
+)
+
+
+def _extract_top_n_from_query(text: str) -> int | None:
+    """Return the N from 'top N', 'bottom N', 'N trạm' patterns, or None."""
+    m = _TOP_N_PATTERN.search(str(text or ""))
+    if not m:
+        return None
+    for g in m.groups():
+        if g is not None:
+            try:
+                return max(1, int(g))
+            except ValueError:
+                pass
+    return None
 
 
 def _is_correlation_query(text: str) -> bool:
@@ -63,6 +91,31 @@ def _is_correlation_query(text: str) -> bool:
         return False
     metric_hits = sum(1 for k in _METRIC_KEYWORDS if k in t)
     return metric_hits >= 2  # at least two metrics named → correlation
+
+
+def _infer_correlation_table(text: str) -> str:
+    """Pick the gold KPI mart table most suited for a correlation query.
+
+    Routing rules (checked in order):
+    - AQI / air quality       → aqi_impact    (mart_aqi_impact_daily)
+    - Wind speed / humidity   → weather_impact (mart_weather_impact_daily)
+      mart_energy_daily has NO avg_wind_speed_ms or avg_humidity_pct — only the
+      weather_impact mart carries these alongside avg_capacity_factor_pct.
+    - Cloud / temperature / radiation vs PR → energy (mart_energy_daily)
+      has performance_ratio_pct + avg_cloud_cover_pct + avg_temperature_c.
+    """
+    t = str(text or "").lower()
+    if any(k in t for k in (
+        "aqi", "air quality", "chất lượng không khí", "không khí",
+        "pm2.5", "pm10", "bụi mịn",
+    )):
+        return "aqi_impact"
+    if any(k in t for k in (
+        "wind", "gió", "tốc độ gió", "hướng gió",
+        "humidity", "độ ẩm",
+    )):
+        return "weather_impact"
+    return "energy"
 
 
 class ToolExecutor:
@@ -174,19 +227,34 @@ class ToolExecutor:
             _is_correlation_query(self._current_user_query)
             and function_name not in ("query_gold_kpi",)
         ):
+            function_name = "query_gold_kpi"
+            _corr_table = _infer_correlation_table(self._current_user_query)
+            arguments = {"table_name": _corr_table, "limit": 100}
             logger.warning(
-                "tool_routing_rerouted original_tool=%s -> query_gold_kpi('energy') "
+                "tool_routing_rerouted original_tool=%s -> query_gold_kpi('%s') "
                 "reason=correlation_query user_query=%r original_args=%s",
                 function_name,
+                _corr_table,
                 self._current_user_query[:200],
                 self._short(arguments, 200),
             )
-            function_name = "query_gold_kpi"
-            arguments = {"table_name": "energy", "limit": 100}
             handler = topic_handlers.get(function_name)
             # Re-validate permission under the rerouted tool name — the user
             # may have had access to the original tool but not to query_gold_kpi.
             self._validate_permission(function_name, role)
+
+        # Safety net: inject `limit` for get_energy_performance when the user
+        # says "top N" but the LLM forgot to pass limit in the tool call.
+        if function_name == "get_energy_performance" and not arguments.get("limit"):
+            inferred = _extract_top_n_from_query(self._current_user_query)
+            if inferred is not None:
+                arguments = {**arguments, "limit": inferred}
+                logger.info(
+                    "tool_limit_injected tool=get_energy_performance limit=%d "
+                    "reason=llm_omitted_limit user_query=%r",
+                    inferred,
+                    self._current_user_query[:200],
+                )
 
         # Safety net: block `get_station_daily_report` when the LLM requests
         # performance_ratio (the tool doesn't return PR and the chart comes
@@ -217,20 +285,34 @@ class ToolExecutor:
         # generated and the answer ends up hand-wavy.
         if function_name == "search_documents":
             q = str(arguments.get("query") or "").lower()
+            # Also check original user query — LLM sometimes passes a reworded
+            # search string that drops the correlation keyword.
+            user_q = self._current_user_query.lower()
             correlation_terms = (
                 "mối liên hệ", "tương quan", "correlation",
                 " vs ", " vs.", "versus",
                 "so sánh", "compare",
                 "top", "ranking", "ranked",
                 "cao nhất", "thấp nhất", "highest", "lowest",
+                "ảnh hưởng", "affects", "affect", "how does", "how do",
             )
             metric_terms = (
                 "performance ratio", "performance_ratio",
                 "capacity factor", "capacity_factor",
-                "energy_mwh", "mwh",
+                "hiệu suất",    # Vietnamese for efficiency/performance
+                "phát điện",    # power generation
+                "energy_mwh", "mwh", "năng lượng",
+                "wind", "gió", "tốc độ gió",
+                "temperature", "nhiệt độ",
+                "cloud", "mây", "humidity", "độ ẩm",
+                "aqi", "radiation", "bức xạ",
                 "trạm nào",
             )
-            if any(t in q for t in correlation_terms) and any(t in q for t in metric_terms):
+            if (
+                any(t in q for t in correlation_terms) or any(t in user_q for t in correlation_terms)
+            ) and (
+                any(t in q for t in metric_terms) or any(t in user_q for t in metric_terms)
+            ):
                 logger.warning(
                     "tool_routing_block tool=search_documents "
                     "reason=correlation_or_ranking_of_metrics query=%r",

@@ -37,7 +37,7 @@
 
     var plotDiv = document.createElement("div");
     plotDiv.className = "solar-chart-plot";
-    plotDiv.style.minHeight = "320px";
+    plotDiv.style.minHeight = payload.chart_type === "scatter_geo" ? "400px" : "320px";
     container.appendChild(plotDiv);
 
     if (!global.Plotly) {
@@ -51,12 +51,13 @@
     // Our wrapper already renders the title, so drop Plotly's duplicate.
     var cleanLayout = Object.assign({}, baseLayout);
     delete cleanLayout.title;
+    var isGeo = payload.chart_type === "scatter_geo";
     var layout = Object.assign(
       {
         autosize: true,
-        hovermode: "x unified",
-        height: 340,
-        margin: { l: 52, r: 18, t: 14, b: 48 },
+        hovermode: isGeo ? "closest" : "x unified",
+        height: isGeo ? 420 : 340,
+        margin: isGeo ? { l: 0, r: 0, t: 10, b: 0 } : { l: 52, r: 18, t: 14, b: 48 },
         legend: { orientation: "h", y: -0.22, x: 0, xanchor: "left", font: { size: 11 } },
         font: { size: 11 }
       },

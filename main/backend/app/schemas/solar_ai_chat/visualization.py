@@ -42,7 +42,7 @@ class ChartPayload(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
 
-    chart_type: Literal["line", "bar", "pie", "scatter", "histogram", "area"]
+    chart_type: Literal["line", "bar", "pie", "scatter", "histogram", "area", "scatter_geo"]
     title: str
     description: str | None = None
     plotly_spec: dict[str, Any] = Field(
