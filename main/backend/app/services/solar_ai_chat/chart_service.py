@@ -39,6 +39,46 @@ _LABELS: dict[str, tuple[str, str | None, ColumnType]] = {
     "facility_name": ("Facility", None, "string"),
     "facility_id": ("Facility ID", None, "string"),
     "station": ("Station", None, "string"),
+    "latitude": ("Latitude", "°", "number"),
+    "longitude": ("Longitude", "°", "number"),
+    "capacity_mw": ("Capacity", "MW", "number"),
+    "quality_score": ("Quality", None, "number"),
+    "percent_complete": ("Complete", "%", "number"),
+    "expected_mwh": ("Expected", "MWh", "number"),
+    "confidence_low": ("Lower bound", "MWh", "number"),
+    "confidence_high": ("Upper bound", "MWh", "number"),
+    # weather_impact / mart_weather_impact_daily columns (long + short names)
+    "avg_temperature_c": ("Avg Temperature", "°C", "number"),
+    "avg_temperature": ("Avg Temperature", "°C", "number"),
+    "avg_humidity": ("Avg Humidity", "%", "number"),
+    "avg_wind_speed_ms": ("Avg Wind Speed", "m/s", "number"),
+    "avg_wind_speed": ("Avg Wind Speed", "m/s", "number"),
+    "avg_cloud_cover": ("Avg Cloud Cover", "%", "number"),
+    "avg_shortwave_radiation": ("Avg Shortwave Rad", "W/m²", "number"),
+    "avg_shortwave_rad": ("Avg Shortwave Rad", "W/m²", "number"),
+    "avg_direct_normal_irradiance": ("Avg DNI", "W/m²", "number"),
+    "avg_dni": ("Avg DNI", "W/m²", "number"),
+    "avg_diffuse_radiation": ("Avg Diffuse Rad", "W/m²", "number"),
+    "avg_diffuse_rad": ("Avg Diffuse Rad", "W/m²", "number"),
+    "avg_energy_mwh_per_hour": ("Avg Energy", "MWh/h", "number"),
+    "avg_energy": ("Avg Energy", "MWh/h", "number"),
+    "total_energy": ("Total Energy", "MWh", "number"),
+    "avg_capacity_factor": ("Avg Capacity Factor", "%", "number"),
+    "avg_capacity_factor_pct": ("Avg Capacity Factor", "%", "number"),
+    "total_precipitation_mm": ("Total Precip", "mm", "number"),
+    "total_precip": ("Total Precip", "mm", "number"),
+    "radiation_to_energy_ratio": ("Rad/Energy Ratio (PR proxy)", None, "number"),
+    "rad_energy_ratio": ("Rad/Energy Ratio (PR proxy)", None, "number"),
+    "clear_sky_energy_loss": ("Clear Sky Loss", "MWh", "number"),
+    # mart_energy_daily columns (has real PR + temperature — authoritative
+    # source for "PR vs temperature" correlations)
+    "performance_ratio_pct": ("Performance Ratio", "%", "number"),
+    "weighted_capacity_factor_pct": ("Weighted Cap Factor", "%", "number"),
+    "energy_mwh_daily": ("Daily Energy", "MWh", "number"),
+    "avg_cloud_cover_pct": ("Avg Cloud Cover", "%", "number"),
+    "max_temperature_c": ("Max Temperature", "°C", "number"),
+    "min_temperature_c": ("Min Temperature", "°C", "number"),
+    "daily_insolation_kwh_m2": ("Daily Insolation", "kWh/m²", "number"),
     "hour": ("Hour", "h", "number"),
     "hr": ("Hour", "h", "number"),
     "date": ("Date", None, "date"),
@@ -49,8 +89,9 @@ _LABELS: dict[str, tuple[str, str | None, ColumnType]] = {
     "energy_mwh": ("Energy", "MWh", "number"),
     "energy_total_mwh": ("Total Energy", "MWh", "number"),
     "capacity_factor_pct": ("Capacity Factor", "%", "number"),
-    "pr_ratio_pct": ("PR Ratio", "%", "number"),
-    "performance_ratio_pct": ("PR Ratio", "%", "number"),
+    "pr_ratio_pct": ("Performance Ratio", "%", "number"),
+    # Note: canonical `performance_ratio_pct` label is defined near the top of
+    # this dict; intentionally not duplicated here.
     "shortwave_radiation": ("Shortwave Radiation", "W/m2", "number"),
     "temperature_2m": ("Temperature", "C", "number"),
     "wind_speed_10m": ("Wind Speed", "m/s", "number"),
@@ -90,8 +131,111 @@ _SCALAR_PRIORITY = [
     "fallback_rate",
 ]
 
-_TIME_COLUMNS = {"hour", "hr", "date", "date_hour", "timestamp", "report_date", "reading_date", "ts"}
-_CATEGORY_COLUMNS = {"facility", "facility_name", "station", "facility_id", "category", "label", "name"}
+_TIME_COLUMNS = {
+    "hour", "hr",
+    "date", "date_hour", "timestamp", "ts",
+    "report_date", "reading_date",
+    "energy_date", "forecast_date", "weather_date", "event_date",
+}
+
+# Columns that are operational / metadata noise — they're numeric but the user
+# almost never wants them plotted. Keep them in the table, drop from chart.
+_METADATA_NUMERIC_KEYS = {
+    "batch_id",
+    "observation_hours",
+    "daytime_observation_hours",
+    "row_count",  # row_count is a scalar KPI, not a chart series
+    "station_count",
+    "facility_count",
+    "window_days",
+    "eta_minutes",
+    "uncertainty_factor",
+    "confidence_low",
+    "confidence_high",
+    "id",
+}
+_METADATA_STRING_KEYS = {
+    "batch_id",
+    "created_at",
+    "updated_at",
+    "weather_condition_description",
+    "region",
+    "state",
+    "cloud_band",
+    "temperature_band",
+    "rain_band",
+    "weather_date",  # already covered by _TIME_COLUMNS but include defensively
+    "dominant_aqi_category",
+    "dominant_weather_condition",
+}
+
+# Operational / audit / duplicate columns that clutter the table but rarely
+# answer the user's actual question.
+_NOISY_TABLE_KEYS = {
+    # audit / quality metadata
+    "completeness_pct_daily",
+    "good_quality_row",
+    "warning_quality_row",
+    "bad_quality_row",
+    "quality_flag",
+    # rank metadata
+    "facility_rank_by_energy",
+    "facility_rank_by_cf",
+    "facility_rank",
+    # duplicated/derived energy columns
+    "energy_kwh_daily",
+    "specific_yield_kwh_per_kwp",
+    # infrastructure columns
+    "rated_capacity_mw",
+    # peak/secondary stats (user usually wants avg)
+    "peak_capacity_factor",
+    "peak_production_hour_utc",
+    "peak_production_hour_local",
+    "max_temperature",
+    "max_temperature_c",
+    "min_temperature_c",
+    "daytime_hours_above_threshold",
+    "zero_daytime_hours",
+    "night_energy_events",
+    # duplicate precipitation
+    "avg_precipitation_mm",
+}
+
+_HIDDEN_TABLE_KEYS = _METADATA_NUMERIC_KEYS | _METADATA_STRING_KEYS | _NOISY_TABLE_KEYS
+# Ordered list: earlier entries are preferred as the chart's X-axis category.
+# Human-readable names (facility, facility_name, station) must come BEFORE
+# opaque codes (facility_id) so charts display "Emerald" instead of "EMERASF".
+_CATEGORY_COLUMNS_PRIORITY = [
+    "facility",
+    "facility_name",
+    "station",
+    "station_name",
+    "category",
+    "label",
+    "name",
+    "stage",
+    "facility_id",  # fallback code
+]
+_CATEGORY_COLUMNS = set(_CATEGORY_COLUMNS_PRIORITY)
+
+# Chart rendering limits (inspired by Vanna's Plotly chart_generator).
+_MAX_BAR_CATEGORIES = 15        # top-N truncation for bar charts
+_MAX_LINE_SERIES = 5            # cap multi-series line charts
+_HORIZONTAL_LABEL_LEN = 14      # rotate to horizontal bar when labels are long
+_HORIZONTAL_CAT_COUNT = 8       # or when too many categories
+_HISTOGRAM_MIN_ROWS = 12        # need enough data points to be meaningful
+
+# Brand palette — PV Lakehouse green/blue/solar.
+_COLOR_PALETTE = [
+    "#1a8a5a",  # green
+    "#1b6ca8",  # blue
+    "#f4b942",  # solar
+    "#e07b39",  # orange
+    "#7f57c5",  # purple
+    "#2bb3c0",  # teal
+    "#c0392b",  # red
+    "#5a7684",  # slate
+]
 
 
 def _humanize(key: str) -> str:
@@ -176,6 +320,10 @@ def _build_data_table(
     title_hint: str | None = None,
 ) -> DataTablePayload:
     columns = _build_columns(rows)
+    # Drop operational/metadata columns from the user-facing table (batch_id,
+    # created_at, weather_condition_description, region, etc.). The full
+    # record is still available in the raw tool output if needed.
+    columns = [c for c in columns if c.key not in _HIDDEN_TABLE_KEYS]
     title = title_hint or _humanize(metric_key)
     sanitized_rows = [
         {col.key: _coerce_scalar(row.get(col.key)) for col in columns}
@@ -197,10 +345,13 @@ def _detect_time_column(columns: list[DataTableColumn]) -> DataTableColumn | Non
 
 
 def _detect_category_column(columns: list[DataTableColumn]) -> DataTableColumn | None:
-    for col in columns:
-        if col.key in _CATEGORY_COLUMNS:
-            return col
-    # fallback: first non-numeric column
+    # Walk the priority list so "facility" (human-readable name) wins over
+    # "facility_id" (opaque code) when both are present in the row.
+    by_key = {col.key: col for col in columns}
+    for key in _CATEGORY_COLUMNS_PRIORITY:
+        if key in by_key:
+            return by_key[key]
+    # Fallback: first non-numeric column in the original order.
     for col in columns:
         if col.type == "string":
             return col
@@ -208,7 +359,11 @@ def _detect_category_column(columns: list[DataTableColumn]) -> DataTableColumn |
 
 
 def _detect_numeric_columns(columns: list[DataTableColumn]) -> list[DataTableColumn]:
-    return [c for c in columns if c.type in ("number", "integer")]
+    """Return numeric columns suitable for charting (metadata filtered out)."""
+    return [
+        c for c in columns
+        if c.type in ("number", "integer") and c.key not in _METADATA_NUMERIC_KEYS
+    ]
 
 
 def _sorted_by(rows: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -241,6 +396,26 @@ def _has_text_heavy_column(rows: list[dict[str, Any]], columns: list[DataTableCo
     return False
 
 
+def _axis_title(col: DataTableColumn) -> str:
+    return f"{col.label} ({col.unit})" if col.unit else col.label
+
+
+def _base_layout(title: str, *, bottom_margin: int = 50) -> dict[str, Any]:
+    return {
+        "title": title,
+        "margin": {"l": 50, "r": 20, "t": 40, "b": bottom_margin},
+        "colorway": list(_COLOR_PALETTE),
+        "plot_bgcolor": "#ffffff",
+        "paper_bgcolor": "#ffffff",
+    }
+
+
+def _needs_horizontal_bar(categories: list[str]) -> bool:
+    if len(categories) > _HORIZONTAL_CAT_COUNT:
+        return True
+    return any(len(c) > _HORIZONTAL_LABEL_LEN for c in categories)
+
+
 def _build_chart(
     metric_key: str,
     rows: list[dict[str, Any]],
@@ -249,90 +424,378 @@ def _build_chart(
     if not rows or not columns:
         return None
 
-    numeric_cols = _detect_numeric_columns(columns)
-    if not numeric_cols:
-        return None
-
     if _has_text_heavy_column(rows, columns):
         return None
 
+    numeric_cols = _detect_numeric_columns(columns)
     time_col = _detect_time_column(columns)
     cat_col = _detect_category_column(columns)
 
-    # Line chart: time series (possibly multi-series by category)
-    if time_col is not None:
-        y_col = next((c for c in numeric_cols if c.key != time_col.key), None)
-        if y_col is None:
-            return None
-        title = f"{y_col.label} over {time_col.label}"
-        if cat_col is not None and cat_col.key != time_col.key:
-            categories: dict[str, list[dict[str, Any]]] = {}
-            for row in rows:
-                key = str(row.get(cat_col.key, "all"))
-                categories.setdefault(key, []).append(row)
-            traces = []
-            for cat_name, cat_rows in categories.items():
-                cat_rows = _sorted_by(cat_rows, time_col.key)
-                traces.append({
-                    "x": [_coerce_scalar(r.get(time_col.key)) for r in cat_rows],
-                    "y": [r.get(y_col.key) for r in cat_rows],
-                    "type": "scatter",
-                    "mode": "lines+markers",
-                    "name": cat_name,
-                })
-        else:
-            sorted_rows = _sorted_by(rows, time_col.key)
-            traces = [{
-                "x": [_coerce_scalar(r.get(time_col.key)) for r in sorted_rows],
-                "y": [r.get(y_col.key) for r in sorted_rows],
-                "type": "scatter",
-                "mode": "lines+markers",
-                "name": y_col.label,
-            }]
-        layout = {
-            "title": title,
-            "xaxis": {"title": time_col.label},
-            "yaxis": {"title": f"{y_col.label}{f' ({y_col.unit})' if y_col.unit else ''}"},
-            "margin": {"l": 50, "r": 20, "t": 40, "b": 50},
-        }
-        return ChartPayload(
-            chart_type="line",
-            title=title,
-            plotly_spec={"data": traces, "layout": layout},
-            source_metric_key=metric_key,
-        )
+    # --- Correlation scatter (highest priority) -----------------------------
+    # Check BEFORE time-series so that weather-impact data that happens to
+    # include an `energy_date` column still renders as a per-facility X-Y
+    # scatter rather than a time-series line per facility.
+    if cat_col is not None and numeric_cols:
+        candidate_y = [c for c in numeric_cols if c.key != cat_col.key]
+        correlation = _detect_correlation_axes(candidate_y)
+        if correlation is not None:
+            x_col, y_col = correlation
+            return _build_correlation_scatter(metric_key, rows, cat_col, x_col, y_col)
 
-    # Bar chart: categorical vs numeric
+    # --- Time series: datetime + ≥1 numeric ---------------------------------
+    if time_col is not None and numeric_cols:
+        return _build_timeseries_chart(metric_key, rows, time_col, cat_col, numeric_cols)
+
+    if not numeric_cols:
+        return None
+
+    # --- Bar: 1 categorical + 1+ numeric -----------------------------------
     if cat_col is not None:
-        y_col = next((c for c in numeric_cols if c.key != cat_col.key), None)
-        if y_col is None:
+        y_cols = [c for c in numeric_cols if c.key != cat_col.key]
+        if not y_cols:
             return None
-        sorted_rows = sorted(
-            rows,
-            key=lambda r: (r.get(y_col.key) if _is_numeric(r.get(y_col.key)) else float("-inf")),
-            reverse=True,
-        )
-        title = f"{y_col.label} by {cat_col.label}"
-        traces = [{
-            "x": [str(r.get(cat_col.key, "")) for r in sorted_rows],
-            "y": [r.get(y_col.key) for r in sorted_rows],
-            "type": "bar",
-            "name": y_col.label,
-        }]
-        layout = {
-            "title": title,
-            "xaxis": {"title": cat_col.label},
-            "yaxis": {"title": f"{y_col.label}{f' ({y_col.unit})' if y_col.unit else ''}"},
-            "margin": {"l": 50, "r": 20, "t": 40, "b": 80},
-        }
-        return ChartPayload(
-            chart_type="bar",
-            title=title,
-            plotly_spec={"data": traces, "layout": layout},
-            source_metric_key=metric_key,
-        )
+        if len(y_cols) >= 2:
+            return _build_grouped_bar_chart(metric_key, rows, cat_col, y_cols[:3])
+        return _build_bar_chart(metric_key, rows, cat_col, y_cols[0])
+
+    # --- Scatter: exactly 2 numeric (no cat / no time) ---------------------
+    if len(numeric_cols) >= 2:
+        return _build_scatter_chart(metric_key, rows, numeric_cols[0], numeric_cols[1])
+
+    # --- Histogram: 1 numeric only -----------------------------------------
+    if len(numeric_cols) == 1 and len(rows) >= _HISTOGRAM_MIN_ROWS:
+        return _build_histogram_chart(metric_key, rows, numeric_cols[0])
 
     return None
+
+
+def _build_timeseries_chart(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    time_col: DataTableColumn,
+    cat_col: DataTableColumn | None,
+    numeric_cols: list[DataTableColumn],
+) -> ChartPayload | None:
+    y_col = next((c for c in numeric_cols if c.key != time_col.key), None)
+    if y_col is None:
+        return None
+    title = f"{y_col.label} over {time_col.label}"
+
+    if cat_col is not None and cat_col.key != time_col.key:
+        categories: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            key = str(row.get(cat_col.key, "all"))
+            categories.setdefault(key, []).append(row)
+        # Cap to top N series by total y-value (Vanna caps at 5).
+        if len(categories) > _MAX_LINE_SERIES:
+            ranked = sorted(
+                categories.items(),
+                key=lambda kv: sum(r.get(y_col.key) or 0 for r in kv[1] if _is_numeric(r.get(y_col.key))),
+                reverse=True,
+            )[: _MAX_LINE_SERIES]
+            categories = dict(ranked)
+        traces = []
+        for cat_name, cat_rows in categories.items():
+            cat_rows = _sorted_by(cat_rows, time_col.key)
+            traces.append({
+                "x": [_coerce_scalar(r.get(time_col.key)) for r in cat_rows],
+                "y": [r.get(y_col.key) for r in cat_rows],
+                "type": "scatter",
+                "mode": "lines+markers",
+                "name": cat_name,
+            })
+    else:
+        sorted_rows = _sorted_by(rows, time_col.key)
+        traces = [{
+            "x": [_coerce_scalar(r.get(time_col.key)) for r in sorted_rows],
+            "y": [r.get(y_col.key) for r in sorted_rows],
+            "type": "scatter",
+            "mode": "lines+markers",
+            "name": y_col.label,
+        }]
+
+    layout = _base_layout(title)
+    layout["xaxis"] = {"title": time_col.label}
+    layout["yaxis"] = {"title": _axis_title(y_col)}
+    return ChartPayload(
+        chart_type="line",
+        title=title,
+        plotly_spec={"data": traces, "layout": layout},
+        source_metric_key=metric_key,
+    )
+
+
+def _build_bar_chart(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    cat_col: DataTableColumn,
+    y_col: DataTableColumn,
+) -> ChartPayload:
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (r.get(y_col.key) if _is_numeric(r.get(y_col.key)) else float("-inf")),
+        reverse=True,
+    )
+    truncated = sorted_rows[:_MAX_BAR_CATEGORIES]
+    categories = [str(r.get(cat_col.key, "")) for r in truncated]
+    values = [r.get(y_col.key) for r in truncated]
+    horizontal = _needs_horizontal_bar(categories)
+
+    title = f"{y_col.label} by {cat_col.label}"
+    if len(sorted_rows) > _MAX_BAR_CATEGORIES:
+        title = f"Top {_MAX_BAR_CATEGORIES} — {title}"
+
+    if horizontal:
+        # Reverse so the largest sits at the top of a horizontal bar.
+        categories = list(reversed(categories))
+        values = list(reversed(values))
+        trace = {
+            "y": categories,
+            "x": values,
+            "type": "bar",
+            "orientation": "h",
+            "name": y_col.label,
+        }
+        layout = _base_layout(title, bottom_margin=50)
+        layout["xaxis"] = {"title": _axis_title(y_col)}
+        layout["yaxis"] = {"title": cat_col.label, "automargin": True}
+    else:
+        trace = {
+            "x": categories,
+            "y": values,
+            "type": "bar",
+            "name": y_col.label,
+        }
+        layout = _base_layout(title, bottom_margin=80)
+        layout["xaxis"] = {"title": cat_col.label}
+        layout["yaxis"] = {"title": _axis_title(y_col)}
+
+    return ChartPayload(
+        chart_type="bar",
+        title=title,
+        plotly_spec={"data": [trace], "layout": layout},
+        source_metric_key=metric_key,
+    )
+
+
+def _build_grouped_bar_chart(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    cat_col: DataTableColumn,
+    y_cols: list[DataTableColumn],
+) -> ChartPayload:
+    # Only plot numeric columns that share the same unit as the primary.
+    # Mixed-unit grouped bars (MWh + %) are visually misleading and Plotly's
+    # dual-axis + barmode:group has well-known rendering quirks. The table
+    # payload still carries every column for the user.
+    primary = y_cols[0]
+    primary_unit = primary.unit
+    rendered_cols = [c for c in y_cols if c.unit == primary_unit]
+
+    # If only one column ends up comparable, fall back to single bar chart.
+    if len(rendered_cols) == 1:
+        return _build_bar_chart(metric_key, rows, cat_col, rendered_cols[0])
+
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (r.get(primary.key) if _is_numeric(r.get(primary.key)) else float("-inf")),
+        reverse=True,
+    )[:_MAX_BAR_CATEGORIES]
+    categories = [str(r.get(cat_col.key, "")) for r in sorted_rows]
+
+    traces = [
+        {
+            "x": categories,
+            "y": [r.get(col.key) for r in sorted_rows],
+            "type": "bar",
+            "name": _axis_title(col),
+        }
+        for col in rendered_cols
+    ]
+
+    labels = " & ".join(c.label for c in rendered_cols)
+    title = f"{labels} by {cat_col.label}"
+    layout = _base_layout(title, bottom_margin=80)
+    layout["xaxis"] = {"title": cat_col.label}
+    layout["yaxis"] = {"title": primary_unit or primary.label}
+    layout["barmode"] = "group"
+    layout["legend"] = {"orientation": "h", "y": -0.25}
+
+    return ChartPayload(
+        chart_type="bar",
+        title=title,
+        plotly_spec={"data": traces, "layout": layout},
+        source_metric_key=metric_key,
+    )
+
+
+# Keyword patterns for correlation axis detection. Order within each tuple
+# is priority: first-match wins. Kept as substrings so we match both
+# `avg_temperature_c` and `avg_temperature`, both `avg_capacity_factor` and
+# `capacity_factor_pct`, etc. — DB schema naming drifts over time.
+_CORRELATION_X_PATTERNS = (
+    "temperature", "humidity", "cloud_cover", "cloud",
+    "shortwave", "radiation", "irradiance",
+    "wind_speed", "wind",
+    "aqi", "pm2_5", "pm10",
+    "precipitation",
+)
+# Performance-like Y columns take precedence over raw-energy ones because a
+# correlation question is usually about efficiency, not absolute output.
+_CORRELATION_Y_PATTERNS = (
+    "performance_ratio", "pr_ratio", "pr_pct",
+    # rad/energy ratio is the closest proxy for PR available in our weather
+    # mart; prefer it over capacity factor because the user usually asks PR.
+    "radiation_to_energy", "rad_energy_ratio", "rad_to_energy",
+    "capacity_factor",
+    "energy_per_hour", "mwh_per_hour",
+    "total_energy", "energy_mwh", "avg_energy", "energy",
+)
+
+
+def _find_by_pattern(
+    cols: list[DataTableColumn], patterns: tuple[str, ...]
+) -> DataTableColumn | None:
+    """Return first column whose key contains any pattern, in pattern order."""
+    for pat in patterns:
+        for c in cols:
+            if pat in c.key.lower():
+                return c
+    return None
+
+
+def _detect_correlation_axes(
+    y_cols: list[DataTableColumn],
+) -> tuple[DataTableColumn, DataTableColumn] | None:
+    """If the numeric columns include a weather-like X and a performance Y,
+    return (x_col, y_col) for a scatter plot. Otherwise None.
+    """
+    x_col = _find_by_pattern(y_cols, _CORRELATION_X_PATTERNS)
+    if x_col is None:
+        return None
+    y_cols_minus_x = [c for c in y_cols if c.key != x_col.key]
+    y_col = _find_by_pattern(y_cols_minus_x, _CORRELATION_Y_PATTERNS)
+    if y_col is None:
+        return None
+    return x_col, y_col
+
+
+def _aggregate_by_category(
+    rows: list[dict[str, Any]],
+    cat_key: str,
+    value_keys: list[str],
+) -> list[dict[str, Any]]:
+    """Group rows by category key and return one row per group with MEAN of
+    numeric values. Used to collapse multi-row-per-facility correlation data
+    into one point per facility for the scatter plot.
+    """
+    buckets: dict[str, dict[str, list[float]]] = {}
+    for r in rows:
+        key = str(r.get(cat_key) or "")
+        if not key:
+            continue
+        slot = buckets.setdefault(key, {k: [] for k in value_keys})
+        for vk in value_keys:
+            v = r.get(vk)
+            if _is_numeric(v):
+                slot[vk].append(float(v))
+    out: list[dict[str, Any]] = []
+    for cat, values in buckets.items():
+        agg: dict[str, Any] = {cat_key: cat}
+        for vk, vs in values.items():
+            if vs:
+                agg[vk] = sum(vs) / len(vs)
+        out.append(agg)
+    return out
+
+
+def _build_correlation_scatter(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    cat_col: DataTableColumn,
+    x_col: DataTableColumn,
+    y_col: DataTableColumn,
+) -> ChartPayload:
+    """Scatter plot where each category (facility) is one marker labelled by
+    its name. Multi-row-per-facility inputs are averaged.
+    """
+    aggregated = _aggregate_by_category(
+        rows, cat_col.key, [x_col.key, y_col.key]
+    )
+    # Filter points with valid x AND y.
+    points = [r for r in aggregated if _is_numeric(r.get(x_col.key)) and _is_numeric(r.get(y_col.key))]
+
+    title = f"{y_col.label} vs {x_col.label}"
+    trace = {
+        "x": [r[x_col.key] for r in points],
+        "y": [r[y_col.key] for r in points],
+        "text": [r[cat_col.key] for r in points],
+        "mode": "markers+text",
+        "type": "scatter",
+        "name": title,
+        "textposition": "top center",
+        "marker": {"size": 12, "opacity": 0.85},
+    }
+    layout = _base_layout(title)
+    layout["xaxis"] = {"title": _axis_title(x_col)}
+    layout["yaxis"] = {"title": _axis_title(y_col)}
+    return ChartPayload(
+        chart_type="scatter",
+        title=title,
+        plotly_spec={"data": [trace], "layout": layout},
+        source_metric_key=metric_key,
+    )
+
+
+def _build_scatter_chart(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    x_col: DataTableColumn,
+    y_col: DataTableColumn,
+) -> ChartPayload:
+    title = f"{y_col.label} vs {x_col.label}"
+    trace = {
+        "x": [r.get(x_col.key) for r in rows],
+        "y": [r.get(y_col.key) for r in rows],
+        "type": "scatter",
+        "mode": "markers",
+        "name": title,
+        "marker": {"size": 8, "opacity": 0.75},
+    }
+    layout = _base_layout(title)
+    layout["xaxis"] = {"title": _axis_title(x_col)}
+    layout["yaxis"] = {"title": _axis_title(y_col)}
+    return ChartPayload(
+        chart_type="scatter",
+        title=title,
+        plotly_spec={"data": [trace], "layout": layout},
+        source_metric_key=metric_key,
+    )
+
+
+def _build_histogram_chart(
+    metric_key: str,
+    rows: list[dict[str, Any]],
+    y_col: DataTableColumn,
+) -> ChartPayload:
+    title = f"Distribution of {y_col.label}"
+    values = [r.get(y_col.key) for r in rows if _is_numeric(r.get(y_col.key))]
+    trace = {
+        "x": values,
+        "type": "histogram",
+        "name": y_col.label,
+        "marker": {"color": _COLOR_PALETTE[0]},
+    }
+    layout = _base_layout(title)
+    layout["xaxis"] = {"title": _axis_title(y_col)}
+    layout["yaxis"] = {"title": "Count"}
+    layout["bargap"] = 0.05
+    return ChartPayload(
+        chart_type="histogram",
+        title=title,
+        plotly_spec={"data": [trace], "layout": layout},
+        source_metric_key=metric_key,
+    )
 
 
 def _format_for_kpi(key: str, value: Any) -> KpiCard | None:
@@ -409,9 +872,14 @@ class ChartSpecBuilder:
         if candidate is not None:
             metric_key, rows = candidate
             try:
-                title_hint = _title_for_topic(topic, metric_key)
+                title_hint = _title_for_topic(topic, metric_key, rows)
                 table = _build_data_table(metric_key, rows, title_hint=title_hint)
                 chart = _build_chart(metric_key, rows, table.columns)
+                # When the chart is a correlation scatter (PR vs temperature,
+                # etc.), project the table to just the columns that answer the
+                # question: facility + date + X + Y. Everything else is noise.
+                if chart is not None and chart.chart_type == "scatter" and table is not None:
+                    table = _project_table_for_scatter(table, rows, chart)
             except Exception as exc:
                 logger.warning("chart_spec_build_failed key=%s error=%s", metric_key, exc)
                 table = None
@@ -421,7 +889,102 @@ class ChartSpecBuilder:
         return table, chart, kpi
 
 
-def _title_for_topic(topic: str | None, metric_key: str) -> str:
+def _project_table_for_scatter(
+    table: DataTablePayload,
+    rows: list[dict[str, Any]],
+    chart: ChartPayload,
+) -> DataTablePayload:
+    """Keep only facility/date + the scatter's X/Y axis columns in the table."""
+    layout = chart.plotly_spec.get("layout") or {}
+    x_title = (layout.get("xaxis") or {}).get("title") or ""
+    y_title = (layout.get("yaxis") or {}).get("title") or ""
+
+    def _key_from_title(title: str) -> str | None:
+        # Strip unit suffix like " (°C)" to get the bare label.
+        bare = re.sub(r"\s*\(.*?\)\s*$", "", str(title)).strip()
+        for col in table.columns:
+            if col.label == bare:
+                return col.key
+        return None
+
+    x_key = _key_from_title(x_title)
+    y_key = _key_from_title(y_title)
+    if not x_key or not y_key:
+        return table
+
+    keep_keys: set[str] = {x_key, y_key}
+    # Keep the category and any date column for context.
+    for col in table.columns:
+        if col.key in _FACILITY_LIKE_KEYS or col.key in _TIME_COLUMNS:
+            keep_keys.add(col.key)
+
+    projected_cols = [c for c in table.columns if c.key in keep_keys]
+    projected_rows = [
+        {k: row.get(k) for k in keep_keys if k in row}
+        for row in table.rows
+    ]
+    return DataTablePayload(
+        title=table.title,
+        columns=projected_cols,
+        rows=projected_rows,
+        row_count=len(projected_rows),
+    )
+
+
+_FACILITY_LIKE_KEYS = {"facility", "facility_id", "facility_name", "station", "station_name"}
+_TIME_LIKE_KEYS = {"hour", "hr", "date", "date_hour", "timestamp", "report_date", "reading_date", "ts"}
+
+
+def _title_for_topic(
+    topic: str | None,
+    metric_key: str,
+    rows: list[dict[str, Any]] | None = None,
+) -> str:
+    """Derive a table title by inspecting the actual data shape.
+
+    Precedence:
+      1. Time-series with facility+metric → "Hourly/Daily X over time".
+      2. Per-facility breakdown with recognisable metrics → content-aware.
+      3. Known topic → topic title.
+      4. Fallback → humanised metric_key.
+    """
+    sample_keys: set[str] = set()
+    if rows:
+        for row in rows[:5]:
+            if isinstance(row, dict):
+                sample_keys.update(row.keys())
+
+    has_facility_col = bool(sample_keys & _FACILITY_LIKE_KEYS)
+    has_time_col = bool(sample_keys & _TIME_LIKE_KEYS)
+    has_energy = "energy_mwh" in sample_keys
+    has_capacity = "capacity_factor_pct" in sample_keys
+    has_actual_forecast = "actual_mwh" in sample_keys and "forecast_mwh" in sample_keys
+    has_perf_ratio = "performance_ratio_pct" in sample_keys
+
+    # 1. Time-series takes precedence — the breakdown is over time, not facility.
+    if has_time_col:
+        is_hourly = "hour" in sample_keys or "hr" in sample_keys
+        period = "Hourly" if is_hourly else "Daily"
+        if has_energy and has_capacity:
+            return f"{period} energy & capacity"
+        if has_energy:
+            return f"{period} energy generation"
+        if has_capacity:
+            return f"{period} capacity factor"
+
+    # 2. Per-facility breakdown.
+    if has_facility_col:
+        if has_actual_forecast:
+            return "Actual vs forecast energy"
+        if has_capacity and not has_energy:
+            return "Capacity factor by facility"
+        if has_energy and not has_capacity:
+            return "Energy production by facility"
+        if has_energy and has_capacity:
+            return "Energy & capacity by facility"
+        if has_perf_ratio:
+            return "Performance ratio by facility"
+
     topic_titles = {
         "station_report": "Station daily report",
         "forecast_72h": "72h forecast",

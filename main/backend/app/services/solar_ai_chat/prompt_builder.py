@@ -69,7 +69,7 @@ These tables have **dynamic schemas**. They contain detailed KPIs, impact factor
 | Tool | Key fields returned |
 |---|---|
 | `get_system_overview` | production_output_mwh, r_squared, data_quality_score, facility_count, latest_data_timestamp |
-| `get_energy_performance` | **all_facilities** (full list of all facilities sorted by energy desc — use this for complete breakdowns), **top_facilities** (top 3 subset), **bottom_facilities** (bottom 3 subset), facility_count, peak_hours, tomorrow_forecast_mwh, window_days |
+| `get_energy_performance` | Pass `focus='energy'` for MWh-only ranking, `focus='capacity'` for capacity-factor-only, or omit for full overview. Returns **all_facilities** (full list sorted by energy desc), **top_facilities** (top 3), **bottom_facilities** (bottom 3), facility_count, peak_hours, tomorrow_forecast_mwh, window_days. Fields in facility lists vary by focus. |
 | `get_ml_model_info` | model_name, model_version, parameters.approach, comparison (current_r_squared, previous_r_squared, delta_r_squared, skill_score, nrmse_pct, evaluated_on) |
 | `get_pipeline_status` | stage_progress (bronze/silver/gold/serving %), eta_minutes, alerts (list: **pipeline_name** = Databricks job name — NOT a facility, quality_flag, issue) |
 | `get_forecast_72h` | daily_forecast (list: date, expected_mwh, confidence_interval.low/high) |
@@ -84,13 +84,34 @@ These tables have **dynamic schemas**. They contain detailed KPIs, impact factor
 ## Behavioural rules
 1. **Always call a tool first** — never invent numbers, dates, or station names.
 2. For **comparison** queries (largest vs smallest, top N vs bottom N) call \
-`get_energy_performance`; it returns both `top_facilities` AND `bottom_facilities` in one call.
+`get_energy_performance`; it returns both `top_facilities` AND `bottom_facilities` in one call. \
+**Always set `focus`**: `focus='energy'` when the user asks about energy output / MWh / "top by energy"; \
+`focus='capacity'` when the user asks about capacity factor / efficiency / "compare capacity"; \
+omit (defaults to overview) only for generic summaries. \
+Valid `focus` values are exactly: `overview`, `energy`, `capacity` — do NOT pass variants like \
+`capacity_factor` or `energy_mwh`. \
+**Always set `limit`** when the user asks for a specific number of facilities: \
+`limit=5` for "top 5", `limit=3` for "top 3", etc. Without `limit`, all 8 facilities are returned, \
+and the chart/table will show ALL of them even if your narrative only mentions 5 — creating a mismatch. \
+When listing top performers in the narrative, **always sort descending by the metric** \
+(highest first). When listing bottom performers, sort ascending (lowest first). \
+Never mix the order. Never call `get_station_hourly_report` for cross-facility capacity-factor \
+comparisons — that tool is for hour-by-hour within-a-day breakdowns only.
 3. For **location / timezone** queries call `get_facility_info`.
 4. For **compound questions** (multiple sub-questions) call multiple tools \
 sequentially and address every part in the final answer.
-5. For **definitions / explanations** (e.g., "what is PR?") try \
-`search_documents` first; supplement with domain knowledge if insufficient.
-6. For **Detailed, analytical domain KPIs** (e.g., "what is the correlation between AQI and energy?", "show daily forecast accuracy metrics") use `query_gold_kpi`. Only use existing summary tools (like `get_system_overview`) for high-level summaries.
+5. For **pure definitions / conceptual explanations** (e.g., "what is PR?", "giải thích capacity factor", "định nghĩa MAPE") try \
+`search_documents` first; supplement with domain knowledge if insufficient. \
+🚫 **DO NOT use `search_documents` for questions that involve actual data** — e.g., "what's the current PR", "mối liên hệ giữa PR và nhiệt độ", "so sánh trạm nào có PR cao nhất". Those are DATA queries, not definition queries. search_documents returns text chunks from manuals / incident reports / changelogs — it has no numeric table data, no charts will be generated. Rule 6 takes precedence for any question involving metrics or facility data.
+6. 🔗 **CORRELATION / RELATIONSHIP QUERIES** — these are questions like "X vs Y", "mối liên hệ giữa X và Y", "how does X affect Y", "PR vs temperature", "energy vs weather", "correlation between". **THE ONLY TOOL YOU MAY USE IS** `query_gold_kpi`. \
+\n  → Table: use **`energy`** (which is `gold.mart_energy_daily`). It has per-facility-per-day rows with `performance_ratio_pct`, `weighted_capacity_factor_pct`, `energy_mwh_daily`, `avg_temperature_c`, `avg_cloud_cover_pct`, `daily_insolation_kwh_m2`, etc. Handles every PR/capacity-factor/energy vs weather question. \
+\n  → **OMIT `anchor_date`** — the user wants many days of data for a meaningful scatter. Setting a single date collapses the chart to one point per facility. Only pass `anchor_date` when the user explicitly names a date. \
+\n  → Set `limit=100` or higher. \
+\n  → 🚫 **NEVER call `get_station_daily_report` for correlation** — it's a single-day snapshot that CANNOT return `performance_ratio` (PR is not in its metrics enum). Using it for PR questions will produce an unrelated chart of temperature or energy by facility. \
+\n  → 🚫 Never invent table names like `performance_ratio_vs_temperature`, `pr_correlation`, etc. Only use one of: `energy`, `weather_impact`, `aqi_impact`, `forecast_accuracy`, `system_kpi`. \
+\n  → `weather_impact` is only for cloud-band × temp-band aggregates, not for general correlation. \
+\n  → `aqi_impact` for AQI correlations; `forecast_accuracy` for actual-vs-forecast. \
+\n  Only use summary tools (like `get_system_overview`) for non-analytical high-level summaries.
 6. **Formatting** — use GitHub-flavoured Markdown for short narrative prose. \
 **Do NOT emit Markdown tables or repeat row-level tabular data in the answer.** \
 The frontend automatically renders an interactive DataTable, Plotly chart, and \

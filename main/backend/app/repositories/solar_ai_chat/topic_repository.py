@@ -13,6 +13,116 @@ from app.repositories.solar_ai_chat.base_repository import BaseRepository
 logger = logging.getLogger(__name__)
 
 
+# Aliases accepted for the `focus` parameter — LLMs don't always respect enums.
+_FOCUS_ALIASES: dict[str, str] = {
+    # Canonical values
+    "overview": "overview",
+    "energy": "energy",
+    "capacity": "capacity",
+    # Capacity aliases — GPT-4o routinely passes "capacity_factor"
+    "capacity_factor": "capacity",
+    "capacity_factor_pct": "capacity",
+    "capacityfactor": "capacity",
+    "efficiency": "capacity",
+    "cf": "capacity",
+    # Energy aliases
+    "energy_mwh": "energy",
+    "mwh": "energy",
+    "production": "energy",
+    "output": "energy",
+    # Overview aliases
+    "summary": "overview",
+    "general": "overview",
+    "default": "overview",
+    "all": "overview",
+}
+
+
+def _normalize_focus(raw: Any) -> str:
+    """Map an LLM-provided focus string to one of {overview, energy, capacity}.
+
+    Falls back to 'overview' on empty / unknown values and logs a warning so
+    we can spot new aliases the LLM invents.
+    """
+    if raw is None:
+        return "overview"
+    key = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    canonical = _FOCUS_ALIASES.get(key)
+    if canonical is None:
+        logger.warning(
+            "apply_energy_focus_unknown_focus raw=%r — defaulting to overview. "
+            "Consider adding an alias if the LLM picks this regularly.",
+            raw,
+        )
+        return "overview"
+    return canonical
+
+
+def _apply_energy_focus(
+    metrics: dict[str, Any],
+    focus: str,
+    *,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Shape ``get_energy_performance`` output so narrative, chart, and table
+    always show the SAME metric — no mismatch between what the LLM writes
+    and what the user sees rendered.
+
+    - ``overview`` (default) / ``energy``: facility lists contain only
+      ``energy_mwh``. Capacity factor is removed entirely so the LLM cannot
+      write a capacity-focused narrative while the chart shows energy.
+    - ``capacity``: facility lists contain only ``capacity_factor_pct``;
+      energy scalars and forecast-related fields are removed.
+
+    The LLM is instructed (via the tool description) to set
+    ``focus='capacity'`` for capacity-factor questions. If it forgets and
+    calls with the default focus, the narrative will naturally steer toward
+    energy because that's the only data it receives — keeping everything
+    consistent even on imperfect tool routing.
+    """
+    def _project(rows: list[dict[str, Any]], keep_keys: set[str]) -> list[dict[str, Any]]:
+        return [{k: v for k, v in row.items() if k in keep_keys} for row in rows]
+
+    fac_keys = {"facility", "facility_id", "facility_name"}
+    out = dict(metrics)
+    focus = focus or "overview"
+
+    def _truncate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if limit is not None and len(rows) > limit:
+            return rows[:limit]
+        return rows
+
+    if focus == "capacity":
+        for list_key in ("all_facilities", "top_facilities", "bottom_facilities"):
+            rows = metrics.get(list_key)
+            if isinstance(rows, list):
+                projected = _project(rows, fac_keys | {"capacity_factor_pct"})
+                if list_key == "all_facilities":
+                    projected = _truncate(projected)
+                out[list_key] = projected
+        for drop in ("tomorrow_forecast_mwh", "peak_hours", "top_performance_ratio_facilities"):
+            out.pop(drop, None)
+        return out
+
+    # overview / energy — default path.
+    # Strip capacity_factor AND performance_ratio entirely so the LLM cannot
+    # write a capacity/efficiency narrative while the chart shows energy.
+    for list_key in ("all_facilities", "top_facilities", "bottom_facilities"):
+        rows = metrics.get(list_key)
+        if not isinstance(rows, list):
+            continue
+        projected = _project(rows, fac_keys | {"energy_mwh"})
+        if list_key == "all_facilities":
+            projected = _truncate(projected)
+        out[list_key] = projected
+
+    # Also drop performance_ratio list — it contains percentages that the LLM
+    # routinely confuses with capacity factor, causing narrative/chart mismatch.
+    out.pop("top_performance_ratio_facilities", None)
+
+    return out
+
+
 class TopicRepository(BaseRepository):
     """Handles fetch_topic_metrics dispatch and all per-topic Databricks methods."""
 
@@ -119,13 +229,27 @@ class TopicRepository(BaseRepository):
 
     def _energy_performance(self, arguments: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, str]]]:
         lookback_days = self._lookback_days()
-        if arguments is not None and "timeframe_days" in arguments:
-            try:
-                lookback_days = max(0, int(arguments["timeframe_days"]))
-            except (ValueError, TypeError):
-                pass
+        focus = "overview"
+        limit: int | None = None
+        if arguments is not None:
+            if "timeframe_days" in arguments:
+                try:
+                    lookback_days = max(0, int(arguments["timeframe_days"]))
+                except (ValueError, TypeError):
+                    pass
+            focus = _normalize_focus(arguments.get("focus"))
+            if "limit" in arguments and arguments["limit"] is not None:
+                try:
+                    limit = max(1, int(arguments["limit"]))
+                except (ValueError, TypeError):
+                    pass
 
-        return self._with_databricks_query(
+        logger.info(
+            "energy_performance_request focus=%s limit=%s lookback_days=%s raw_args=%s",
+            focus, limit, lookback_days, arguments,
+        )
+
+        metrics, sources = self._with_databricks_query(
             "energy_performance",
             lambda: self._energy_performance_databricks(lookback_days),
             lambda: self._energy_performance_csv(lookback_days),
@@ -135,6 +259,7 @@ class TopicRepository(BaseRepository):
                 {"layer": "Gold", "dataset": "gold.dim_facility"},
             ],
         )
+        return _apply_energy_focus(metrics, focus, limit=limit), sources
 
     def _energy_performance_databricks(self, lookback_days: int) -> dict[str, Any]:
         anchor_date = self._resolve_latest_date("gold.mart_energy_daily")

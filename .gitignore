@@ -58,3 +58,5 @@ htmlcov/
 **/chat_history/
 
 **/test_reports/
+
+viz_summary.json

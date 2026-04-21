@@ -716,6 +716,8 @@
     const errorElement = document.getElementById("page-chat-error");
     const feedbackContainer = document.getElementById("page-chat-feedback");
     const suggestionsElement = document.getElementById("solar-chat-suggestions");
+    const promptTriggerElement = document.getElementById("solar-chat-prompt-trigger");
+    const suggestionsCloseElement = document.getElementById("solar-chat-suggestions-close");
     const exportButton = document.getElementById("solar-chat-export-btn");
     const pipelineButton = document.getElementById("pipeline-status-btn");
     const newChatButton = document.getElementById("solar-chat-new-chat-btn");
@@ -863,7 +865,8 @@
         messageCountElement.textContent = String(state.messages.length);
       }
       if (suggestionsElement) {
-        suggestionsElement.style.display = state.messages.length > 1 ? "none" : "flex";
+        const hasConversation = state.messages.length > 1;
+        setSuggestionsVisible(!hasConversation);
       }
     }
 
@@ -1887,6 +1890,15 @@
       }
     });
 
+    function setSuggestionsVisible(visible) {
+      if (!suggestionsElement) return;
+      suggestionsElement.hidden = !visible;
+      if (promptTriggerElement) {
+        promptTriggerElement.hidden = visible;
+        promptTriggerElement.setAttribute("aria-expanded", visible ? "true" : "false");
+      }
+    }
+
     document.querySelectorAll("[data-chat-prompt]").forEach(function (button) {
       button.addEventListener("click", async function () {
         const prompt = (button.getAttribute("data-chat-prompt") || "").trim();
@@ -1899,6 +1911,21 @@
         await sendMessageFlow(prompt);
       });
     });
+
+    if (suggestionsCloseElement) {
+      suggestionsCloseElement.addEventListener("click", function () {
+        setSuggestionsVisible(false);
+      });
+    }
+
+    if (promptTriggerElement) {
+      promptTriggerElement.addEventListener("click", function () {
+        setSuggestionsVisible(true);
+      });
+    }
+
+    // Initial state: suggestions visible inline, trigger hidden.
+    setSuggestionsVisible(true);
 
     sessionListElement.addEventListener("scroll", async function () {
       if (state.loadingHistory || !state.hasMoreSessions || state.sessionQuery) {

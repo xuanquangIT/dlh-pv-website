@@ -125,6 +125,7 @@ def _needs_web_search(message: str) -> bool:
 
 
 _VISUALIZE_KEYWORDS: tuple[str, ...] = (
+    # Explicit viz requests
     "visualize", "visualise", "visualization", "visualisation",
     "chart", "charts", "plot", "graph", "graphs", "diagram",
     "biểu đồ", "bieu do", "vẽ", "ve ",
@@ -132,19 +133,47 @@ _VISUALIZE_KEYWORDS: tuple[str, ...] = (
     "đồ thị", "do thi",
 )
 
+# Implicit viz signals — queries that clearly benefit from a chart even if
+# the user didn't type "chart/plot/graph" explicitly. Comparison, ranking,
+# distribution, and trend-over-time questions all expect a visual payoff.
+_IMPLICIT_VIZ_KEYWORDS: tuple[str, ...] = (
+    # Comparison / ranking
+    "compare", "comparison", "versus", " vs ", " vs.",
+    "top ", "bottom ", "best ", "worst ", "highest", "lowest",
+    "ranking", "rank ", "rankings",
+    "per facility", "by facility", "across facilities", "across all",
+    "all facilities", "each facility",
+    "so sánh", "so sanh", "xếp hạng", "xep hang",
+    "cao nhất", "cao nhat", "thấp nhất", "thap nhat",
+    # Time series / trend
+    "trend", "over time", "by hour", "hourly", "daily", "weekly", "monthly",
+    "theo giờ", "theo gio", "theo ngày", "theo ngay", "theo tuần", "theo tuan",
+    # Distribution
+    "distribution", "spread", "histogram", "phân bố", "phan bo",
+    # Summary implying breakdown
+    "summarize", "summary", "breakdown", "tổng hợp", "tong hop",
+)
+
 
 def _should_visualize(message: str, tool_hints: list[str] | None) -> bool:
-    """Return True iff the user explicitly asked for a visualization via:
-    - the "visualize" tool hint pill, or
-    - viz-related keywords in the message.
+    """Return True when we should attach a chart payload to the response.
 
-    The chart payload is suppressed otherwise, even if the data would support
-    a chart (avoids generating misleading 1-bar plots etc).
+    Triggers:
+    - the "visualize" tool hint pill, OR
+    - explicit viz keywords (chart, plot, graph, ...), OR
+    - implicit viz signals (compare, top, per facility, over time, ...).
+
+    Only suppressed for genuinely non-visual queries (single-fact lookups,
+    definitions, yes/no questions).
     """
     if tool_hints and "visualize" in tool_hints:
         return True
     lowered = (message or "").lower()
-    return any(kw in lowered for kw in _VISUALIZE_KEYWORDS)
+    if any(kw in lowered for kw in _VISUALIZE_KEYWORDS):
+        return True
+    if any(kw in lowered for kw in _IMPLICIT_VIZ_KEYWORDS):
+        return True
+    return False
 
 
 def _apply_tool_hints(request: "SolarChatRequest") -> "SolarChatRequest":
@@ -437,6 +466,12 @@ class SolarAIChatService:
         started = time.perf_counter()
         trace_id = uuid.uuid4().hex[:8]
         request = _apply_tool_hints(request)
+        # Share the raw user message with the tool executor so it can gate
+        # routing (e.g., force correlation queries through query_gold_kpi).
+        try:
+            self._tool_executor.set_user_query(request.message)
+        except AttributeError:
+            pass
         logger.info(
             "solar_chat_trace_start trace_id=%s session_id=%s role=%s tool_mode=%s hints=%s message=%s",
             trace_id,
@@ -531,6 +566,10 @@ class SolarAIChatService:
         started = time.perf_counter()
         trace_id = uuid.uuid4().hex[:8]
         request = _apply_tool_hints(request)
+        try:
+            self._tool_executor.set_user_query(request.message)
+        except AttributeError:
+            pass
 
         try:
             yield _sse(StatusUpdateEvent(text="Analyzing your request…"))

@@ -31,6 +31,40 @@ WEATHER_METRIC_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+_CORRELATION_KEYWORDS = (
+    "mối liên hệ", "liên hệ giữa", "mối tương quan", "tương quan giữa",
+    "correlation", "relationship between",
+    " vs ", " vs.", "versus",
+    "ảnh hưởng", "affects", "affect",
+    "so sánh", "compared to",
+    "how does", "how do",
+)
+_METRIC_KEYWORDS = (
+    "performance ratio", "performance_ratio", "pr ", " pr",
+    "capacity factor", "capacity_factor",
+    "energy", "năng lượng", "sản lượng",
+    "temperature", "nhiệt độ",
+    "aqi", "air quality", "chất lượng không khí",
+    "cloud", "mây", "bức xạ", "radiation",
+    "humidity", "độ ẩm", "wind", "gió",
+)
+
+
+def _is_correlation_query(text: str) -> bool:
+    """True when the user clearly asks for correlation/relationship between
+    two domain metrics. Used to gate tool selection so only the one tool that
+    returns paired X-Y data (query_gold_kpi on mart_energy_daily) is allowed.
+    """
+    if not text:
+        return False
+    t = str(text).lower()
+    has_corr = any(k in t for k in _CORRELATION_KEYWORDS)
+    if not has_corr:
+        return False
+    metric_hits = sum(1 for k in _METRIC_KEYWORDS if k in t)
+    return metric_hits >= 2  # at least two metrics named → correlation
+
+
 class ToolExecutor:
     """Dispatcher that maps Gemini function calls to repository methods."""
 
@@ -43,6 +77,12 @@ class ToolExecutor:
         self._repository = repository
         self._vector_repo = vector_repo
         self._embedding_client = embedding_client
+        self._current_user_query: str = ""
+
+    def set_user_query(self, query: str) -> None:
+        """Called by chat_service at the start of each request so per-tool
+        dispatch can gate routing based on the user's original question."""
+        self._current_user_query = str(query or "")
 
     def execute_envelope(
         self,
@@ -123,6 +163,88 @@ class ToolExecutor:
             raise ValueError(f"Unknown tool: '{function_name}'.")
 
         self._validate_permission(function_name, role)
+
+        # Top-level safety net: a correlation query MUST go through
+        # query_gold_kpi('energy'). Every other data tool returns a shape
+        # that can't produce a meaningful X-Y scatter, and the chart ends
+        # up decoupled from the narrative. Instead of raising (which the LLM
+        # tends to give up on), we transparently re-route the call so the
+        # right data is fetched regardless of what the LLM picked.
+        if (
+            _is_correlation_query(self._current_user_query)
+            and function_name not in ("query_gold_kpi",)
+        ):
+            logger.warning(
+                "tool_routing_rerouted original_tool=%s -> query_gold_kpi('energy') "
+                "reason=correlation_query user_query=%r original_args=%s",
+                function_name,
+                self._current_user_query[:200],
+                self._short(arguments, 200),
+            )
+            function_name = "query_gold_kpi"
+            arguments = {"table_name": "energy", "limit": 100}
+            handler = topic_handlers.get(function_name)
+            # Re-validate permission under the rerouted tool name — the user
+            # may have had access to the original tool but not to query_gold_kpi.
+            self._validate_permission(function_name, role)
+
+        # Safety net: block `get_station_daily_report` when the LLM requests
+        # performance_ratio (the tool doesn't return PR and the chart comes
+        # out unrelated). Force the LLM to retry with the correct tool.
+        if function_name == "get_station_daily_report":
+            requested_metrics = arguments.get("metrics") or []
+            if isinstance(requested_metrics, str):
+                requested_metrics = [requested_metrics]
+            if any(
+                "performance_ratio" in str(m).lower() or str(m).lower() in {"pr", "pr_pct", "pr_ratio"}
+                for m in requested_metrics
+            ):
+                logger.warning(
+                    "tool_routing_block tool=get_station_daily_report "
+                    "reason=performance_ratio_not_supported args=%s",
+                    self._short(arguments, 200),
+                )
+                raise ValueError(
+                    "get_station_daily_report does not return performance_ratio. "
+                    "For PR correlation / relationship queries call "
+                    "query_gold_kpi(table_name='energy', limit=100) instead — "
+                    "that table has per-facility-per-day rows with "
+                    "performance_ratio_pct + avg_temperature_c."
+                )
+
+        # Safety net: block `search_documents` when the query clearly asks for
+        # numeric/correlation data. RAG returns text chunks — no chart will be
+        # generated and the answer ends up hand-wavy.
+        if function_name == "search_documents":
+            q = str(arguments.get("query") or "").lower()
+            correlation_terms = (
+                "mối liên hệ", "tương quan", "correlation",
+                " vs ", " vs.", "versus",
+                "so sánh", "compare",
+                "top", "ranking", "ranked",
+                "cao nhất", "thấp nhất", "highest", "lowest",
+            )
+            metric_terms = (
+                "performance ratio", "performance_ratio",
+                "capacity factor", "capacity_factor",
+                "energy_mwh", "mwh",
+                "trạm nào",
+            )
+            if any(t in q for t in correlation_terms) and any(t in q for t in metric_terms):
+                logger.warning(
+                    "tool_routing_block tool=search_documents "
+                    "reason=correlation_or_ranking_of_metrics query=%r",
+                    q[:200],
+                )
+                raise ValueError(
+                    "search_documents only returns text chunks from manuals / "
+                    "incident reports / model changelogs — it has no numeric "
+                    "data and cannot produce a chart. For correlation or "
+                    "ranking of metrics call query_gold_kpi(table_name='energy', "
+                    "limit=100) instead. The `energy` mart has per-facility-"
+                    "per-day rows with performance_ratio_pct, capacity_factor_pct, "
+                    "energy_mwh_daily, avg_temperature_c."
+                )
 
         if function_name in TOOL_NAME_TO_TOPIC and handler == self._get_topic_metrics:
             topic = ChatTopic(TOOL_NAME_TO_TOPIC[function_name])
