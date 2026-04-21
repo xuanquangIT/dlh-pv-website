@@ -42,6 +42,53 @@ class PostgresChatHistoryRepository:
                 thinking_trace = ThinkingTrace.model_validate(model.thinking_trace)
             except Exception:
                 thinking_trace = None
+
+        # Viz reload strategy:
+        #   1) Prefer the exact rendered snapshot stored in `viz_payload`
+        #      (guarantees live↔reload fidelity — no re-picking the "best"
+        #      list on different input ordering).
+        #   2) Fall back to rebuilding from `key_metrics` for legacy rows
+        #      written before viz_payload existed.
+        data_table = None
+        chart = None
+        kpi_cards = None
+        snapshot = getattr(model, "viz_payload", None)
+        if snapshot and isinstance(snapshot, dict):
+            from app.schemas.solar_ai_chat.visualization import (
+                ChartPayload,
+                DataTablePayload,
+                KpiCardsPayload,
+            )
+            try:
+                if snapshot.get("data_table"):
+                    data_table = DataTablePayload.model_validate(snapshot["data_table"])
+            except Exception:
+                data_table = None
+            try:
+                if snapshot.get("chart") and bool(getattr(model, "viz_requested", False)):
+                    chart = ChartPayload.model_validate(snapshot["chart"])
+            except Exception:
+                chart = None
+            try:
+                if snapshot.get("kpi_cards"):
+                    kpi_cards = KpiCardsPayload.model_validate(snapshot["kpi_cards"])
+            except Exception:
+                kpi_cards = None
+        else:
+            raw_metrics = getattr(model, "key_metrics", None)
+            if raw_metrics:
+                try:
+                    from app.services.solar_ai_chat.chart_service import ChartSpecBuilder
+                    data_table, chart, kpi_cards = ChartSpecBuilder().build(
+                        raw_metrics, topic=model.topic,
+                    )
+                    if not bool(getattr(model, "viz_requested", False)):
+                        chart = None
+                except Exception:
+                    data_table = None
+                    chart = None
+                    kpi_cards = None
+
         return ChatMessage(
             id=model.id,
             session_id=model.session_id,
@@ -51,6 +98,9 @@ class PostgresChatHistoryRepository:
             topic=topic,
             sources=sources,
             thinking_trace=thinking_trace,
+            data_table=data_table,
+            chart=chart,
+            kpi_cards=kpi_cards,
         )
 
     def _ensure_local_auth_user(self, owner_uuid: uuid.UUID) -> None:
@@ -258,6 +308,9 @@ class PostgresChatHistoryRepository:
         topic: ChatTopic | None = None,
         sources: list[SourceMetadata] | None = None,
         thinking_trace: ThinkingTrace | None = None,
+        key_metrics: dict | None = None,
+        viz_requested: bool = False,
+        viz_payload: dict | None = None,
     ) -> ChatMessage | None:
         with SessionLocal() as db:
             session = (
@@ -278,6 +331,9 @@ class PostgresChatHistoryRepository:
                 topic=topic.value if topic else None,
                 sources=[row.model_dump() for row in sources] if sources else None,
                 thinking_trace=thinking_trace.model_dump() if thinking_trace else None,
+                key_metrics=key_metrics if key_metrics else None,
+                viz_requested=bool(viz_requested),
+                viz_payload=viz_payload if viz_payload else None,
             )
             session.updated_at = now
             db.add(message)

@@ -5,6 +5,17 @@
   const PROJECT_STORAGE_KEY = "pv_solar_chat_projects";
   const PROJECT_SESSION_MAP_STORAGE_KEY = "pv_solar_chat_project_session_map";
   const ACTIVE_PROJECT_STORAGE_KEY = "pv_solar_chat_active_project";
+  const LAST_SESSION_STORAGE_KEY = "pv_solar_chat_last_session_id";
+
+  function loadStoredLastSessionId() {
+    try { return localStorage.getItem(LAST_SESSION_STORAGE_KEY) || ""; } catch (_) { return ""; }
+  }
+  function saveStoredLastSessionId(sessionId) {
+    try {
+      if (sessionId) localStorage.setItem(LAST_SESSION_STORAGE_KEY, sessionId);
+      else localStorage.removeItem(LAST_SESSION_STORAGE_KEY);
+    } catch (_) { /* ignore */ }
+  }
   const NO_PROJECT_KEY = "__no_project__";
   const NO_PROJECT_LABEL = "No Project";
 
@@ -395,6 +406,10 @@
     if (!thinkingTrace || !thinkingTrace.steps || thinkingTrace.steps.length === 0) {
       return "";
     }
+    // Feature-flag gate: SHOW_THINKING_TRACE.
+    if (window.ToolStatusCard && !window.ToolStatusCard.canShowTrace()) {
+      return "";
+    }
 
     // Parse the summary — format is "N tool calls · Topic · model-name"
     const summary = String(thinkingTrace.summary || "");
@@ -423,10 +438,21 @@
     html.push('<div class="msg-thinking-list">');
 
     thinkingTrace.steps.forEach(function(step) {
+      if (window.ToolStatusCard) {
+        const rowHtml = window.ToolStatusCard.renderRow({
+          step: step.step,
+          tool_name: step.tool_name,
+          label: step.step || step.tool_name || "",
+          status: step.status,
+          detail: step.detail
+        });
+        if (rowHtml) html.push(rowHtml);
+        return;
+      }
+      // Fallback path (component not loaded): legacy renderer.
       const isOk = step.status === "success" || step.status === "ok";
       const isWarn = step.status === "warning" || step.status === "error";
       const isRunning = step.status === "running";
-
       let icon;
       if (isRunning) {
         icon = '<span class="task-tracker-spinner" aria-hidden="true"></span>';
@@ -437,13 +463,9 @@
       } else {
         icon = '<span class="task-tracker-icon skipped" aria-hidden="true">–</span>';
       }
-
       const rowClass = isRunning ? "task-tracker-row running" : "task-tracker-row";
-      // step.step is now the human label e.g. "Fetching energy performance"
       const label = step.step || step.tool_name || "";
-      // step.detail is now "7 metrics retrieved" or "3 results found"
       const detail = step.detail ? ' <span class="task-tracker-dur">' + escapeHtml(step.detail) + "</span>" : "";
-
       html.push(
         '<div class="' + rowClass + '">',
         "  " + icon,
@@ -538,6 +560,45 @@
     }
   }
 
+  function mountVizExtras(messageId, viz) {
+    if (!viz) return;
+    if (!viz.data_table && !viz.chart && !viz.kpi_cards) return;
+    const row = document.querySelector('[data-message-id="' + messageId + '"]');
+    if (!row) return;
+
+    row.classList.add("msg-row-has-viz");
+    let extras = row.querySelector(".solar-viz-extras");
+    if (!extras) {
+      extras = document.createElement("div");
+      extras.className = "solar-viz-extras";
+      const msg = row.querySelector(".msg");
+      if (msg && msg.parentNode === row) {
+        row.insertBefore(extras, msg.nextSibling);
+      } else {
+        row.appendChild(extras);
+      }
+    } else {
+      extras.innerHTML = "";
+    }
+
+    if (viz.kpi_cards && window.KpiCards) {
+      const kpiEl = document.createElement("div");
+      kpiEl.className = "solar-kpi-cards";
+      extras.appendChild(kpiEl);
+      window.KpiCards.render(kpiEl, viz.kpi_cards);
+    }
+    if (viz.chart && window.ChartRenderer) {
+      const chartEl = document.createElement("div");
+      extras.appendChild(chartEl);
+      window.ChartRenderer.render(chartEl, viz.chart);
+    }
+    if (viz.data_table && window.DataTable) {
+      const tblEl = document.createElement("div");
+      extras.appendChild(tblEl);
+      window.DataTable.render(tblEl, viz.data_table);
+    }
+  }
+
   function MessageList(container) {
     this.container = container;
   }
@@ -553,6 +614,13 @@
       const isPending = Boolean(message.isPending);
       this.container.appendChild(createMessageElement(role, content, message.timestamp, thinkingTrace, messageId, isPending));
     }, this);
+    // Re-attach any viz payloads (KPI/chart/table) that were previously computed
+    // so they survive a full re-render (e.g. after sending a follow-up message).
+    messages.forEach(function (message) {
+      if (message && message.viz && message.id) {
+        try { mountVizExtras(message.id, message.viz); } catch (_) {}
+      }
+    });
     this.scrollToBottom();
   };
 
@@ -648,6 +716,8 @@
     const errorElement = document.getElementById("page-chat-error");
     const feedbackContainer = document.getElementById("page-chat-feedback");
     const suggestionsElement = document.getElementById("solar-chat-suggestions");
+    const promptTriggerElement = document.getElementById("solar-chat-prompt-trigger");
+    const suggestionsCloseElement = document.getElementById("solar-chat-suggestions-close");
     const exportButton = document.getElementById("solar-chat-export-btn");
     const pipelineButton = document.getElementById("pipeline-status-btn");
     const newChatButton = document.getElementById("solar-chat-new-chat-btn");
@@ -684,7 +754,6 @@
       !sendButton ||
       !statusElement ||
       !errorElement ||
-      !exportButton ||
       !pipelineButton ||
       !newChatButton ||
       !sessionListElement ||
@@ -796,7 +865,8 @@
         messageCountElement.textContent = String(state.messages.length);
       }
       if (suggestionsElement) {
-        suggestionsElement.style.display = state.messages.length > 1 ? "none" : "flex";
+        const hasConversation = state.messages.length > 1;
+        setSuggestionsVisible(!hasConversation);
       }
     }
 
@@ -1153,6 +1223,7 @@
       }
       const created = await SolarChatApi.createSession(sanitizeSessionTitle(titleHint));
       state.sessionId = created.session_id;
+      saveStoredLastSessionId(state.sessionId);
       state.projectSessionMap[state.sessionId] = state.activeProject;
       saveStoredProjectSessionMap(state.projectSessionMap);
       updateContext();
@@ -1187,14 +1258,26 @@
       const detail = await SolarChatApi.getSession(sessionId);
       const loadedMessages = (detail.messages || []).map(function (message) {
         return {
+          id: message.id || "",
           role: message.sender === "assistant" ? "assistant" : "user",
           content: message.content || "",
           timestamp: message.timestamp,
-          thinkingTrace: message.thinking_trace || null
+          thinkingTrace: message.thinking_trace || null,
+          viz: (message.data_table || message.chart || message.kpi_cards) ? {
+            data_table: message.data_table || null,
+            chart: message.chart || null,
+            kpi_cards: message.kpi_cards || null
+          } : null
         };
       });
       state.messages = withWelcomeMessage(loadedMessages);
       messageList.render(state.messages);
+      // Re-attach viz extras for any assistant messages that carry them.
+      loadedMessages.forEach(function (m) {
+        if (m.viz && m.id) {
+          try { mountVizExtras(m.id, m.viz); } catch (_) {}
+        }
+      });
       updateContext();
     }
 
@@ -1206,6 +1289,7 @@
         setError("");
         setLoading(true, "Loading selected conversation...");
         state.sessionId = sessionId;
+        saveStoredLastSessionId(sessionId);
 
         const mappedProject = getSessionProject(sessionId);
         if (mappedProject !== state.activeProject) {
@@ -1290,6 +1374,10 @@
       ];
 
       var tasksHtml = this._tasks.map(function (task) {
+        if (window.ToolStatusCard) {
+          return window.ToolStatusCard.renderRow(task);
+        }
+        // Fallback (component not loaded): legacy inline renderer.
         var iconHtml;
         var rowClass = "task-tracker-row";
         if (task.status === "running") {
@@ -1416,8 +1504,16 @@
         const sessionId = await ensureSession(text);
 
         await new Promise(function (resolve, reject) {
+          const toolSelection = (window.SolarToolPicker && window.SolarToolPicker.getSelection())
+            || { tool_mode: "auto", allowed_tools: null, tool_hints: [] };
           streamController = SolarChatApi.queryStream(
-            { message: text, session_id: sessionId },
+            {
+              message: text,
+              session_id: sessionId,
+              tool_mode: toolSelection.tool_mode || "auto",
+              allowed_tools: toolSelection.allowed_tools || null,
+              tool_hints: toolSelection.tool_hints || [],
+            },
             {
               onStatus: function (evt) {
                 setStatus(evt.text || "Processing");
@@ -1439,14 +1535,24 @@
                 }
               },
               onDone: function (evt) {
+                if (window.ToolStatusCard && evt.ui_features) {
+                  window.ToolStatusCard.updateFeatures(evt.ui_features);
+                }
                 if (taskTracker) taskTracker.setOpen(false); // Collapse when done
-                
+
                 state.modelUsed = evt.model_used || state.modelUsed;
+                var vizPayload = (evt.data_table || evt.chart || evt.kpi_cards) ? {
+                  data_table: evt.data_table || null,
+                  chart: evt.chart || null,
+                  kpi_cards: evt.kpi_cards || null
+                } : null;
                 var assistantMessage = {
+                  id: pendingMessageId,
                   role: "assistant",
                   content: evt.answer || "",
                   timestamp: new Date().toISOString(),
-                  thinkingTrace: evt.thinking_trace || null
+                  thinkingTrace: evt.thinking_trace || null,
+                  viz: vizPayload
                 };
                 var pendingIndex = state.messages.findIndex(function (item) {
                   return item.id === pendingMessageId && item.isPending;
@@ -1480,6 +1586,16 @@
                   setError(evt.warning_message);
                 }
 
+                try {
+                  mountVizExtras(pendingMessageId, {
+                    data_table: evt.data_table || null,
+                    chart: evt.chart || null,
+                    kpi_cards: evt.kpi_cards || null
+                  });
+                } catch (vizErr) {
+                  if (window.console && console.warn) console.warn("viz mount failed", vizErr);
+                }
+
                 refreshSessionList().catch(function () {});
                 setStatus("Ready");
                 resolve();
@@ -1510,6 +1626,7 @@
 
     async function resetConversation() {
       state.sessionId = "";
+      saveStoredLastSessionId("");
       state.messages = [createWelcomeMessage()];
       state.modelUsed = "";
       messageList.render(state.messages);
@@ -1519,8 +1636,51 @@
       renderSessionGroups();
     }
 
-    exportButton.addEventListener("click", function () {
-      setStatus("Export is not implemented yet.");
+    if (exportButton) {
+      exportButton.addEventListener("click", function () {
+        setStatus("Export is not implemented yet.");
+      });
+    }
+
+    // Right-drawer history toggle
+    const historyToggle = document.getElementById("solar-chat-history-toggle");
+    const historyDrawer = document.getElementById("solar-chat-history-drawer");
+    const historyScrim = document.getElementById("solar-chat-drawer-scrim");
+    const historyClose = document.getElementById("solar-chat-drawer-close");
+    function openHistoryDrawer() {
+      if (!historyDrawer) return;
+      historyDrawer.hidden = false;
+      historyDrawer.classList.add("is-open");
+      if (historyScrim) { historyScrim.hidden = false; historyScrim.classList.add("is-visible"); }
+      if (historyToggle) historyToggle.setAttribute("aria-expanded", "true");
+    }
+    function closeHistoryDrawer() {
+      if (!historyDrawer) return;
+      historyDrawer.classList.remove("is-open");
+      if (historyScrim) historyScrim.classList.remove("is-visible");
+      if (historyToggle) historyToggle.setAttribute("aria-expanded", "false");
+      window.setTimeout(function () {
+        if (!historyDrawer.classList.contains("is-open")) {
+          historyDrawer.hidden = true;
+          if (historyScrim) historyScrim.hidden = true;
+        }
+      }, 260);
+    }
+    if (historyToggle) {
+      historyToggle.addEventListener("click", function () {
+        if (historyDrawer && historyDrawer.classList.contains("is-open")) {
+          closeHistoryDrawer();
+        } else {
+          openHistoryDrawer();
+        }
+      });
+    }
+    if (historyClose) historyClose.addEventListener("click", closeHistoryDrawer);
+    if (historyScrim) historyScrim.addEventListener("click", closeHistoryDrawer);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && historyDrawer && historyDrawer.classList.contains("is-open")) {
+        closeHistoryDrawer();
+      }
     });
 
     pipelineButton.addEventListener("click", async function () {
@@ -1730,6 +1890,15 @@
       }
     });
 
+    function setSuggestionsVisible(visible) {
+      if (!suggestionsElement) return;
+      suggestionsElement.hidden = !visible;
+      if (promptTriggerElement) {
+        promptTriggerElement.hidden = visible;
+        promptTriggerElement.setAttribute("aria-expanded", visible ? "true" : "false");
+      }
+    }
+
     document.querySelectorAll("[data-chat-prompt]").forEach(function (button) {
       button.addEventListener("click", async function () {
         const prompt = (button.getAttribute("data-chat-prompt") || "").trim();
@@ -1742,6 +1911,21 @@
         await sendMessageFlow(prompt);
       });
     });
+
+    if (suggestionsCloseElement) {
+      suggestionsCloseElement.addEventListener("click", function () {
+        setSuggestionsVisible(false);
+      });
+    }
+
+    if (promptTriggerElement) {
+      promptTriggerElement.addEventListener("click", function () {
+        setSuggestionsVisible(true);
+      });
+    }
+
+    // Initial state: suggestions visible inline, trigger hidden.
+    setSuggestionsVisible(true);
 
     sessionListElement.addEventListener("scroll", async function () {
       if (state.loadingHistory || !state.hasMoreSessions || state.sessionQuery) {
@@ -1778,8 +1962,15 @@
     updateContext();
     setStatus("Loading conversations");
     refreshSessionList()
-      .then(function () {
-        setStatus("Online · Ready to assist");
+      .then(async function () {
+        // Restore last-used session if it still exists on the server.
+        const lastId = loadStoredLastSessionId();
+        if (lastId && state.sessions.some(function (s) { return s.session_id === lastId; })) {
+          try { await openSession(lastId); } catch (_) { saveStoredLastSessionId(""); }
+        } else {
+          if (lastId) saveStoredLastSessionId("");
+          setStatus("Online · Ready to assist");
+        }
       })
       .catch(function (error) {
         setStatus("Error");

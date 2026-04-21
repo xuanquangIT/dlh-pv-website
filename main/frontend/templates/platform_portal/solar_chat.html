@@ -7,49 +7,26 @@
 {% endblock %}
 
 {% block content %}
-<section class="section-header">
-    <div>
-        <h1 class="page-title">Solar AI Chat</h1>
-        <div class="page-subtitle">Smart Assistant · Powered by PV Intelligence · LLM-ready</div>
-    </div>
-    <div class="solar-chat-header-actions">
-        <button class="btn btn-danger" type="button" id="solar-chat-export-btn">Export PDF</button>
-    </div>
-</section>
-
-<section class="solar-chat-shell card">
+<section class="solar-chat-shell solar-chat-shell--flat">
     <div class="solar-chat-layout">
-        <aside class="solar-chat-conversations" aria-label="Conversation sidebar">
-            <button class="solar-chat-conv-new" type="button" id="solar-chat-new-chat-btn">New Chat</button>
-
-            <div class="solar-chat-conv-search-wrap">
-                <input id="solar-chat-search-input" class="solar-chat-conv-search" type="search"
-                    placeholder="Search conversations..." aria-label="Search conversations">
-            </div>
-
-            <div id="solar-chat-session-list" class="solar-chat-conv-groups" aria-live="polite"></div>
-
-            <div class="solar-chat-projects-wrap">
-                <div class="solar-chat-projects-title">Projects</div>
-                <div id="solar-chat-project-list" class="solar-chat-project-list"></div>
-                <button class="solar-chat-project-new" type="button" id="solar-chat-new-project-btn">New
-                    Project</button>
-            </div>
-        </aside>
-
         <div class="solar-chat-main">
-            <div class="solar-chat-shell-header">
-                <div class="solar-chat-assistant-meta">
-                    <div class="solar-chat-avatar">AI</div>
-                    <div>
-                        <h2 class="solar-chat-assistant-name">Solar AI Assistant</h2>
-                        <div class="solar-chat-assistant-status">
-                            <span class="solar-chat-online-dot"></span>
-                            <span id="solar-chat-status-text">Online · Ready to assist</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="solar-chat-counter"><span id="solar-chat-message-count">0</span> messages</div>
+            <div class="solar-chat-toolbar" role="toolbar" aria-label="Chat actions">
+                <button class="solar-chat-icon-btn" type="button" id="solar-chat-new-chat-btn"
+                    data-tooltip="New chat" aria-label="New chat">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                        <path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v7h7a1 1 0 1 1 0 2h-7v7a1 1 0 1 1-2 0v-7H4a1 1 0 1 1 0-2h7V4a1 1 0 0 1 1-1z"/>
+                    </svg>
+                </button>
+                <div class="solar-chat-toolbar-spacer"></div>
+                <span id="solar-chat-status-text" class="solar-chat-status-inline">Ready</span>
+                <span class="solar-chat-counter"><span id="solar-chat-message-count">0</span> msg</span>
+                <button class="solar-chat-icon-btn" type="button" id="solar-chat-history-toggle"
+                    data-tooltip="Conversation history" aria-label="Toggle conversation history"
+                    aria-expanded="false" aria-controls="solar-chat-history-drawer">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                        <path fill="currentColor" d="M13 3a9 9 0 0 0-9 9H1l4 4 4-4H6a7 7 0 1 1 7 7 6.97 6.97 0 0 1-4.95-2.05l-1.42 1.42A9 9 0 1 0 13 3zm-1 4v5l4.25 2.52.75-1.23-3.5-2.08V7H12z"/>
+                    </svg>
+                </button>
             </div>
 
             <div id="page-chat-messages" class="solar-chat-messages">
@@ -67,12 +44,24 @@
                     performance</button>
                 <button class="solar-chat-chip" type="button"
                     data-chat-prompt="Identify top and bottom performing solar farms">Find best & worst farms</button>
-                <button class="solar-chat-chip" type="button"
-                    data-chat-prompt="What is the energy generation forecast for tomorrow?">Tomorrow's forecast</button>
                 <button class="solar-chat-chip" type="button" id="pipeline-status-btn">Show latest pipeline
                     status</button>
                 <button class="solar-chat-chip" type="button"
                     data-chat-prompt="Compare Darlington Point and Avonlie facilities">Compare facilities</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Show data quality issues across all facilities">Data quality issues</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="What is the current ML model performance?">ML model performance</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Show the 72-hour energy forecast">72h forecast</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Which facility had the highest energy output yesterday?">Highest output yesterday</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Show the daily station report for this week">This week's daily report</button>
+                <button class="solar-chat-chip" type="button"
+                    data-chat-prompt="Show hourly energy generation trend for this month">Hourly generation this month</button>
+                <button class="solar-chat-chip-close" type="button" id="solar-chat-suggestions-close"
+                    aria-label="Hide suggestions" data-tooltip="Hide suggestions">✕</button>
             </div>
 
             <div id="page-chat-feedback" class="solar-chat-feedback" aria-live="polite" aria-atomic="true" hidden>
@@ -80,11 +69,42 @@
             </div>
 
             <div class="solar-chat-input-wrap">
+                <button class="solar-chat-prompt-trigger" type="button" id="solar-chat-prompt-trigger"
+                    aria-label="Show prompt suggestions" aria-expanded="false"
+                    aria-controls="solar-chat-suggestions" data-tooltip="Prompt suggestions" hidden>
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                        <path fill="currentColor" d="M12 2a7 7 0 0 0-4 12.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26A7 7 0 0 0 12 2zm-2 18v1a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-1h-4z"/>
+                    </svg>
+                </button>
                 <textarea id="page-chat-input" class="solar-chat-input"
                     placeholder="Ask about energy, pipeline, ML models, forecasts"></textarea>
                 <button class="btn btn-pri solar-chat-send" type="button" id="page-chat-send">Send</button>
             </div>
         </div>
+
+        <aside class="solar-chat-history-drawer" id="solar-chat-history-drawer"
+            aria-label="Conversation history" hidden>
+            <div class="solar-chat-drawer-head">
+                <h3 class="solar-chat-drawer-title">History</h3>
+                <button class="solar-chat-icon-btn" type="button" id="solar-chat-drawer-close"
+                    data-tooltip="Close" aria-label="Close history">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                        <path fill="currentColor" d="M18.3 5.71 12 12.01l-6.3-6.3-1.41 1.41 6.3 6.3-6.3 6.3 1.41 1.41 6.3-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.3z"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="solar-chat-conv-search-wrap">
+                <input id="solar-chat-search-input" class="solar-chat-conv-search" type="search"
+                    placeholder="Search conversations..." aria-label="Search conversations">
+            </div>
+            <div id="solar-chat-session-list" class="solar-chat-conv-groups" aria-live="polite"></div>
+            <div class="solar-chat-projects-wrap">
+                <div class="solar-chat-projects-title">Projects</div>
+                <div id="solar-chat-project-list" class="solar-chat-project-list"></div>
+                <button class="solar-chat-project-new" type="button" id="solar-chat-new-project-btn">+ New Project</button>
+            </div>
+        </aside>
+        <div class="solar-chat-drawer-scrim" id="solar-chat-drawer-scrim" hidden></div>
     </div>
 
     <div id="solar-chat-project-modal" class="solar-chat-modal" role="dialog" aria-modal="true"
@@ -163,5 +183,7 @@
 {% block scripts %}
 <script>
     window.PV_ROUTE = "solar_chat";
+    window.SOLAR_CHAT_UI_FEATURES = {{ chat_ui_features | tojson }};
+    window.SOLAR_CHAT_ROLE = {{ chat_role | tojson }};
 </script>
 {% endblock %}

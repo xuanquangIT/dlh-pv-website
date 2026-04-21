@@ -13,6 +13,138 @@ from app.repositories.solar_ai_chat.base_repository import BaseRepository
 logger = logging.getLogger(__name__)
 
 
+# Aliases accepted for the `focus` parameter — LLMs don't always respect enums.
+_FOCUS_ALIASES: dict[str, str] = {
+    # Canonical values
+    "overview": "overview",
+    "energy": "energy",
+    "capacity": "capacity",
+    # Capacity aliases — GPT-4o routinely passes "capacity_factor"
+    "capacity_factor": "capacity",
+    "capacity_factor_pct": "capacity",
+    "capacityfactor": "capacity",
+    "efficiency": "capacity",
+    "cf": "capacity",
+    # Energy aliases
+    "energy_mwh": "energy",
+    "mwh": "energy",
+    "production": "energy",
+    "output": "energy",
+    # Overview aliases
+    "summary": "overview",
+    "general": "overview",
+    "default": "overview",
+    "all": "overview",
+}
+
+
+def _normalize_focus(raw: Any) -> str:
+    """Map an LLM-provided focus string to one of {overview, energy, capacity}.
+
+    Falls back to 'overview' on empty / unknown values and logs a warning so
+    we can spot new aliases the LLM invents.
+    """
+    if raw is None:
+        return "overview"
+    key = str(raw).strip().lower().replace("-", "_").replace(" ", "_")
+    canonical = _FOCUS_ALIASES.get(key)
+    if canonical is None:
+        logger.warning(
+            "apply_energy_focus_unknown_focus raw=%r — defaulting to overview. "
+            "Consider adding an alias if the LLM picks this regularly.",
+            raw,
+        )
+        return "overview"
+    return canonical
+
+
+def _apply_energy_focus(
+    metrics: dict[str, Any],
+    focus: str,
+    *,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Shape ``get_energy_performance`` output so narrative, chart, and table
+    always show the SAME metric — no mismatch between what the LLM writes
+    and what the user sees rendered.
+
+    - ``overview`` (default) / ``energy``: facility lists contain only
+      ``energy_mwh``. Capacity factor is removed entirely so the LLM cannot
+      write a capacity-focused narrative while the chart shows energy.
+    - ``capacity``: facility lists contain only ``capacity_factor_pct``;
+      energy scalars and forecast-related fields are removed.
+
+    The LLM is instructed (via the tool description) to set
+    ``focus='capacity'`` for capacity-factor questions. If it forgets and
+    calls with the default focus, the narrative will naturally steer toward
+    energy because that's the only data it receives — keeping everything
+    consistent even on imperfect tool routing.
+    """
+    def _project(rows: list[dict[str, Any]], keep_keys: set[str]) -> list[dict[str, Any]]:
+        return [{k: v for k, v in row.items() if k in keep_keys} for row in rows]
+
+    fac_keys = {"facility", "facility_id", "facility_name"}
+    out = dict(metrics)
+    focus = focus or "overview"
+
+    def _truncate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if limit is not None and len(rows) > limit:
+            return rows[:limit]
+        return rows
+
+    if focus == "capacity":
+        for list_key in ("all_facilities", "top_facilities", "bottom_facilities"):
+            rows = metrics.get(list_key)
+            if isinstance(rows, list):
+                projected = _project(rows, fac_keys | {"capacity_factor_pct"})
+                if list_key == "all_facilities":
+                    projected = _truncate(projected)
+                out[list_key] = projected
+        for drop in ("tomorrow_forecast_mwh", "peak_hours", "top_performance_ratio_facilities"):
+            out.pop(drop, None)
+        if limit is not None:
+            shown = len(out.get("all_facilities") or [])
+            if shown > 0:
+                out["facility_count"] = shown
+            out.pop("top_facilities", None)
+            out.pop("bottom_facilities", None)
+        return out
+
+    # overview / energy — default path.
+    # Strip capacity_factor AND performance_ratio entirely so the LLM cannot
+    # write a capacity/efficiency narrative while the chart shows energy.
+    for list_key in ("all_facilities", "top_facilities", "bottom_facilities"):
+        rows = metrics.get(list_key)
+        if not isinstance(rows, list):
+            continue
+        projected = _project(rows, fac_keys | {"energy_mwh"})
+        if list_key == "all_facilities":
+            projected = _truncate(projected)
+        out[list_key] = projected
+
+    # Also drop performance_ratio list — it contains percentages that the LLM
+    # routinely confuses with capacity factor, causing narrative/chart mismatch.
+    out.pop("top_performance_ratio_facilities", None)
+
+    # Suppress zero tomorrow_forecast_mwh — it means no forecast data exists,
+    # showing "0.000 MWh" as a KPI would mislead the user.
+    if out.get("tomorrow_forecast_mwh", 1) == 0.0:
+        out.pop("tomorrow_forecast_mwh", None)
+
+    # When a limit is applied (e.g. top 5), reflect the actual count shown in
+    # facility_count so the KPI matches what the user asked for.
+    # Also drop top_facilities/bottom_facilities so _pick_best_list always picks
+    # the truncated all_facilities list for chart/table rendering.
+    if limit is not None:
+        shown = len(out.get("all_facilities") or [])
+        if shown > 0:
+            out["facility_count"] = shown
+        out.pop("top_facilities", None)
+        out.pop("bottom_facilities", None)
+
+    return out
+
+
 class TopicRepository(BaseRepository):
     """Handles fetch_topic_metrics dispatch and all per-topic Databricks methods."""
 
@@ -41,7 +173,9 @@ class TopicRepository(BaseRepository):
         lookback_days = self._lookback_days()
         if arguments is not None and "timeframe_days" in arguments:
             try:
-                lookback_days = max(0, int(arguments["timeframe_days"]))
+                # Never let the LLM shrink the window below the configured default
+                # (e.g. "hôm nay" → timeframe_days=1 is not meaningful for aggregates).
+                lookback_days = max(lookback_days, int(arguments["timeframe_days"]))
             except (ValueError, TypeError):
                 pass
                 
@@ -119,13 +253,28 @@ class TopicRepository(BaseRepository):
 
     def _energy_performance(self, arguments: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[dict[str, str]]]:
         lookback_days = self._lookback_days()
-        if arguments is not None and "timeframe_days" in arguments:
-            try:
-                lookback_days = max(0, int(arguments["timeframe_days"]))
-            except (ValueError, TypeError):
-                pass
+        focus = "overview"
+        limit: int | None = None
+        if arguments is not None:
+            if "timeframe_days" in arguments:
+                try:
+                    # Never let the LLM shrink the window below the configured default.
+                    lookback_days = max(lookback_days, int(arguments["timeframe_days"]))
+                except (ValueError, TypeError):
+                    pass
+            focus = _normalize_focus(arguments.get("focus"))
+            if "limit" in arguments and arguments["limit"] is not None:
+                try:
+                    limit = max(1, int(arguments["limit"]))
+                except (ValueError, TypeError):
+                    pass
 
-        return self._with_databricks_query(
+        logger.info(
+            "energy_performance_request focus=%s limit=%s lookback_days=%s raw_args=%s",
+            focus, limit, lookback_days, arguments,
+        )
+
+        metrics, sources = self._with_databricks_query(
             "energy_performance",
             lambda: self._energy_performance_databricks(lookback_days),
             lambda: self._energy_performance_csv(lookback_days),
@@ -135,6 +284,7 @@ class TopicRepository(BaseRepository):
                 {"layer": "Gold", "dataset": "gold.dim_facility"},
             ],
         )
+        return _apply_energy_focus(metrics, focus, limit=limit), sources
 
     def _energy_performance_databricks(self, lookback_days: int) -> dict[str, Any]:
         anchor_date = self._resolve_latest_date("gold.mart_energy_daily")
@@ -144,7 +294,7 @@ class TopicRepository(BaseRepository):
         all_fac_rows = self._execute_query(
             "SELECT facility_id, facility_name,"
             "       SUM(energy_mwh_daily) AS total_mwh,"
-            "       AVG(avg_capacity_factor_pct) AS capacity_factor_pct"
+            "       AVG(weighted_capacity_factor_pct) AS capacity_factor_pct"
             " FROM gold.mart_energy_daily"
             f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
             f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
@@ -183,11 +333,11 @@ class TopicRepository(BaseRepository):
         )
         top_performance_ratio = self._safe_execute_query(
             "SELECT facility_id, facility_name AS facility,"
-            "       AVG(avg_capacity_factor_pct) AS performance_ratio_pct"
+            "       AVG(weighted_capacity_factor_pct) AS performance_ratio_pct"
             " FROM gold.mart_energy_daily"
             f" WHERE energy_date >= CAST('{anchor_str}' AS DATE) - INTERVAL {lookback_days} DAYS"
             f"   AND energy_date <= CAST('{anchor_str}' AS DATE)"
-            "   AND avg_capacity_factor_pct IS NOT NULL"
+            "   AND weighted_capacity_factor_pct IS NOT NULL"
             " GROUP BY facility_id, facility_name"
             " ORDER BY performance_ratio_pct DESC LIMIT 3"
         )
@@ -215,6 +365,7 @@ class TopicRepository(BaseRepository):
             tomorrow_forecast_mwh = mean(daily_values) if daily_values else 0.0
 
         return {
+            "all_facilities": all_facilities,
             "top_facilities": top_fac,
             "bottom_facilities": bottom_fac,
             "facility_count": len(all_facilities),
@@ -285,6 +436,7 @@ class TopicRepository(BaseRepository):
         bottom_fac_csv = [f for f in reversed(all_fac_sorted) if f["facility"] not in top_names_csv][:3]
 
         return {
+            "all_facilities": all_fac_sorted,
             "top_facilities": top_fac_csv,
             "bottom_facilities": bottom_fac_csv,
             "facility_count": len(all_fac_sorted),
@@ -907,7 +1059,7 @@ class TopicRepository(BaseRepository):
         self, facility_name: str | None = None,
     ) -> dict[str, Any]:
         """Query dim_facility via Databricks SQL."""
-        base_sql = (
+        select_sql = (
             "SELECT facility_code, facility_name,"
             " region, state,"
             " location_lat, location_lng,"
@@ -915,29 +1067,58 @@ class TopicRepository(BaseRepository):
             " total_capacity_registered_mw,"
             " total_capacity_maximum_mw"
             " FROM gold.dim_facility"
-            " WHERE is_current = true"
         )
+        base_current = select_sql + " WHERE is_current = true"
+        base_all = select_sql + " WHERE 1=1"
+
+        def _run_with_retry(current_sql: str, all_sql: str) -> list[dict[str, Any]]:
+            rows = self._safe_execute_query(current_sql)
+            if rows:
+                return rows
+            logger.warning(
+                "facility_info_current_filter_empty_or_failed; retrying without is_current filter",
+            )
+            return self._safe_execute_query(all_sql)
+
         if facility_name:
             safe_name = facility_name.replace("'", "''")
             
             # First, try an exact match on facility_code (BUG-03)
-            exact_sql = base_sql + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
-            rows = self._execute_query(exact_sql)
+            exact_current = base_current + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
+            exact_all = base_all + f" AND UPPER(facility_code) = UPPER('{safe_name}')"
+            rows = _run_with_retry(exact_current, exact_all)
             if rows:
                 return self._build_facility_result(rows)
                 
             # Fall back to substring match
-            sql = base_sql + (
+            like_current = base_current + (
                 f" AND (LOWER(facility_name)"
                 f" LIKE LOWER('%{safe_name}%')"
                 f" OR LOWER(facility_code)"
                 f" LIKE LOWER('%{safe_name}%'))"
             )
+            like_all = base_all + (
+                f" AND (LOWER(facility_name)"
+                f" LIKE LOWER('%{safe_name}%')"
+                f" OR LOWER(facility_code)"
+                f" LIKE LOWER('%{safe_name}%'))"
+            )
+            rows = _run_with_retry(
+                like_current + " ORDER BY facility_name",
+                like_all + " ORDER BY facility_name",
+            )
         else:
-            sql = base_sql
-            
-        sql += " ORDER BY facility_name"
-        rows = self._execute_query(sql)
+            rows = _run_with_retry(
+                base_current + " ORDER BY facility_name",
+                base_all + " ORDER BY facility_name",
+            )
+
+        if not rows:
+            logger.warning(
+                "facility_info_databricks_empty_rows facility_name=%r; falling back to CSV",
+                facility_name,
+            )
+            return self._facility_info_csv(facility_name)
         return self._build_facility_result(rows)
 
     def _facility_info_csv(

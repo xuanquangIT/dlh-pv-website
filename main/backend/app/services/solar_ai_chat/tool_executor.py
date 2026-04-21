@@ -42,27 +42,29 @@ _CORRELATION_KEYWORDS = (
 _METRIC_KEYWORDS = (
     "performance ratio", "performance_ratio", "pr ", " pr",
     "capacity factor", "capacity_factor",
-    "hiệu suất",        # Vietnamese: efficiency / performance
-    "phát điện",        # Vietnamese: power generation
-    "sản xuất điện",
+    "hiệu suất",        # Vietnamese: efficiency / performance (covers "hiệu suất phát điện")
+    "phát điện",        # Vietnamese: power generation / electricity output
+    "sản xuất điện",    # Vietnamese: electricity production
     "energy", "năng lượng", "sản lượng",
     "temperature", "nhiệt độ",
     "aqi", "air quality", "chất lượng không khí",
     "cloud", "mây", "bức xạ", "radiation",
     "humidity", "độ ẩm",
-    "wind", "gió", "tốc độ gió",
+    "wind", "gió", "tốc độ gió",   # covers "tốc độ và hướng gió"
 )
 
+
 _TOP_N_PATTERN = re.compile(
-    r"top\s*(\d+)"
-    r"|bottom\s*(\d+)"
-    r"|(\d+)\s*(?:trạm|cơ sở|facility|facilities|nhà máy|stations?)"
-    r"|(?:trạm|facility|facilities|nhà máy)\s*(?:top\s*)?(\d+)",
+    r"top\s*(\d+)"                  # "top 5", "top5"
+    r"|bottom\s*(\d+)"              # "bottom 3"
+    r"|(\d+)\s*(?:trạm|cơ sở|facility|facilities|nhà máy|stations?)"  # "5 trạm"
+    r"|(?:trạm|facility|facilities|nhà máy)\s*(?:top\s*)?(\d+)",       # "facility top 5"
     re.IGNORECASE,
 )
 
 
 def _extract_top_n_from_query(text: str) -> int | None:
+    """Return the N from 'top N', 'bottom N', 'N trạm' patterns, or None."""
     m = _TOP_N_PATTERN.search(str(text or ""))
     if not m:
         return None
@@ -76,6 +78,10 @@ def _extract_top_n_from_query(text: str) -> int | None:
 
 
 def _is_correlation_query(text: str) -> bool:
+    """True when the user clearly asks for correlation/relationship between
+    two domain metrics. Used to gate tool selection so only the one tool that
+    returns paired X-Y data (query_gold_kpi on mart_energy_daily) is allowed.
+    """
     if not text:
         return False
     t = str(text).lower()
@@ -83,16 +89,18 @@ def _is_correlation_query(text: str) -> bool:
     if not has_corr:
         return False
     metric_hits = sum(1 for k in _METRIC_KEYWORDS if k in t)
-    return metric_hits >= 2
+    return metric_hits >= 2  # at least two metrics named → correlation
 
 
 def _infer_correlation_table(text: str) -> str:
-    """Pick the gold KPI mart most suited for a correlation query.
+    """Pick the gold KPI mart table most suited for a correlation query.
 
-    - AQI / air quality        → aqi_impact    (mart_aqi_impact_daily)
-    - Wind speed / humidity    → weather_impact (mart_weather_impact_daily)
-      mart_energy_daily has NO avg_wind_speed_ms or avg_humidity_pct.
-    - Cloud / temp / radiation → energy         (mart_energy_daily)
+    Routing rules (checked in order):
+    - AQI / air quality       → aqi_impact    (mart_aqi_impact_daily)
+    - Wind speed / humidity   → weather_impact (mart_weather_impact_daily)
+      mart_energy_daily has NO avg_wind_speed_ms or avg_humidity_pct — only the
+      weather_impact mart carries these alongside avg_capacity_factor_pct.
+    - Cloud / temperature / radiation vs PR → energy (mart_energy_daily)
       has performance_ratio_pct + avg_cloud_cover_pct + avg_temperature_c.
     """
     t = str(text or "").lower()
@@ -208,8 +216,10 @@ class ToolExecutor:
 
         self._validate_permission(function_name, role)
 
-        # Safety net: correlation queries must use query_gold_kpi so the data
-        # shape supports X-Y scatter. Transparently reroute any other tool.
+        # Top-level safety net: a correlation query MUST go through
+        # query_gold_kpi. Every other data tool returns a shape that can't
+        # produce a meaningful X-Y scatter. Transparently re-route so the
+        # right data is fetched regardless of what the LLM picked.
         if (
             _is_correlation_query(self._current_user_query)
             and function_name not in ("query_gold_kpi",)
@@ -219,10 +229,14 @@ class ToolExecutor:
             arguments = {"table_name": _corr_table, "limit": 100}
             logger.warning(
                 "tool_routing_rerouted original_tool=%s -> query_gold_kpi('%s') "
-                "reason=correlation_query user_query=%r",
-                function_name, _corr_table, self._current_user_query[:200],
+                "reason=correlation_query user_query=%r original_args=%s",
+                function_name,
+                _corr_table,
+                self._current_user_query[:200],
+                self._short(arguments, 200),
             )
             handler = topic_handlers.get(function_name)
+            # Re-validate permission under the rerouted tool name.
             self._validate_permission(function_name, role)
 
         # Safety net: inject `limit` for get_energy_performance when the user
@@ -234,7 +248,8 @@ class ToolExecutor:
                 logger.info(
                     "tool_limit_injected tool=get_energy_performance limit=%d "
                     "reason=llm_omitted_limit user_query=%r",
-                    inferred, self._current_user_query[:200],
+                    inferred,
+                    self._current_user_query[:200],
                 )
 
         # Safety net: block get_station_daily_report for PR queries (no PR col).
@@ -253,11 +268,15 @@ class ToolExecutor:
                 )
                 raise ValueError(
                     "get_station_daily_report does not return performance_ratio. "
-                    "For PR correlation queries call "
-                    "query_gold_kpi(table_name='energy', limit=100) instead."
+                    "For PR correlation / relationship queries call "
+                    "query_gold_kpi(table_name='energy', limit=100) instead — "
+                    "that table has per-facility-per-day rows with "
+                    "performance_ratio_pct + avg_temperature_c."
                 )
 
         # Safety net: block search_documents for correlation/ranking queries.
+        # Also check original user query — LLM sometimes passes a reworded
+        # search string that drops the correlation keyword.
         if function_name == "search_documents":
             q = str(arguments.get("query") or "").lower()
             user_q = self._current_user_query.lower()
@@ -272,7 +291,8 @@ class ToolExecutor:
             metric_terms = (
                 "performance ratio", "performance_ratio",
                 "capacity factor", "capacity_factor",
-                "hiệu suất", "phát điện",
+                "hiệu suất",    # Vietnamese for efficiency/performance
+                "phát điện",    # power generation
                 "energy_mwh", "mwh", "năng lượng",
                 "wind", "gió", "tốc độ gió",
                 "temperature", "nhiệt độ",
@@ -287,13 +307,17 @@ class ToolExecutor:
             ):
                 logger.warning(
                     "tool_routing_block tool=search_documents "
-                    "reason=correlation_or_ranking_of_metrics query=%r", q[:200],
+                    "reason=correlation_or_ranking_of_metrics query=%r",
+                    q[:200],
                 )
                 raise ValueError(
-                    "search_documents only returns text chunks — it has no numeric "
-                    "data and cannot produce a chart. For correlation or ranking "
-                    "of metrics call query_gold_kpi(table_name='energy', limit=100) "
-                    "instead."
+                    "search_documents only returns text chunks from manuals / "
+                    "incident reports / model changelogs — it has no numeric "
+                    "data and cannot produce a chart. For correlation or "
+                    "ranking of metrics call query_gold_kpi(table_name='energy', "
+                    "limit=100) instead. The `energy` mart has per-facility-"
+                    "per-day rows with performance_ratio_pct, capacity_factor_pct, "
+                    "energy_mwh_daily, avg_temperature_c."
                 )
 
         if function_name in TOOL_NAME_TO_TOPIC and handler == self._get_topic_metrics:
@@ -485,9 +509,15 @@ class ToolExecutor:
         if not hasattr(self._repository, "fetch_gold_kpi"):
              return {"message": "KPI Mart querying is not supported by the current repository."}, []
 
+        raw_limit = arguments.get("limit", 30)
+        try:
+            safe_limit = int(raw_limit) if raw_limit is not None else 30
+        except (TypeError, ValueError):
+            safe_limit = 30
+
         return self._repository.fetch_gold_kpi(
             table_short_name=arguments.get("table_name", ""),
             anchor_date=arguments.get("anchor_date"),
             station_name=arguments.get("station_name"),
-            limit=arguments.get("limit", 30),
+            limit=safe_limit,
         )

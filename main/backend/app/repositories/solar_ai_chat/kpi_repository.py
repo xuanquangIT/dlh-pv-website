@@ -22,6 +22,57 @@ class KpiRepository(BaseRepository):
         "weather_impact": "gold.mart_weather_impact_daily",
     }
 
+    # Common aliases the LLM invents — map to canonical short names so queries
+    # don't fail with "Unknown KPI table" for obviously-valid intent.
+    # NOTE: PR / capacity-factor vs weather correlations go to `energy`
+    # (mart_energy_daily) which has both performance_ratio_pct AND
+    # avg_temperature_c. `weather_impact` only has weather-band aggregates
+    # without explicit PR, so it's NOT the right table for those questions.
+    _TABLE_ALIASES = {
+        # Weather-band aggregates
+        "weather": "weather_impact",
+        "weather_band": "weather_impact",
+        "cloud_band": "weather_impact",
+        # PR / capacity-factor vs weather correlations → mart_energy_daily
+        "performance_ratio_vs_temperature": "energy",
+        "pr_vs_temperature": "energy",
+        "pr_vs_weather": "energy",
+        "pr_temperature": "energy",
+        "temperature": "energy",
+        "temperature_impact": "energy",
+        "temperature_correlation": "energy",
+        "weather_correlation": "energy",
+        "capacity_factor_vs_temperature": "energy",
+        "performance_ratio": "energy",
+        # AQI variants
+        "aqi": "aqi_impact",
+        "air_quality": "aqi_impact",
+        "air_quality_impact": "aqi_impact",
+        "aqi_correlation": "aqi_impact",
+        # Forecast variants
+        "forecast": "forecast_accuracy",
+        "actual_vs_forecast": "forecast_accuracy",
+        "accuracy": "forecast_accuracy",
+        # Energy variants
+        "energy_daily": "energy",
+        "mart_energy_daily": "energy",
+        "daily_energy": "energy",
+        # System variants
+        "system": "system_kpi",
+        "kpi": "system_kpi",
+        "daily_kpi": "system_kpi",
+    }
+
+    @classmethod
+    def _resolve_table_name(cls, raw: str) -> str | None:
+        """Return canonical short name or None if no match."""
+        if not raw:
+            return None
+        key = raw.strip().lower()
+        if key in cls._MART_TABLE_MAP:
+            return key
+        return cls._TABLE_ALIASES.get(key)
+
     def fetch_gold_kpi(
         self,
         table_short_name: str,
@@ -30,8 +81,20 @@ class KpiRepository(BaseRepository):
         limit: int = 30,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         """Fetch rows from a KPI mart table, discovering columns dynamically."""
-        if table_short_name not in self._MART_TABLE_MAP:
-            raise ValueError(f"Unknown KPI table identifier: {table_short_name}")
+        resolved = self._resolve_table_name(table_short_name)
+        if resolved is None:
+            valid = sorted(self._MART_TABLE_MAP.keys())
+            raise ValueError(
+                f"Unknown KPI table identifier: '{table_short_name}'. "
+                f"Valid names: {valid}. For 'performance ratio vs temperature' "
+                f"or any weather correlation question, use 'weather_impact'."
+            )
+        if resolved != table_short_name:
+            logger.info(
+                "kpi_table_alias_resolved raw=%r -> %r",
+                table_short_name, resolved,
+            )
+        table_short_name = resolved
 
         table_path = self._MART_TABLE_MAP[table_short_name]
         
@@ -73,13 +136,31 @@ class KpiRepository(BaseRepository):
         # 2. Build Query
         select_clause = "*"  # We could select explicit columns conceptually
         where_clauses = []
-        
+
+        # Handling anchor_date:
+        #  - If omitted  → return the most recent N rows (no date filter). This
+        #    is the right default for correlation queries since they need many
+        #    data points across days.
+        #  - If provided but AFTER the latest available date → cap to latest.
+        #  - If provided AND exists in data → filter to exactly that date.
         if anchor_date and date_cols:
-            # Pick the primary date column. Usually the first one found is good enough.
+            from datetime import date as _date
             primary_date_col = date_cols[0]
-            # Use CAST to ensure safe comparison regardless of string/date/timestamp type
-            safe_date = anchor_date.replace("'", "''") 
+            try:
+                latest = self._resolve_latest_date(table_path)
+                provided = _date.fromisoformat(anchor_date)
+                if provided > latest:
+                    logger.info(
+                        "kpi_anchor_date_capped provided=%s latest=%s table=%s",
+                        anchor_date, latest, table_path,
+                    )
+                    anchor_date = latest.isoformat()
+            except Exception as _cap_exc:
+                logger.debug("kpi_anchor_date_cap_failed: %s", _cap_exc)
+            safe_date = anchor_date.replace("'", "''")
             where_clauses.append(f"CAST({primary_date_col} AS DATE) = CAST('{safe_date}' AS DATE)")
+        # No date filter when anchor_date omitted — latest N rows via ORDER BY
+        # date_col DESC + LIMIT handles it.
 
         if station_name and str(station_name).lower() not in ("all", "any", "none", "null") and facility_cols:
             primary_fac_col = facility_cols[0]
@@ -88,7 +169,14 @@ class KpiRepository(BaseRepository):
 
         where_sql = " WHERE " + " AND ".join(where_clauses) if where_clauses else ""
         
-        safe_limit = max(1, min(100, limit))
+        try:
+            limit_value = int(limit) if limit is not None else 100
+        except (TypeError, ValueError):
+            limit_value = 100
+        # Hard cap at 500 so correlation queries get enough data points even
+        # when callers pass a very large limit. A single-date query will still
+        # return only that day's rows regardless of limit.
+        safe_limit = max(1, min(500, limit_value))
         
         order_clause = ""
         if date_cols:

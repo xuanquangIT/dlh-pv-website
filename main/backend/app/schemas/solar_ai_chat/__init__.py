@@ -36,6 +36,13 @@ from app.schemas.solar_ai_chat.ui_features import (
     ALL_FEATURES as UI_FEATURE_KEYS,
     resolve_ui_features,
 )
+from app.schemas.solar_ai_chat.visualization import (
+    ChartPayload,
+    DataTableColumn,
+    DataTablePayload,
+    KpiCard,
+    KpiCardsPayload,
+)
 from app.schemas.solar_ai_chat.stream import (
     ThinkingStepEvent,
     ToolResultEvent,
@@ -86,4 +93,9 @@ __all__ = [
     "ROLE_UI_FEATURES",
     "UI_FEATURE_KEYS",
     "resolve_ui_features",
+    "ChartPayload",
+    "DataTableColumn",
+    "DataTablePayload",
+    "KpiCard",
+    "KpiCardsPayload",
 ]
