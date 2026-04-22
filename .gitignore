@@ -48,9 +48,13 @@ dist/
 build/
 coverage/
 htmlcov/
+.coverage
+coverage.xml
 
 # Repository metadata
-.github/
+.github/*
+!.github/workflows/
+!.github/workflows/**
 .agents/
 
 

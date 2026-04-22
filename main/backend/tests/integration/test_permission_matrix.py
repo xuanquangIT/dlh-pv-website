@@ -12,6 +12,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.api.dependencies import get_current_user
 from app.main import create_app
+from app.schemas.dashboard import EmbedTokenResponse
 
 
 class PermissionMatrixIntegrationTests(unittest.TestCase):
@@ -34,9 +35,9 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
     def test_matrix_for_frontend_routes(self) -> None:
         route_matrix = {
             "/dashboard": {"admin", "data_engineer", "ml_engineer", "analyst"},
-            "/pipeline": {"data_engineer"},
-            "/quality": {"data_engineer"},
-            "/training": {"ml_engineer"},
+            "/pipeline": {"admin", "data_engineer"},
+            "/quality": {"admin", "data_engineer"},
+            "/training": {"admin", "ml_engineer"},
             "/registry": {"admin", "ml_engineer"},
             "/forecast": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/solar-chat": {"admin", "data_engineer", "ml_engineer"},
@@ -58,23 +59,37 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
             "/dashboard/summary": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/dashboard/embed-info": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/data-pipeline/status": {"data_engineer", "system"},
-            "/data-quality/score": {"data_engineer"},
-            "/ml-training/experiments": {"ml_engineer", "system"},
-            "/model-registry/models": {"admin", "ml_engineer", "system"},
-            "/forecast/next-72h": {"admin", "data_engineer", "ml_engineer", "analyst"},
+            "/data-quality/summary": {"admin", "data_engineer"},
+            "/ml-training/monitoring": {"admin", "ml_engineer", "data_engineer"},
+            "/model-registry/models-list": {"admin", "ml_engineer", "data_engineer"},
+            "/forecast/summary-kpi": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/solar-ai-chat/topics": {"admin", "data_engineer", "ml_engineer"},
         }
 
         roles = ["admin", "data_engineer", "ml_engineer", "analyst", "system"]
-        for path, allowed_roles in api_matrix.items():
-            for role in roles:
-                with self.subTest(path=path, role=role):
-                    self._set_role(role)
-                    response = self.client.get(path)
-                    if role in allowed_roles:
-                        self.assertEqual(response.status_code, 200)
-                    else:
-                        self.assertEqual(response.status_code, 403)
+        with (
+            patch(
+                "app.services.dashboard.powerbi_service.PowerBIService.get_embed_info",
+                return_value=EmbedTokenResponse(
+                    embed_token="test-token",
+                    embed_url="https://app.powerbi.com/reportEmbed?reportId=test",
+                    report_id="test-report",
+                ),
+            ),
+            patch("app.api.data_quality.routes.get_quality_summary_metrics", return_value={"ok": True}),
+            patch("app.api.ml_training.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
+            patch("app.api.model_registry.routes.get_registry_models", return_value=[{"ok": True}]),
+            patch("app.api.forecast.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
+        ):
+            for path, allowed_roles in api_matrix.items():
+                for role in roles:
+                    with self.subTest(path=path, role=role):
+                        self._set_role(role)
+                        response = self.client.get(path)
+                        if role in allowed_roles:
+                            self.assertEqual(response.status_code, 200)
+                        else:
+                            self.assertEqual(response.status_code, 403)
 
     def test_data_pipeline_schedule_permissions(self) -> None:
         roles = ["admin", "data_engineer", "ml_engineer", "analyst", "system"]

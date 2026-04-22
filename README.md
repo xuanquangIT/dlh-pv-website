@@ -263,6 +263,23 @@ Reports: `main/backend/test_reports/solar_chat_accuracy/`
 python -m pytest main/backend/tests/unit/ -q
 ```
 
+### Web pytest suite with coverage gate (CI/CD)
+
+```powershell
+python -m pytest \
+  main/backend/tests/integration/test_frontend_pages.py \
+  main/backend/tests/integration/test_auth_login_flow.py \
+  main/backend/tests/integration/test_permission_matrix.py \
+  main/backend/tests/integration/test_auth_admin_routes.py \
+  --cov=app.api.frontend \
+  --cov=app.api.auth.routes \
+  --cov=app.main \
+  --cov-report=term-missing \
+  --cov-report=xml \
+  --cov-fail-under=90 \
+  -q
+```
+
 ## Troubleshooting
 
 | Problem | Cause | Fix |
