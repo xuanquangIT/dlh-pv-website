@@ -239,6 +239,45 @@ class ToolExecutor:
             # Re-validate permission under the rerouted tool name.
             self._validate_permission(function_name, role)
 
+        # Safety net: redirect get_system_overview → get_facility_info when the
+        # user is asking for facility details / list / map. The prompt instructs
+        # the LLM to use get_facility_info but it occasionally picks system_overview
+        # for queries like "Thông tin các facility đang hoạt động".
+        _FACILITY_INFO_KEYWORDS = (
+            "thông tin",      # VN: information/details about
+            "danh sách",      # VN: list
+            "list facilit",   # EN: list facilities
+            "bản đồ",         # VN: map
+            " map",
+            "vị trí",         # VN: location/position
+            "location",
+            "timezone",
+            "công suất lắp đặt",  # VN: installed capacity
+            "installed capacity",
+        )
+        _FACILITY_SCOPE_KEYWORDS = (
+            "trạm",           # VN: station
+            "facility",
+            "facilities",
+            "cơ sở",          # VN: facility/base
+            "nhà máy",        # VN: plant
+        )
+        if function_name == "get_system_overview":
+            q = self._current_user_query.lower()
+            if (
+                any(k in q for k in _FACILITY_INFO_KEYWORDS)
+                and any(k in q for k in _FACILITY_SCOPE_KEYWORDS)
+            ):
+                function_name = "get_facility_info"
+                arguments = {}
+                handler = topic_handlers.get(function_name)
+                self._validate_permission(function_name, role)
+                logger.info(
+                    "tool_routing_rerouted get_system_overview -> get_facility_info "
+                    "reason=facility_detail_query user_query=%r",
+                    self._current_user_query[:200],
+                )
+
         # Safety net: inject `limit` for get_energy_performance when the user
         # says "top N" but the LLM forgot to pass limit in the tool call.
         if function_name == "get_energy_performance" and not arguments.get("limit"):

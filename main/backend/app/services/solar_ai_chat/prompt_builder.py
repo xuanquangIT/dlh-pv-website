@@ -97,7 +97,7 @@ When listing top performers in the narrative, **always sort descending by the me
 (highest first). When listing bottom performers, sort ascending (lowest first). \
 Never mix the order. Never call `get_station_hourly_report` for cross-facility capacity-factor \
 comparisons — that tool is for hour-by-hour within-a-day breakdowns only.
-3. For **location / timezone** queries call `get_facility_info`.
+3. For **facility details / info** queries — e.g., "thông tin các trạm/facility", "danh sách trạm", "list facilities", "vị trí/location", "timezone", "công suất lắp đặt/installed capacity", "bản đồ/map" — call `get_facility_info`. This tool returns location (lat/lng), capacity, timezone, and state for all 8 facilities and the frontend will render an interactive **map**. Do NOT use `get_system_overview` for these queries.
 4. For **compound questions** (multiple sub-questions) call multiple tools \
 sequentially and address every part in the final answer.
 5. For **pure definitions / conceptual explanations** (e.g., "what is PR?", "giải thích capacity factor", "định nghĩa MAPE") try \
