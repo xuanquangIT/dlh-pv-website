@@ -1,4 +1,24 @@
 (function () {
+  // Task 1.5 — Thinking-trace panel is an engineering affordance.
+  // Keep backend trace payloads (needed for observability / copy-paste into
+  // bug reports) but only render it in the UI when the current role benefits
+  // from it, or when the caller explicitly opts in via ?debug=1.
+  function canSeeThinkingTrace() {
+    try {
+      var search = String(window.location.search || "");
+      if (/(?:^|[?&])debug=1(?:&|$)/.test(search)) return true;
+      var body = document.body;
+      if (body && body.dataset) {
+        if (body.dataset.isDevMode === "true") return true;
+        var apiRole = String(body.dataset.apiRole || "").toLowerCase();
+        if (apiRole === "admin" || apiRole === "ml_engineer" || apiRole === "data_engineer") {
+          return true;
+        }
+      }
+    } catch (_) { /* defensive */ }
+    return false;
+  }
+
   const SOLAR_WELCOME_MESSAGE =
     "Xin chào! Tôi là **Solar AI**, trợ lý thông minh của PV Lakehouse.\n\n" +
     "Tôi có thể giúp bạn phân tích dữ liệu năng lượng, kiểm tra pipeline, xem metrics mô hình, hoặc giải thích các dự báo. Bạn cần hỗ trợ gì?";
@@ -511,7 +531,7 @@
       row.dataset.messageId = messageId;
     }
 
-    if (thinkingTrace && normalizedRole === "assistant") {
+    if (thinkingTrace && normalizedRole === "assistant" && canSeeThinkingTrace()) {
       const thinkingWrapper = document.createElement("div");
       thinkingWrapper.className = "msg-thinking-wrapper";
       thinkingWrapper.innerHTML = buildThinkingTraceHtml(thinkingTrace, false);
@@ -535,7 +555,7 @@
     const normalizedRole = role === "user" ? "user" : "assistant";
 
     let thinkingWrapper = row.querySelector(".msg-thinking-wrapper");
-    if (thinkingTrace && normalizedRole === "assistant") {
+    if (thinkingTrace && normalizedRole === "assistant" && canSeeThinkingTrace()) {
       const details = thinkingWrapper ? thinkingWrapper.querySelector("details") : null;
       const isOpen = details ? details.open : false;
       const html = buildThinkingTraceHtml(thinkingTrace, isOpen);

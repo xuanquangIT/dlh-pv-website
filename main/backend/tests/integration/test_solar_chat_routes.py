@@ -982,5 +982,64 @@ class RoleMappingTests(_BaseChatTest):
         self.assertEqual(response.json()["role"], "ml_engineer")
 
 
+# ---------------------------------------------------------------------------
+# Admin tool-stats endpoint (Task 0.1)
+# ---------------------------------------------------------------------------
+
+class AdminToolStatsTests(_BaseChatTest):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = cls._build_app("admin")
+        cls.mock_usage_repo = MagicMock()
+        cls.mock_usage_repo.get_stats.return_value = {
+            "window_days": 7,
+            "total_calls": 42,
+            "by_tool": [
+                {"tool_name": "get_system_overview", "count": 20,
+                 "avg_latency_ms": 123.4, "success_rate": 1.0},
+                {"tool_name": "get_forecast_72h", "count": 10,
+                 "avg_latency_ms": 200.0, "success_rate": 0.9},
+            ],
+            "by_role": [{"role": "admin", "count": 30}],
+        }
+        from app.api.solar_ai_chat import routes as chat_routes
+        cls.app.dependency_overrides[chat_routes._get_tool_usage_repository] = (
+            lambda: cls.mock_usage_repo
+        )
+        cls.client = TestClient(cls.app)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.app.dependency_overrides.clear()
+
+    def test_admin_can_fetch_default_7_day_stats(self) -> None:
+        response = self.client.get("/solar-ai-chat/admin/tool-stats")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["total_calls"], 42)
+        self.assertEqual(body["by_tool"][0]["tool_name"], "get_system_overview")
+        self.mock_usage_repo.get_stats.assert_called_with(days=7)
+
+    def test_admin_can_pass_custom_days(self) -> None:
+        response = self.client.get("/solar-ai-chat/admin/tool-stats?days=30")
+        self.assertEqual(response.status_code, 200)
+        self.mock_usage_repo.get_stats.assert_called_with(days=30)
+
+    def test_invalid_days_zero_rejected(self) -> None:
+        response = self.client.get("/solar-ai-chat/admin/tool-stats?days=0")
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_days_too_large_rejected(self) -> None:
+        response = self.client.get("/solar-ai-chat/admin/tool-stats?days=999")
+        self.assertEqual(response.status_code, 400)
+
+    def test_non_admin_forbidden(self) -> None:
+        self.app.dependency_overrides[get_current_user] = lambda: _make_user("analyst")
+        response = self.client.get("/solar-ai-chat/admin/tool-stats")
+        self.assertEqual(response.status_code, 403)
+        # reset
+        self.app.dependency_overrides[get_current_user] = lambda: _make_user("admin")
+
+
 if __name__ == "__main__":
     unittest.main()

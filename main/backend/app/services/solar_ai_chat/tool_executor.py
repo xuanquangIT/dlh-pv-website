@@ -125,16 +125,34 @@ class ToolExecutor:
         repository: SolarChatRepository,
         vector_repo: VectorRepository | None = None,
         embedding_client: GeminiEmbeddingClient | None = None,
+        usage_logger: Any | None = None,
     ) -> None:
         self._repository = repository
         self._vector_repo = vector_repo
         self._embedding_client = embedding_client
+        # Task 0.1 — best-effort telemetry; None disables it entirely.
+        self._usage_logger = usage_logger
         self._current_user_query: str = ""
+        # Per-request identity so usage rows can be attributed without
+        # plumbing extra args through every internal tool call site.
+        self._current_session_id: str | None = None
+        self._current_user_id: str | None = None
 
     def set_user_query(self, query: str) -> None:
         """Called by chat_service at the start of each request so per-tool
         dispatch can gate routing based on the user's original question."""
         self._current_user_query = str(query or "")
+
+    def set_request_context(
+        self,
+        *,
+        session_id: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        """Task 0.1 — remember who is asking so usage telemetry can attribute
+        rows. Called once per chat request, before any ``execute()`` call."""
+        self._current_session_id = session_id
+        self._current_user_id = user_id
 
     def execute_envelope(
         self,
@@ -182,6 +200,48 @@ class ToolExecutor:
             )
 
     def execute(
+        self,
+        function_name: str,
+        arguments: dict[str, Any],
+        role: ChatRole,
+    ) -> tuple[dict[str, Any], list[dict[str, str]]]:
+        """Public entry point. Wraps ``_execute_impl`` with Task-0.1 telemetry
+        so both success and failure paths record a ``chat_tool_usage`` row.
+
+        Telemetry is best-effort — a logging failure must never surface to
+        the caller, and if ``usage_logger`` is None this is a pure pass-through.
+        """
+        import time as _time
+        t0 = _time.perf_counter()
+        success = False
+        error_message: str | None = None
+        try:
+            result = self._execute_impl(function_name, arguments, role)
+            success = True
+            return result
+        except Exception as exc:
+            error_message = f"{type(exc).__name__}: {exc}"
+            raise
+        finally:
+            if self._usage_logger is not None:
+                latency_ms = int((_time.perf_counter() - t0) * 1000)
+                try:
+                    self._usage_logger.log_usage(
+                        tool_name=str(function_name),
+                        role=getattr(role, "value", str(role)),
+                        latency_ms=latency_ms,
+                        success=success,
+                        session_id=self._current_session_id,
+                        user_id=self._current_user_id,
+                        error_message=error_message,
+                    )
+                except Exception as log_err:  # pragma: no cover - defensive
+                    logger.warning(
+                        "tool_usage_log_inline_failed tool=%s error=%s",
+                        function_name, log_err,
+                    )
+
+    def _execute_impl(
         self,
         function_name: str,
         arguments: dict[str, Any],

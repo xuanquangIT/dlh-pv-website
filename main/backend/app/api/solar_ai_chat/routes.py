@@ -10,6 +10,7 @@ from app.core.settings import get_solar_chat_settings
 from app.repositories.solar_ai_chat.postgres_history_repository import PostgresChatHistoryRepository
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
+from app.repositories.solar_ai_chat.tool_usage_repository import ToolUsageRepository
 from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
     ChatRole,
@@ -29,7 +30,6 @@ from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailab
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
 from app.services.solar_ai_chat.intent_service import VietnameseIntentService
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
-from app.services.solar_ai_chat.web_search_client import WebSearchClient
 
 router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
 
@@ -58,8 +58,8 @@ def _get_history_repository() -> PostgresChatHistoryRepository:
 @lru_cache(maxsize=1)
 def _get_vector_repository() -> VectorRepository | None:
     settings = get_solar_chat_settings()
-    if settings.history_backend.strip().lower() != "postgres":
-        return None
+    # Task 1.1 — history backend collapsed to Postgres; vector repo still
+    # requires a PG host to be reachable.
     if not settings.pg_host:
         return None
     return VectorRepository(settings=settings)
@@ -79,11 +79,10 @@ def _get_embedding_client() -> GeminiEmbeddingClient | None:
 
 
 @lru_cache(maxsize=1)
-def _get_web_search_client() -> WebSearchClient | None:
-    settings = get_solar_chat_settings()
-    if not settings.websearch_api_key:
-        return None
-    return WebSearchClient(settings=settings)
+def _get_tool_usage_repository() -> ToolUsageRepository:
+    """Task 0.1 — singleton telemetry repository. Safe to construct even
+    when the DB is offline; each call is internally try/except-guarded."""
+    return ToolUsageRepository()
 
 
 @lru_cache(maxsize=1)
@@ -110,13 +109,12 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
         history_repository=_get_history_repository(),
         vector_repo=_get_vector_repository(),
         embedding_client=embedding_client,
-        web_search_client=_get_web_search_client(),
+        tool_usage_logger=_get_tool_usage_repository(),
         planner_enabled=settings.planner_enabled,
         orchestrator_enabled=settings.orchestrator_enabled,
         verifier_enabled=settings.verifier_enabled,
         hybrid_retrieval_enabled=settings.hybrid_retrieval_enabled,
         max_tool_steps=settings.max_tool_steps,
-        legacy_router_enabled=settings.legacy_router_enabled,
         planner_max_output_tokens=settings.llm_planner_max_output_tokens,
         synthesis_max_output_tokens=settings.llm_synthesis_max_output_tokens,
         verifier_max_output_tokens=settings.llm_verifier_max_output_tokens,
@@ -490,3 +488,26 @@ def delete_document(
             status_code=404,
             detail=f"No chunks found for '{source_file}'.",
         )
+
+
+# ------------------------------------------------------------------
+# Admin: tool usage telemetry (Task 0.1)
+# ------------------------------------------------------------------
+
+@router.get("/admin/tool-stats")
+def get_tool_usage_stats(
+    days: int = 7,
+    _: AuthUser = Depends(require_role(["admin"])),
+    usage_repo: ToolUsageRepository = Depends(_get_tool_usage_repository),
+) -> dict[str, object]:
+    """Return aggregated chat_tool_usage rows for the last ``days`` days.
+
+    Surfaces which tools are actually being used before we decide what to
+    cut in Phase 2. Admin-only — the raw table contains per-user activity.
+    """
+    if days < 1 or days > 365:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="`days` must be between 1 and 365.",
+        )
+    return usage_repo.get_stats(days=days)

@@ -32,12 +32,17 @@
     </div>
 
     <form id="cb-form" class="cb-input-area" action="#" novalidate>
-        <select id="cb-role" class="cb-role-select" title="Role">
+        {# Task 1.4 — role picker is dev-only. In prod the server-resolved
+           role from the signed-in user is used; letting anyone override
+           it from the widget is a debugging affordance, not a feature. #}
+        {% if is_dev_mode %}
+        <select id="cb-role" class="cb-role-select" title="Role (dev only)">
             <option value="data_analyst">Analyst</option>
             <option value="data_engineer">Engineer</option>
             <option value="ml_engineer">ML Eng</option>
             <option value="admin">Admin</option>
         </select>
+        {% endif %}
         <input type="text" id="cb-input" class="cb-text-input" placeholder="Type a question..." autocomplete="off" required />
         <button type="submit" id="cb-send" class="cb-send-btn" title="Send">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>

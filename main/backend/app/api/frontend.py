@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -7,6 +8,17 @@ from fastapi.templating import Jinja2Templates
 from app.api.dependencies import get_current_user, require_role
 from app.db.database import AuthUser
 from app.schemas.solar_ai_chat import ChatRole, resolve_ui_features
+
+
+def _is_dev_mode() -> bool:
+    """Task 1.4 — portal is "dev mode" when APP_ENV is set to a dev-like value.
+
+    Affects only UI affordances meant for local debugging (role picker,
+    trace panel default visibility for non-engineer roles). It does NOT
+    relax backend RBAC.
+    """
+    env = os.environ.get("APP_ENV", "prod").strip().lower()
+    return env in {"dev", "development", "local"}
 
 router = APIRouter(tags=["Frontend"], include_in_schema=False)
 
@@ -112,6 +124,8 @@ def _render_refactored_page(
         "chat_role": chat_role_str,
         "chat_ui_features": resolve_ui_features(chat_role_enum),
         "user_initials": "".join([part[0] for part in user_name.split()[:2]]).upper() or "U",
+        # Task 1.4/1.5 — gate dev-only affordances in portal templates.
+        "is_dev_mode": _is_dev_mode(),
     }
     return templates.TemplateResponse(
         request=request,

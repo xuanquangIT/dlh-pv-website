@@ -64,18 +64,17 @@ dlh-pv-website/
     │       │       ├── prompt_builder.py    # System prompt builder
     │       │       ├── nlp_parser.py        # Date/entity extraction
     │       │       ├── permissions.py       # RBAC for tools
-    │       │       ├── web_search_client.py # Web search integration
-    │       │       └── ...
+    │       │       └── ...                   # web_search_client.py removed in Phase 1
     │       └── repositories/
     │           ├── auth/                # User/role queries
     │           └── solar_ai_chat/       # Data access layer
-    │               ├── base_repository.py       # Shared Databricks/CSV logic
+    │               ├── base_repository.py       # Shared Databricks logic
     │               ├── topic_repository.py      # Per-topic metrics queries
     │               ├── report_repository.py     # Station daily reports
     │               ├── extreme_repository.py    # Extreme value queries
     │               ├── chat_repository.py       # Facility info
-    │               ├── postgres_history_repository.py  # Chat history (Postgres)
-    │               ├── databricks_history_repository.py # Chat history (Databricks)
+    │               ├── postgres_history_repository.py  # Chat history (Postgres only — Task 1.1)
+    │               ├── tool_usage_repository.py       # Tool-call telemetry (Task 0.1)
     │               └── vector_repository.py     # RAG vector search
     └── frontend/
         ├── templates/
@@ -144,7 +143,12 @@ The chat module implements an **agentic loop** where the LLM can call backend to
 | `get_station_daily_report` | Per-station daily data (energy, radiation, weather) for a specific date; supports `station_name` filtering |
 | `get_facility_info` | Facility metadata (location, capacity, timezone) |
 | `get_extreme_*` | Record values for AQI, energy, weather |
-| `web_search` | Live internet search for external context |
+
+> Phase 1 cuts: the `web_search` tool and its Tavily client were removed
+> in favour of staying on internal data only (`solar-chat-upgrade-plan`
+> Task 1.2). Other removals in the same phase: Databricks chat-history
+> backend (Postgres-only now, Task 1.1) and the legacy regex router
+> fallback (Task 1.3).
 
 **Key features:**
 
@@ -154,6 +158,13 @@ The chat module implements an **agentic loop** where the LLM can call backend to
 - **Dynamic Gold KPI Querying**: Parses and searches dynamic Gold-layer schema attributes safely, effectively replacing hardcoded rules.
 - **Multi-provider LLM**: Supports OpenAI, Gemini, and Anthropic APIs with automatic fallback
 - **Bilingual**: Vietnamese and English
+- **Tool usage telemetry** (Task 0.1): every tool call writes one row to
+  `chat_tool_usage`. Admins can query aggregates via
+  `GET /solar-ai-chat/admin/tool-stats?days=7`.
+- **Dev-only affordances** (Task 1.4/1.5): the widget's role picker and
+  the thinking-trace panel are hidden unless `APP_ENV=dev`, the viewing
+  user is `admin`/`ml_engineer`/`data_engineer`, or `?debug=1` is on the
+  URL. Backend RBAC is unchanged.
 
 ## Prerequisites
 
@@ -183,7 +194,12 @@ Create/edit `.env` in the project root:
 DATABASE_URL=postgresql://...
 POSTGRES_SSLMODE=require
 POSTGRES_CHANNEL_BINDING=require
-SOLAR_CHAT_HISTORY_BACKEND=postgres
+# SOLAR_CHAT_HISTORY_BACKEND removed in Task 1.1 — Postgres is the only
+# chat-history backend. SOLAR_CHAT_WEBSEARCH_* and SOLAR_AI_LEGACY_ROUTER_ENABLED
+# are also no longer read (Tasks 1.2, 1.3).
+
+# Optional: force dev affordances on (role picker, trace panel for analyst)
+# APP_ENV=dev
 
 # Databricks
 DATABRICKS_HOST=https://...

@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="{{ url_for('static', path='css/platform_portal.css') }}">
     {% block head_extra %}{% endblock %}
 </head>
-<body>
+<body data-chat-role="{{ chat_role | default('data_analyst') }}" data-api-role="{{ api_role | default('') }}" data-is-dev-mode="{{ 'true' if is_dev_mode else 'false' }}">
     {% include "platform_portal/components/sidebar.html" %}
     {% include "platform_portal/components/topbar.html" %}
 

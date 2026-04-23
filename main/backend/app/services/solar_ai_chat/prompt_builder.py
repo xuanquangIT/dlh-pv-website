@@ -187,11 +187,9 @@ def _format_history_messages(
 
 
 _TOOL_HINT_PROMPT_SNIPPETS: dict[str, str] = {
-    "web_search": (
-        "The user has enabled the **Web search** hint. Consider using web lookup "
-        "when up-to-date external info would help answer their question, but you "
-        "may skip it if the internal data alone is sufficient."
-    ),
+    # Task 1.2 — "web_search" hint removed. The key itself is still silently
+    # accepted by _apply_tool_hints() so pre-1.2 clients don't break; it
+    # just doesn't inject any snippet anymore.
     "visualize": (
         "The user has enabled the **Visualize** hint. Prefer tools that return "
         "time-series or per-station tabular data (e.g. get_station_hourly_report, "

@@ -1,7 +1,7 @@
 import uuid
 from typing import Generator
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, String, create_engine
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Integer, String, create_engine
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from sqlalchemy.sql import func
@@ -80,6 +80,27 @@ class ChatMessage(Base):
     session = relationship("ChatSession", back_populates="messages")
 
 
+class ChatToolUsage(Base):
+    """Per-tool invocation telemetry. Used by Task 0.1 to answer
+    "what tools are actually being used?" before we refactor.
+
+    Populated best-effort from ToolExecutor.execute(); a failure here must
+    never break a user's chat request.
+    """
+
+    __tablename__ = "chat_tool_usage"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(12), nullable=True, index=True)
+    user_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    role = Column(String(50), nullable=True)
+    tool_name = Column(String(64), nullable=False, index=True)
+    latency_ms = Column(Integer, nullable=False, default=0)
+    success = Column(Boolean, nullable=False, default=True)
+    error_message = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
 def get_db() -> Generator:
     db = SessionLocal()
     try:
@@ -100,6 +121,23 @@ def _apply_runtime_migrations() -> None:
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS key_metrics JSONB",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_requested BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_payload JSONB",
+        # Task 0.1 — chat_tool_usage telemetry table
+        """
+        CREATE TABLE IF NOT EXISTS chat_tool_usage (
+            id VARCHAR(36) PRIMARY KEY,
+            session_id VARCHAR(12) NULL,
+            user_id UUID NULL,
+            role VARCHAR(50) NULL,
+            tool_name VARCHAR(64) NOT NULL,
+            latency_ms INTEGER NOT NULL DEFAULT 0,
+            success BOOLEAN NOT NULL DEFAULT TRUE,
+            error_message VARCHAR(500) NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_chat_tool_usage_tool_name ON chat_tool_usage(tool_name)",
+        "CREATE INDEX IF NOT EXISTS ix_chat_tool_usage_created_at ON chat_tool_usage(created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_chat_tool_usage_session_id ON chat_tool_usage(session_id)",
     )
     try:
         with engine.begin() as conn:

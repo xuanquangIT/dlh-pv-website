@@ -69,7 +69,8 @@ from app.schemas.solar_ai_chat.agent import EvidenceItem, EvidenceStore
 if TYPE_CHECKING:
     from app.repositories.solar_ai_chat.vector_repository import VectorRepository
     from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
-    from app.services.solar_ai_chat.web_search_client import WebSearchClient
+    # Task 1.2 — WebSearchClient removed. `web_search_client` constructor
+    # arg is kept as ``Any | None`` so in-flight callers still pass None.
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -119,9 +120,14 @@ _PROMPT_INJECTION_MARKERS: tuple[str, ...] = (
 
 
 def _needs_web_search(message: str) -> bool:
-    """Return True if the user's message explicitly requests a web search."""
-    lowered = message.lower()
-    return any(kw in lowered for kw in _WEB_SEARCH_KEYWORDS)
+    """Task 1.2 — web search removed. Always False.
+
+    Kept as a named stub so the many ``not _needs_web_search(...)`` call
+    sites throughout this file continue to compile and evaluate correctly
+    (they are now simply always True).
+    """
+    _ = message  # noqa: B007 (kept for signature stability)
+    return False
 
 
 _VISUALIZE_KEYWORDS: tuple[str, ...] = (
@@ -419,14 +425,16 @@ class SolarAIChatService:
         history_repository: Any | None = None,
         vector_repo: "VectorRepository | None" = None,
         embedding_client: "GeminiEmbeddingClient | None" = None,
-        web_search_client: "WebSearchClient | None" = None,
+        # Task 1.2 — web_search_client kept as Any | None accept-and-ignore
+        # for one release to avoid breaking callers that still pass it.
+        web_search_client: Any | None = None,
+        tool_usage_logger: Any | None = None,
         *,
         planner_enabled: bool = True,           # kept for route-compat, ignored
         orchestrator_enabled: bool = True,       # kept for route-compat, ignored
         verifier_enabled: bool = True,
         hybrid_retrieval_enabled: bool = True,   # kept for route-compat, ignored
         max_tool_steps: int = MAX_TOOL_STEPS,
-        legacy_router_enabled: bool = False,     # kept for route-compat, ignored
         planner_max_output_tokens: int | None = None,
         synthesis_max_output_tokens: int | None = None,
         verifier_max_output_tokens: int | None = None,
@@ -440,6 +448,7 @@ class SolarAIChatService:
             repository,
             vector_repo=vector_repo,
             embedding_client=embedding_client,
+            usage_logger=tool_usage_logger,
         )
         self._web_search_client = web_search_client
         self._verifier_enabled = verifier_enabled
@@ -470,6 +479,14 @@ class SolarAIChatService:
         # routing (e.g., force correlation queries through query_gold_kpi).
         try:
             self._tool_executor.set_user_query(request.message)
+        except AttributeError:
+            pass
+        # Task 0.1 — attribute tool usage rows to this request's session/user.
+        try:
+            self._tool_executor.set_request_context(
+                session_id=getattr(request, "session_id", None),
+                user_id=getattr(request, "user_id", None),
+            )
         except AttributeError:
             pass
         logger.info(
@@ -568,6 +585,13 @@ class SolarAIChatService:
         request = _apply_tool_hints(request)
         try:
             self._tool_executor.set_user_query(request.message)
+        except AttributeError:
+            pass
+        try:
+            self._tool_executor.set_request_context(
+                session_id=getattr(request, "session_id", None),
+                user_id=getattr(request, "user_id", None),
+            )
         except AttributeError:
             pass
 
@@ -970,79 +994,7 @@ class SolarAIChatService:
                     step_events.append({"step": _SYNTH_STEP, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
                     yield _sse(ToolResultEvent(step=_SYNTH_STEP, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
 
-            elif _needs_web_search(request.message):
-                search_query = _extract_search_query(request.message, history_messages)
-                if all_metrics:
-                    top_names = _extract_top_facility_names(all_metrics)
-                    if top_names and not any(n.lower() in search_query.lower() for n in top_names):
-                        search_query = " ".join(top_names) + " solar farm"
-
-                _WEB_STEP = len(step_events)  # correct index — comes after any prefetch step
-                yield _sse(ThinkingStepEvent(
-                    step=_WEB_STEP, tool_name="web_lookup_direct",
-                    label=tool_label("web_lookup_direct"), trace_id=trace_id,
-                ))
-                t0 = time.perf_counter()
-                web_response = self._execute_web_lookup({"query": search_query})
-                dur = int((time.perf_counter() - t0) * 1000)
-                web_results = web_response.get("results", [])
-                web_status = "ok" if web_results else "error"
-                step_events.append({"step": _WEB_STEP, "tool": "web_lookup_direct", "status": web_status,
-                                    "result_count": len(web_results), "duration_ms": dur})
-                yield _sse(ToolResultEvent(
-                    step=_WEB_STEP, tool_name="web_lookup_direct",
-                    status=web_status, duration_ms=dur, trace_id=trace_id,
-                ))
-
-                evidence_parts: list[str] = []
-                if all_metrics:
-                    evidence_parts.append("## System data\n" + json.dumps(all_metrics, ensure_ascii=False))
-                if web_results:
-                    snippets = "\n".join(
-                        f"- [{r.get('title', '')}]({r.get('url', '')}): {r.get('snippet', '')[:300]}"
-                        for r in web_results
-                    )
-                    evidence_parts.append(f"## Web results ({len(web_results)} sources)\n{snippets}")
-                    for wr in web_results:
-                        wr_url = wr.get("url", "")
-                        if wr_url:
-                            all_sources.append({
-                                "layer": "Web", "dataset": wr.get("title", wr_url),
-                                "data_source": "web_search", "url": wr_url,
-                            })
-                evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "(no data)"
-                synthesis_prompt = build_synthesis_prompt(
-                    user_message=request.message,
-                    evidence_text=evidence_text,
-                    language=language,
-                    history=history_messages or None,
-                    cite_web_sources=bool(web_results),
-                )
-                _SYNTH_STEP_W = len(step_events)  # AFTER web step is appended
-                yield _sse(StatusUpdateEvent(text="Synthesizing answer…"))
-                yield _sse(ThinkingStepEvent(
-                    step=_SYNTH_STEP_W, tool_name="synthesize",
-                    label="Synthesizing answer", trace_id=trace_id,
-                ))
-                t_syn = time.perf_counter()
-                try:
-                    gen = self._model_router.generate(
-                        synthesis_prompt,
-                        max_output_tokens=self._synthesis_max_output_tokens,
-                        temperature=0.1,
-                    )
-                    answer = gen.text
-                    model_used = gen.model_used
-                    fallback_used = gen.fallback_used
-                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
-                    step_events.append({"step": _SYNTH_STEP_W, "tool": "synthesize", "status": "ok", "duration_ms": dur_syn, "detail": f"via {model_used}"})
-                    yield _sse(ToolResultEvent(step=_SYNTH_STEP_W, tool_name="synthesize", status="ok", duration_ms=dur_syn, trace_id=trace_id))
-                except Exception:
-                    dur_syn = int((time.perf_counter() - t_syn) * 1000)
-                    answer = build_data_only_summary(all_metrics, all_sources, language)
-                    fallback_used = True
-                    step_events.append({"step": _SYNTH_STEP_W, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
-                    yield _sse(ToolResultEvent(step=_SYNTH_STEP_W, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
+            # Task 1.2 — direct web-search synthesis branch removed with Tavily.
 
             # Agentic loop
             for step_num in range(1, self._max_tool_steps + 1):
@@ -1725,94 +1677,7 @@ class SolarAIChatService:
                 answer = build_data_only_summary(all_metrics, all_sources, language)
                 fallback_used = True
 
-        # ------------------------------------------------------------------
-        # Direct web-search path: when the user explicitly requests an
-        # internet lookup, call web_search_client directly (bypassing
-        # generate_with_tools, which gpt-5-mini ignores for tool calls).
-        # Combines web snippets with any pre-fetched system data and
-        # synthesises via generate() that includes conversation history.
-        # ------------------------------------------------------------------
-        elif _needs_web_search(request.message):
-            search_query = _extract_search_query(request.message, history_messages)
-            # If pre-fetched data has specific facility names not already in the
-            # extracted query, use them to build a targeted search query.
-            if all_metrics:
-                top_names = _extract_top_facility_names(all_metrics)
-                if top_names and not any(
-                    name.lower() in search_query.lower() for name in top_names
-                ):
-                    search_query = " ".join(top_names) + " solar farm"
-            logger.info(
-                "solar_chat_web_search_direct trace_id=%s query=%r",
-                trace_id,
-                search_query,
-            )
-            web_response = self._execute_web_lookup({"query": search_query})
-
-            # Build combined evidence: system data (if any) + web results
-            evidence_parts: list[str] = []
-            if all_metrics:
-                evidence_parts.append(
-                    "## Dữ liệu hệ thống (30 ngày gần nhất)\n"
-                    + json.dumps(all_metrics, ensure_ascii=False)
-                )
-            web_results = web_response.get("results", [])
-            if web_results:
-                snippets = "\n".join(
-                    f"- [{r.get('title', '')}]({r.get('url', '')}): "
-                    f"{r.get('snippet', '')[:300]}"
-                    for r in web_results
-                )
-                evidence_parts.append(
-                    f"## Kết quả tìm kiếm web ({len(web_results)} nguồn)\n{snippets}"
-                )
-            elif "error" in web_response:
-                evidence_parts.append(
-                    f"## Web search: {web_response['error']}\n"
-                    "Trả lời từ kiến thức tích hợp nếu có."
-                )
-            evidence_text = "\n\n".join(evidence_parts) if evidence_parts else "(không có dữ liệu)"
-            synthesis_prompt = build_synthesis_prompt(
-                user_message=request.message,
-                evidence_text=evidence_text,
-                language=language,
-                history=history_messages or None,
-                cite_web_sources=bool(web_results),
-            )
-            step_events.append({
-                "step": 0,
-                "tool": "web_lookup_direct",
-                "status": "ok" if web_results else "no_results",
-                "result_count": len(web_results),
-            })
-            # Propagate web URLs into sources so they appear in the response
-            for wr in web_results:
-                wr_url = wr.get("url", "")
-                if wr_url:
-                    all_sources.append({
-                        "layer": "Web",
-                        "dataset": wr.get("title", wr_url),
-                        "data_source": "web_search",
-                        "url": wr_url,
-                    })
-            try:
-                gen = self._model_router.generate(
-                    synthesis_prompt,
-                    max_output_tokens=self._synthesis_max_output_tokens,
-                    temperature=0.1,
-                )
-                answer = gen.text
-                model_used = gen.model_used
-                fallback_used = gen.fallback_used
-                logger.info(
-                    "solar_chat_web_synthesis_done trace_id=%s model=%s web_results=%d",
-                    trace_id,
-                    model_used,
-                    len(web_results),
-                )
-            except Exception:
-                answer = build_data_only_summary(all_metrics, all_sources, language)
-                fallback_used = True
+        # Task 1.2 — direct web-search synthesis branch removed with Tavily.
 
         # ------------------------------------------------------------------
         # Agentic loop — LLM may call additional tools or synthesise directly
@@ -2160,33 +2025,11 @@ class SolarAIChatService:
         return derived_topic
 
     def _execute_web_lookup(self, tool_args: dict[str, Any]) -> dict[str, Any]:
-        """Execute a web_lookup tool call and return structured search results."""
-        if self._web_search_client is None or not getattr(self._web_search_client, "enabled", False):
-            return {"error": "Web search is not configured or is disabled."}
-
-        query = str(tool_args.get("query") or "").strip()
-        if not query:
-            return {"error": "No search query was provided."}
-
-        try:
-            results = self._web_search_client.search(query, max_results=5)
-        except Exception as exc:
-            return {"error": str(exc)}
-
-        if not results:
-            return {"results": [], "message": "No external results found for this query."}
-
-        return {
-            "results": [
-                {
-                    "title": getattr(r, "title", ""),
-                    "snippet": getattr(r, "snippet", ""),
-                    "url": getattr(r, "url", ""),
-                    "score": getattr(r, "score", None),
-                }
-                for r in results[:5]
-            ]
-        }
+        """Task 1.2 — web search removed. Always returns a disabled error so
+        any dead web_search branch a future refactor overlooks still yields
+        a safe, empty response instead of a NameError."""
+        _ = tool_args  # noqa: B007 — signature kept for compat
+        return {"error": "Web search is not configured or is disabled."}
 
     # ------------------------------------------------------------------
     # Response finalization

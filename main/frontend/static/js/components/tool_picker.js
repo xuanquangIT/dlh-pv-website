@@ -1,15 +1,13 @@
 /**
  * tool_picker.js — Inline tool toggle pills for Solar AI Chat composer.
  *
- * Two toggle-pills mirror the UX in ChatGPT/Claude:
- *   🌐 Web search   — bias the agent toward external web lookup
- *   📊 Visualize    — bias the agent toward producing chartable data
+ * One toggle-pill:
+ *   📊 Visualize — bias the agent toward producing chartable data
  *
- * Both are independent (multi-select). With none selected the agent runs in
- * full Auto mode and can still pick any tool.
+ * With none selected the agent runs in full Auto mode and can still pick any tool.
  *
  * Selection shape sent to backend:
- *   { tool_mode: "auto", allowed_tools: null, tool_hints: ["web_search"?, "visualize"?] }
+ *   { tool_mode: "auto", allowed_tools: null, tool_hints: ["visualize"?] }
  *
  * Exposes window.SolarToolPicker:
  *   - mount(container): attach the pill row above the composer (idempotent)
@@ -19,17 +17,10 @@
 (function (global) {
   "use strict";
 
-  var STORAGE_KEY = "solarChatToolHints_v2";
+  // v3: bumped from v2 to clear any cached "web_search" hints from localStorage
+  var STORAGE_KEY = "solarChatToolHints_v3";
 
   var TOOLS = [
-    {
-      id: "web_search",
-      label: "Web search",
-      tooltip: "Force the agent to pull in up-to-date info from a web search",
-      icon:
-        '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
-        '<path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm6.93 6h-2.95a15.7 15.7 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.93 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14a7.85 7.85 0 0 1 0-4h3.38a16.6 16.6 0 0 0 0 4H4.26zm.81 2h2.95c.3 1.28.77 2.5 1.38 3.56A8.03 8.03 0 0 1 5.07 16zm2.95-8H5.07a8.03 8.03 0 0 1 4.33-3.56A15.7 15.7 0 0 0 8.02 8zM12 19.96a13 13 0 0 1-1.91-3.96h3.82A13 13 0 0 1 12 19.96zM14.34 14H9.66a14.6 14.6 0 0 1 0-4h4.68a14.6 14.6 0 0 1 0 4zm.26 5.56c.61-1.06 1.09-2.28 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56zM16.36 14a16.6 16.6 0 0 0 0-4h3.38a7.85 7.85 0 0 1 0 4h-3.38z"/></svg>',
-    },
     {
       id: "visualize",
       label: "Visualize",
@@ -48,7 +39,7 @@
       if (!raw) return [];
       var parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed.filter(function (h) {
-        return h === "web_search" || h === "visualize";
+        return h === "visualize";
       }) : [];
     } catch (_) {
       return [];

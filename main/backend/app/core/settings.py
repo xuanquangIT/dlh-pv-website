@@ -167,7 +167,8 @@ class SolarChatSettings(BaseSettings):
     rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
-    history_backend: str = Field(default="databricks", alias="SOLAR_CHAT_HISTORY_BACKEND")
+    # Task 1.1 — history backend collapsed to Postgres only.
+    # SOLAR_CHAT_HISTORY_BACKEND env var is intentionally no longer read.
     analytics_lookback_days: int = Field(
         default=30,
         alias="SOLAR_CHAT_ANALYTICS_LOOKBACK_DAYS",
@@ -184,22 +185,9 @@ class SolarChatSettings(BaseSettings):
         default=2,
         alias="SOLAR_CHAT_INTENT_KEYWORD_FASTPATH_SCORE",
     )
-    websearch_api_key: str | None = Field(
-        default=None,
-        alias="SOLAR_CHAT_WEBSEARCH_API_KEY",
-    )
-    websearch_base_url: str = Field(
-        default="https://api.tavily.com/search",
-        alias="SOLAR_CHAT_WEBSEARCH_BASE_URL",
-    )
-    websearch_timeout_seconds: float = Field(
-        default=10.0,
-        alias="SOLAR_CHAT_WEBSEARCH_TIMEOUT_SECONDS",
-    )
-    websearch_max_results: int = Field(
-        default=10,
-        alias="SOLAR_CHAT_WEBSEARCH_MAX_RESULTS",
-    )
+    # Task 1.2 — SOLAR_CHAT_WEBSEARCH_* settings removed.
+    # The web search client was unused by internal analytics flows and
+    # pulled in a third-party dependency (Tavily) with no runtime benefit.
 
     # --- Agent Architecture Feature Flags ---
     planner_enabled: bool = Field(
@@ -218,10 +206,9 @@ class SolarChatSettings(BaseSettings):
         default=True,
         alias="SOLAR_AI_HYBRID_RETRIEVAL_ENABLED",
     )
-    legacy_router_enabled: bool = Field(
-        default=False,
-        alias="SOLAR_AI_LEGACY_ROUTER_ENABLED",
-    )
+    # Task 1.3 — legacy_router removed. Every active model supports tool
+    # calling; the deterministic-regex fallback path was only reachable when
+    # a non-tool-calling model was configured (none of which remain).
     max_tool_steps: int = Field(
         default=6,
         alias="SOLAR_AI_MAX_TOOL_STEPS",

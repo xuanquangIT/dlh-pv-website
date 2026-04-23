@@ -210,10 +210,15 @@ class TestBuildAgenticMessages(unittest.TestCase):
         result = build_agentic_messages("Hello", language="vi")
         self.assertIsInstance(result, list)
 
-    def test_web_search_hint_appended_to_system(self) -> None:
-        result = build_agentic_messages("Hello", tool_hints=["web_search"])
-        sys_text = result[0]["parts"][0]["text"]  # type: ignore[index]
-        self.assertIn("Web search", sys_text)
+    def test_web_search_hint_silently_ignored_after_task_1_2(self) -> None:
+        # Task 1.2 — "web_search" hint removed. The key is still silently
+        # accepted (so pre-1.2 clients don't break) but injects no snippet.
+        baseline = build_agentic_messages("Hello", tool_hints=None)
+        with_hint = build_agentic_messages("Hello", tool_hints=["web_search"])
+        self.assertEqual(
+            baseline[0]["parts"][0]["text"],  # type: ignore[index]
+            with_hint[0]["parts"][0]["text"],  # type: ignore[index]
+        )
 
     def test_visualize_hint_appended_to_system(self) -> None:
         result = build_agentic_messages("Hello", tool_hints=["visualize"])

@@ -14,7 +14,7 @@ class SourceMetadata(BaseModel):
     layer: str = Field(description="Data layer name. Accepted values: Silver or Gold.")
     dataset: str = Field(description="Dataset name used to answer the query.")
     data_source: str = Field(default="databricks", description="Backend used to retrieve data. Value: databricks.")
-    url: str | None = Field(default=None, description="Source URL for web search results.")
+    url: str | None = Field(default=None, description="Optional source URL for external references.")
 
 
 ToolMode = Literal["auto", "none", "selected"]
@@ -40,7 +40,7 @@ class SolarChatRequest(BaseModel):
         default=None,
         description=(
             "Soft hints from the UI indicating which capabilities the user explicitly "
-            "picked. Accepted values: 'web_search', 'visualize'. Hints do not force "
+            "picked. Accepted values: 'visualize'. Hints do not force "
             "the agent; they tilt it toward using that capability when relevant."
         ),
     )

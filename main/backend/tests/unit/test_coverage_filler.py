@@ -36,6 +36,15 @@ class TestIntentCacheLRU:
         assert r1.topic == r2.topic
 
 
+class TestPhase1Stubs:
+    """Task 1.2/1.3 — verify removed code paths are safely neutered."""
+
+    def test_needs_web_search_always_false_after_task_1_2(self) -> None:
+        assert cs_module._needs_web_search("search internet for pv news") is False
+        assert cs_module._needs_web_search("tra cuu tren internet") is False
+        assert cs_module._needs_web_search("") is False
+
+
 class TestQueryRewriter:
     def test_empty_message_returns_empty_normalized(self) -> None:
         result = QueryRewriter().rewrite("")

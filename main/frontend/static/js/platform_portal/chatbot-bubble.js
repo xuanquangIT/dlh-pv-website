@@ -11,11 +11,25 @@ var selectAllSessionsEl = document.getElementById("cb-select-all-sessions");
 var deleteSelectedBtn = document.getElementById("cb-delete-selected");
 var messagesEl = document.getElementById("cb-messages");
 var form = document.getElementById("cb-form");
+// Task 1.4 — role picker rendered only in dev mode. In prod the server
+// resolves the role from the signed-in user, so roleSelect is null.
 var roleSelect = document.getElementById("cb-role");
 var inputEl = document.getElementById("cb-input");
 var sendBtn = document.getElementById("cb-send");
 
 if (!toggle || !panel || !form) return;
+
+function currentRole() {
+    // Prefer the explicit dev-only dropdown when present.
+    if (roleSelect && roleSelect.value) return roleSelect.value;
+    // Fall back to the role the server injected on the page shell; the
+    // backend ignores a mismatching role anyway (RBAC is server-enforced).
+    var body = document.body;
+    if (body && body.dataset && body.dataset.chatRole) {
+        return body.dataset.chatRole;
+    }
+    return "data_analyst";
+}
 
 var activeSessionId = null;
 var isSending = false;
@@ -222,7 +236,7 @@ async function selectSession(sessionId) {
 }
 
 async function createSession() {
-    var role = roleSelect.value;
+    var role = currentRole();
     var title = "Chat " + new Date().toLocaleTimeString();
     var resp = await fetch("/solar-ai-chat/sessions", {
         method: "POST",
@@ -355,7 +369,7 @@ form.addEventListener("submit", async function (e) {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                role: roleSelect.value,
+                role: currentRole(),
                 session_id: activeSessionId,
                 message: message,
             }),
