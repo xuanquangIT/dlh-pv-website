@@ -1,8 +1,8 @@
-"""Task 0.1 — ToolExecutor telemetry hook.
+"""ToolExecutor telemetry hook.
 
-We verify the contract (success + failure both log; a logger failure must
-not break the caller) without touching a real database by injecting a
-lightweight fake logger.
+Verify the contract (success and failure both log; a logger failure must
+never break the caller) without touching a real database — the logger is
+replaced with a lightweight fake.
 """
 from __future__ import annotations
 

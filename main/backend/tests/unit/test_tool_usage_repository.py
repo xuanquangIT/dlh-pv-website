@@ -1,7 +1,7 @@
-"""Unit coverage for ToolUsageRepository (Task 0.1).
+"""Unit coverage for ToolUsageRepository.
 
-We mock SessionLocal so the test runs without a live Postgres — the repo's
-job is (a) produce correctly-shaped insert rows, (b) never raise on DB
+SessionLocal is mocked so the test runs without a live Postgres. The repo
+must (a) produce correctly-shaped insert rows, (b) never raise on DB
 errors, (c) aggregate the right columns.
 """
 from __future__ import annotations

@@ -210,9 +210,9 @@ class TestBuildAgenticMessages(unittest.TestCase):
         result = build_agentic_messages("Hello", language="vi")
         self.assertIsInstance(result, list)
 
-    def test_web_search_hint_silently_ignored_after_task_1_2(self) -> None:
-        # Task 1.2 — "web_search" hint removed. The key is still silently
-        # accepted (so pre-1.2 clients don't break) but injects no snippet.
+    def test_web_search_hint_silently_ignored(self) -> None:
+        # The "web_search" hint is accepted for backward compatibility but
+        # must not inject any snippet into the prompt.
         baseline = build_agentic_messages("Hello", tool_hints=None)
         with_hint = build_agentic_messages("Hello", tool_hints=["web_search"])
         self.assertEqual(

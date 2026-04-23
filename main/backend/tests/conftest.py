@@ -56,7 +56,6 @@ _ENV_OVERRIDES = {
     "SOLAR_CHAT_PRIMARY_MODEL": "gemini-2.0-flash",
     "SOLAR_CHAT_FALLBACK_MODEL": "gemini-1.5-flash",
     "SOLAR_CHAT_EMBEDDING_MODEL": "text-embedding-004",
-    # SOLAR_CHAT_HISTORY_BACKEND removed in Task 1.1 — Postgres is the only backend.
 }
 
 

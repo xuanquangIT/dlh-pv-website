@@ -10,6 +10,7 @@ from app.schemas.solar_ai_chat.agent import ToolResultEnvelope
 from app.schemas.solar_ai_chat.enums import ChatRole, ChatTopic
 from app.schemas.solar_ai_chat.tools import TOOL_NAME_TO_TOPIC
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
+from app.services.solar_ai_chat.intent_service import normalize_vietnamese_text
 from app.services.solar_ai_chat.permissions import ROLE_TOOL_PERMISSIONS
 
 logger = logging.getLogger(__name__)
@@ -130,7 +131,7 @@ class ToolExecutor:
         self._repository = repository
         self._vector_repo = vector_repo
         self._embedding_client = embedding_client
-        # Task 0.1 — best-effort telemetry; None disables it entirely.
+        # Best-effort telemetry; None disables it entirely.
         self._usage_logger = usage_logger
         self._current_user_query: str = ""
         # Per-request identity so usage rows can be attributed without
@@ -149,8 +150,8 @@ class ToolExecutor:
         session_id: str | None = None,
         user_id: str | None = None,
     ) -> None:
-        """Task 0.1 — remember who is asking so usage telemetry can attribute
-        rows. Called once per chat request, before any ``execute()`` call."""
+        """Remember who is asking so usage telemetry rows can be attributed.
+        Called once per chat request before any ``execute()`` call."""
         self._current_session_id = session_id
         self._current_user_id = user_id
 
@@ -205,11 +206,11 @@ class ToolExecutor:
         arguments: dict[str, Any],
         role: ChatRole,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        """Public entry point. Wraps ``_execute_impl`` with Task-0.1 telemetry
-        so both success and failure paths record a ``chat_tool_usage`` row.
+        """Public entry point. Wraps ``_execute_impl`` with telemetry so both
+        success and failure paths record a ``chat_tool_usage`` row.
 
-        Telemetry is best-effort — a logging failure must never surface to
-        the caller, and if ``usage_logger`` is None this is a pure pass-through.
+        Telemetry is best-effort — a logging failure must never surface to the
+        caller, and if ``usage_logger`` is None this is a pure pass-through.
         """
         import time as _time
         t0 = _time.perf_counter()
@@ -510,11 +511,57 @@ class ToolExecutor:
                 anchor = date.today()
         metrics = arguments.get("metrics")
         station_name = arguments.get("station_name")
+        metrics = self._scope_station_report_metrics(metrics)
         return self._repository.fetch_station_daily_report(
             anchor_date=anchor,
             metrics=metrics,
             station_name=station_name,
         )
+
+    _METRIC_KEYWORDS: dict[str, tuple[str, ...]] = {
+        "energy_mwh": (
+            "energy", "mwh", "output", "generation", "production", "produce",
+            "san luong", "dien nang", "nang luong",
+        ),
+        "temperature_2m": ("temperature", "temp", "nhiet do", "thoi tiet"),
+        "aqi_value": (
+            "aqi", "air quality", "air-quality", "pollution",
+            "chat luong khong khi", "o nhiem",
+        ),
+        "shortwave_radiation": (
+            "radiation", "irradiance", "irradiation", "insolation",
+            "buc xa", "shortwave",
+        ),
+        "wind_speed_10m": ("wind", "gio", "wind speed"),
+        "cloud_cover": ("cloud", "cloudiness", "may", "mu may"),
+    }
+
+    def _scope_station_report_metrics(self, requested: Any) -> list[str] | None:
+        """Narrow the station-daily-report metrics to what the user actually asked for.
+
+        The LLM tends to omit the ``metrics`` argument even when the user only
+        wanted energy, so the response carries AQI / temperature / radiation /
+        wind / cloud columns the narrative, table, and chart then have to
+        apologise for. We resolve this at the dispatch layer: if the LLM
+        passed a concrete list, respect it; otherwise inspect the original
+        user query and keep only the dimensions the user referenced. If the
+        query mentions no secondary dimension at all, we still default to
+        energy-only rather than the full six-metric dump."""
+        if isinstance(requested, list) and len(requested) > 0:
+            return requested
+
+        query_norm = normalize_vietnamese_text(self._current_user_query or "").lower()
+        if not query_norm:
+            return None
+
+        secondary_matches: list[str] = []
+        for metric, keywords in self._METRIC_KEYWORDS.items():
+            if metric == "energy_mwh":
+                continue
+            if any(kw in query_norm for kw in keywords):
+                secondary_matches.append(metric)
+
+        return ["energy_mwh", *secondary_matches]
 
     @staticmethod
     def _parse_date(value: str | None) -> date | None:

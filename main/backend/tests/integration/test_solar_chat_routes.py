@@ -983,7 +983,7 @@ class RoleMappingTests(_BaseChatTest):
 
 
 # ---------------------------------------------------------------------------
-# Admin tool-stats endpoint (Task 0.1)
+# Admin tool-stats endpoint
 # ---------------------------------------------------------------------------
 
 class AdminToolStatsTests(_BaseChatTest):

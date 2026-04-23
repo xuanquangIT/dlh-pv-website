@@ -81,12 +81,9 @@ class ChatMessage(Base):
 
 
 class ChatToolUsage(Base):
-    """Per-tool invocation telemetry. Used by Task 0.1 to answer
-    "what tools are actually being used?" before we refactor.
-
-    Populated best-effort from ToolExecutor.execute(); a failure here must
-    never break a user's chat request.
-    """
+    """Per-tool invocation telemetry. Populated best-effort from
+    ``ToolExecutor.execute()`` — a failure here must never break a chat
+    request, so writes are wrapped in try/except at the call site."""
 
     __tablename__ = "chat_tool_usage"
 
@@ -121,7 +118,6 @@ def _apply_runtime_migrations() -> None:
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS key_metrics JSONB",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_requested BOOLEAN DEFAULT FALSE NOT NULL",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS viz_payload JSONB",
-        # Task 0.1 — chat_tool_usage telemetry table
         """
         CREATE TABLE IF NOT EXISTS chat_tool_usage (
             id VARCHAR(36) PRIMARY KEY,

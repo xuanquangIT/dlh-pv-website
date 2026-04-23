@@ -1,10 +1,9 @@
-"""Persistence + aggregation for chat_tool_usage (Task 0.1).
+"""Persistence and aggregation for the ``chat_tool_usage`` telemetry table.
 
 Every insert is best-effort — a DB failure here must never surface to the
-user-facing chat flow. Aggregates are used only by the admin analytics
-endpoint to answer "which tools are actually being called, by whom,
-how fast, how often?" so we can make evidence-based cuts in later phases.
-"""
+user-facing chat flow. Aggregates power the admin analytics endpoint so
+tool-usage questions ("which tools are actually being called, by whom, how
+fast, how often?") can be answered from data."""
 from __future__ import annotations
 
 import logging

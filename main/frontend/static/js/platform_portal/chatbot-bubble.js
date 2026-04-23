@@ -11,8 +11,8 @@ var selectAllSessionsEl = document.getElementById("cb-select-all-sessions");
 var deleteSelectedBtn = document.getElementById("cb-delete-selected");
 var messagesEl = document.getElementById("cb-messages");
 var form = document.getElementById("cb-form");
-// Task 1.4 — role picker rendered only in dev mode. In prod the server
-// resolves the role from the signed-in user, so roleSelect is null.
+// Role picker is rendered only in dev mode; in prod the server resolves
+// the role from the signed-in user and roleSelect is null.
 var roleSelect = document.getElementById("cb-role");
 var inputEl = document.getElementById("cb-input");
 var sendBtn = document.getElementById("cb-send");

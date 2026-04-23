@@ -58,9 +58,13 @@ def _get_history_repository() -> PostgresChatHistoryRepository:
 @lru_cache(maxsize=1)
 def _get_vector_repository() -> VectorRepository | None:
     settings = get_solar_chat_settings()
-    # Task 1.1 — history backend collapsed to Postgres; vector repo still
-    # requires a PG host to be reachable.
     if not settings.pg_host:
+        return None
+    # RAG (search_documents) is opt-in: exposing it changes the agent's tool
+    # palette and can drift synthesis on queries that have nothing to do with
+    # documents. Set SOLAR_CHAT_RAG_ENABLED=1 when docs are actually ingested.
+    import os
+    if os.environ.get("SOLAR_CHAT_RAG_ENABLED", "").strip().lower() not in {"1", "true", "yes"}:
         return None
     return VectorRepository(settings=settings)
 
@@ -80,8 +84,8 @@ def _get_embedding_client() -> GeminiEmbeddingClient | None:
 
 @lru_cache(maxsize=1)
 def _get_tool_usage_repository() -> ToolUsageRepository:
-    """Task 0.1 — singleton telemetry repository. Safe to construct even
-    when the DB is offline; each call is internally try/except-guarded."""
+    """Singleton telemetry repository. Safe to construct even when the DB is
+    offline; each call is internally try/except-guarded."""
     return ToolUsageRepository()
 
 
@@ -491,7 +495,7 @@ def delete_document(
 
 
 # ------------------------------------------------------------------
-# Admin: tool usage telemetry (Task 0.1)
+# Admin: tool usage telemetry
 # ------------------------------------------------------------------
 
 @router.get("/admin/tool-stats")
@@ -501,10 +505,7 @@ def get_tool_usage_stats(
     usage_repo: ToolUsageRepository = Depends(_get_tool_usage_repository),
 ) -> dict[str, object]:
     """Return aggregated chat_tool_usage rows for the last ``days`` days.
-
-    Surfaces which tools are actually being used before we decide what to
-    cut in Phase 2. Admin-only — the raw table contains per-user activity.
-    """
+    Admin-only — the raw table contains per-user activity."""
     if days < 1 or days > 365:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

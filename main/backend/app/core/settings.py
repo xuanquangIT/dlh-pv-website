@@ -167,8 +167,6 @@ class SolarChatSettings(BaseSettings):
     rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
-    # Task 1.1 — history backend collapsed to Postgres only.
-    # SOLAR_CHAT_HISTORY_BACKEND env var is intentionally no longer read.
     analytics_lookback_days: int = Field(
         default=30,
         alias="SOLAR_CHAT_ANALYTICS_LOOKBACK_DAYS",
@@ -185,9 +183,6 @@ class SolarChatSettings(BaseSettings):
         default=2,
         alias="SOLAR_CHAT_INTENT_KEYWORD_FASTPATH_SCORE",
     )
-    # Task 1.2 — SOLAR_CHAT_WEBSEARCH_* settings removed.
-    # The web search client was unused by internal analytics flows and
-    # pulled in a third-party dependency (Tavily) with no runtime benefit.
 
     # --- Agent Architecture Feature Flags ---
     planner_enabled: bool = Field(
@@ -206,9 +201,6 @@ class SolarChatSettings(BaseSettings):
         default=True,
         alias="SOLAR_AI_HYBRID_RETRIEVAL_ENABLED",
     )
-    # Task 1.3 — legacy_router removed. Every active model supports tool
-    # calling; the deterministic-regex fallback path was only reachable when
-    # a non-tool-calling model was configured (none of which remain).
     max_tool_steps: int = Field(
         default=6,
         alias="SOLAR_AI_MAX_TOOL_STEPS",

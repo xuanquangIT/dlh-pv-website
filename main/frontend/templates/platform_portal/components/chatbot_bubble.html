@@ -32,9 +32,8 @@
     </div>
 
     <form id="cb-form" class="cb-input-area" action="#" novalidate>
-        {# Task 1.4 — role picker is dev-only. In prod the server-resolved
-           role from the signed-in user is used; letting anyone override
-           it from the widget is a debugging affordance, not a feature. #}
+        {# Role picker is a dev-only debugging affordance. In prod the
+           server-resolved role from the signed-in user is authoritative. #}
         {% if is_dev_mode %}
         <select id="cb-role" class="cb-role-select" title="Role (dev only)">
             <option value="data_analyst">Analyst</option>

@@ -130,6 +130,7 @@ _LABELS: dict[str, tuple[str, str | None, ColumnType]] = {
     "skill_score": ("Skill Score", None, "number"),
     "total_energy_mwh": ("Total Energy", "MWh", "number"),
     "station_count": ("Stations", None, "integer"),
+    "day_count": ("Days", None, "integer"),
     "row_count": ("Rows", None, "integer"),
     "forecast_mwh": ("Forecast", "MWh", "number"),
     "actual_mwh": ("Actual", "MWh", "number"),
@@ -139,6 +140,7 @@ _SCALAR_PRIORITY = [
     "total_energy_mwh",
     "energy_total_mwh",
     "station_count",
+    "day_count",
     "row_count",
     "forecast_mae",
     "r2",
@@ -574,11 +576,24 @@ def _build_chart(
         lat_col, lng_col = geo_pair
         return _build_geo_map_chart(metric_key, rows, columns, lat_col, lng_col, cat_col)
 
+    # Multi-day per-facility data (report_date present AND >1 unique date)
+    # should render as a time-series (one line per facility), not a scatter.
+    # Single-date multi-facility data correlates naturally (weather vs energy)
+    # and still goes through the scatter branch below.
+    multi_date = False
+    if time_col is not None:
+        seen: set[Any] = set()
+        for r in rows:
+            seen.add(r.get(time_col.key))
+            if len(seen) > 1:
+                multi_date = True
+                break
+
     # --- Correlation scatter -------------------------------------------------
     # Check BEFORE time-series so that weather-impact data that happens to
     # include an `energy_date` column still renders as a per-facility X-Y
     # scatter rather than a time-series line per facility.
-    if cat_col is not None and numeric_cols:
+    if not multi_date and cat_col is not None and numeric_cols:
         candidate_y = [c for c in numeric_cols if c.key != cat_col.key]
         correlation = _detect_correlation_axes(candidate_y, user_query)
         if correlation is not None:

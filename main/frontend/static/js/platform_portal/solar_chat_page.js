@@ -1,8 +1,7 @@
 (function () {
-  // Task 1.5 — Thinking-trace panel is an engineering affordance.
-  // Keep backend trace payloads (needed for observability / copy-paste into
-  // bug reports) but only render it in the UI when the current role benefits
-  // from it, or when the caller explicitly opts in via ?debug=1.
+  // Thinking-trace panel is an engineering affordance. The backend always
+  // returns the trace (used for observability / bug reports) but the UI
+  // only renders it for engineering roles or when ?debug=1 is set.
   function canSeeThinkingTrace() {
     try {
       var search = String(window.location.search || "");

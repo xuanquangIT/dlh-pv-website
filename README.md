@@ -194,12 +194,16 @@ Create/edit `.env` in the project root:
 DATABASE_URL=postgresql://...
 POSTGRES_SSLMODE=require
 POSTGRES_CHANNEL_BINDING=require
-# SOLAR_CHAT_HISTORY_BACKEND removed in Task 1.1 — Postgres is the only
-# chat-history backend. SOLAR_CHAT_WEBSEARCH_* and SOLAR_AI_LEGACY_ROUTER_ENABLED
-# are also no longer read (Tasks 1.2, 1.3).
+# Chat history is always Postgres; SOLAR_CHAT_HISTORY_BACKEND,
+# SOLAR_CHAT_WEBSEARCH_*, and SOLAR_AI_LEGACY_ROUTER_ENABLED are no longer read.
 
 # Optional: force dev affordances on (role picker, trace panel for analyst)
 # APP_ENV=dev
+
+# Optional: expose RAG (search_documents) tool to the agent. Default off;
+# enable only when docs are actually ingested, otherwise the tool clutters
+# the agent palette and can drift synthesis on unrelated queries.
+# SOLAR_CHAT_RAG_ENABLED=1
 
 # Databricks
 DATABRICKS_HOST=https://...

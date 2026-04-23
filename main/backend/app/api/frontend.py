@@ -11,11 +11,10 @@ from app.schemas.solar_ai_chat import ChatRole, resolve_ui_features
 
 
 def _is_dev_mode() -> bool:
-    """Task 1.4 — portal is "dev mode" when APP_ENV is set to a dev-like value.
+    """Return True when APP_ENV marks this as a local/dev deployment.
 
-    Affects only UI affordances meant for local debugging (role picker,
-    trace panel default visibility for non-engineer roles). It does NOT
-    relax backend RBAC.
+    Only gates UI affordances meant for debugging (role picker, trace panel
+    for non-engineer roles). Does NOT relax backend RBAC.
     """
     env = os.environ.get("APP_ENV", "prod").strip().lower()
     return env in {"dev", "development", "local"}
@@ -124,7 +123,6 @@ def _render_refactored_page(
         "chat_role": chat_role_str,
         "chat_ui_features": resolve_ui_features(chat_role_enum),
         "user_initials": "".join([part[0] for part in user_name.split()[:2]]).upper() or "U",
-        # Task 1.4/1.5 — gate dev-only affordances in portal templates.
         "is_dev_mode": _is_dev_mode(),
     }
     return templates.TemplateResponse(

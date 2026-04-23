@@ -17,6 +17,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any
 from unicodedata import normalize
 
@@ -69,8 +70,6 @@ from app.schemas.solar_ai_chat.agent import EvidenceItem, EvidenceStore
 if TYPE_CHECKING:
     from app.repositories.solar_ai_chat.vector_repository import VectorRepository
     from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
-    # Task 1.2 — WebSearchClient removed. `web_search_client` constructor
-    # arg is kept as ``Any | None`` so in-flight callers still pass None.
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -120,14 +119,74 @@ _PROMPT_INJECTION_MARKERS: tuple[str, ...] = (
 
 
 def _needs_web_search(message: str) -> bool:
-    """Task 1.2 — web search removed. Always False.
-
-    Kept as a named stub so the many ``not _needs_web_search(...)`` call
-    sites throughout this file continue to compile and evaluate correctly
-    (they are now simply always True).
-    """
-    _ = message  # noqa: B007 (kept for signature stability)
+    """Web search is disabled. Stub kept so existing ``not _needs_web_search(...)``
+    guards still compile; they all now evaluate to True."""
+    _ = message  # noqa: B007
     return False
+
+
+def _merge_tool_result(
+    all_metrics: dict[str, Any],
+    tool_name: str,
+    data: dict[str, Any],
+) -> None:
+    """Accumulate tool results across repeated calls instead of overwriting.
+
+    The agentic loop can call the same tool several times with different
+    arguments (e.g. daily reports for each day of a week). A naive
+    ``all_metrics.update(data)`` drops every prior day because the top-level
+    keys (``stations``, ``report_date``, ``has_data``, …) collide.
+
+    For tools that return a per-date slice, we keep a flat ``stations`` list
+    with ``report_date`` stamped on each row, plus a ``daily_station_reports``
+    list of the raw per-date payloads for downstream rendering.
+    """
+    if tool_name == "get_station_daily_report":
+        incoming_date = data.get("report_date")
+        incoming_stations = list(data.get("stations") or [])
+        incoming_has_data = bool(data.get("has_data"))
+
+        history = all_metrics.get("daily_station_reports")
+        prior_date = all_metrics.get("report_date")
+        prior_stations = all_metrics.get("stations")
+
+        if history is None and prior_date and prior_stations is not None and prior_date != incoming_date:
+            history = [{
+                "report_date": prior_date,
+                "stations": list(prior_stations) if isinstance(prior_stations, list) else [],
+                "has_data": bool(all_metrics.get("has_data", True)),
+            }]
+
+        if history is not None:
+            history.append({
+                "report_date": incoming_date,
+                "stations": incoming_stations,
+                "has_data": incoming_has_data,
+            })
+            flat: list[dict[str, Any]] = []
+            unique_facilities: set[str] = set()
+            for entry in history:
+                rd = entry.get("report_date")
+                for s in entry.get("stations") or []:
+                    flat.append({**s, "report_date": rd})
+                    name = s.get("facility") or s.get("facility_name")
+                    if name:
+                        unique_facilities.add(str(name))
+            all_metrics["daily_station_reports"] = history
+            all_metrics["stations"] = flat
+            all_metrics["station_count"] = len(unique_facilities)
+            all_metrics["day_count"] = sum(1 for e in history if e.get("has_data"))
+            all_metrics["row_count"] = len(flat)
+            all_metrics["has_data"] = any(e.get("has_data") for e in history)
+            for key, value in data.items():
+                if key not in {"stations", "station_count", "has_data", "report_date", "no_data_reason"}:
+                    all_metrics[key] = value
+            all_metrics["report_date_range"] = sorted(
+                {e["report_date"] for e in history if e.get("report_date")}
+            )
+            return
+
+    all_metrics.update(data)
 
 
 _VISUALIZE_KEYWORDS: tuple[str, ...] = (
@@ -294,6 +353,57 @@ def _is_cross_topic_summary_query(message: str) -> bool:
     return any(marker in norm for marker in markers)
 
 
+_MULTI_DAY_STATION_REPORT_MARKERS: tuple[str, ...] = (
+    "daily station report",
+    "daily report",
+    "station report",
+    "bao cao tram",
+    "bao cao theo tram",
+    "bao cao hang ngay",
+    "bao cao hang ngay tuan",
+)
+
+_MULTI_DAY_WINDOW_MARKERS: dict[str, int] = {
+    "this week": 5,
+    "tuan nay": 5,
+    "past week": 7,
+    "last week": 7,
+    "tuan vua roi": 7,
+    "tuan truoc": 7,
+    "last 7 days": 7,
+    "last seven days": 7,
+    "7 ngay gan day": 7,
+    "last 3 days": 3,
+    "last three days": 3,
+    "3 ngay gan day": 3,
+    "last 5 days": 5,
+    "5 ngay gan day": 5,
+    "last 10 days": 10,
+    "10 ngay gan day": 10,
+    "last 14 days": 14,
+    "two weeks": 14,
+    "past fortnight": 14,
+}
+
+
+def _detect_multi_day_station_window(message: str) -> int | None:
+    """Return the number of days to fetch when the user explicitly asks for a
+    multi-day station report; return None otherwise.
+
+    This exists because the LLM is occasionally flaky at driving the tool
+    loop for phrases like "daily station report for this week" — it sometimes
+    drops into a generic clarification response instead of calling the tool.
+    A deterministic pre-fetch guarantees the data is on the table before
+    synthesis runs, regardless of how the LLM behaves."""
+    norm = normalize_vietnamese_text(message)
+    if not any(m in norm for m in _MULTI_DAY_STATION_REPORT_MARKERS):
+        return None
+    for marker, days in _MULTI_DAY_WINDOW_MARKERS.items():
+        if marker in norm:
+            return days
+    return None
+
+
 def _is_in_domain_query(message: str) -> bool:
     """Best-effort detector for PV-Lakehouse in-domain requests.
 
@@ -425,8 +535,7 @@ class SolarAIChatService:
         history_repository: Any | None = None,
         vector_repo: "VectorRepository | None" = None,
         embedding_client: "GeminiEmbeddingClient | None" = None,
-        # Task 1.2 — web_search_client kept as Any | None accept-and-ignore
-        # for one release to avoid breaking callers that still pass it.
+        # Accept-and-ignore for callers that still pass a legacy web search client.
         web_search_client: Any | None = None,
         tool_usage_logger: Any | None = None,
         *,
@@ -481,7 +590,6 @@ class SolarAIChatService:
             self._tool_executor.set_user_query(request.message)
         except AttributeError:
             pass
-        # Task 0.1 — attribute tool usage rows to this request's session/user.
         try:
             self._tool_executor.set_request_context(
                 session_id=getattr(request, "session_id", None),
@@ -858,7 +966,7 @@ class SolarAIChatService:
                         try:
                             data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
                             dur = int((time.perf_counter() - t0) * 1000)
-                            all_metrics.update(data)
+                            _merge_tool_result(all_metrics, tool_name, data)
                             all_sources.extend(sources)
                             if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
                                 topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
@@ -894,6 +1002,68 @@ class SolarAIChatService:
                     if all_metrics:
                         planner_used_stream = True
 
+            # Deterministic multi-day station-report pre-fetch.
+            # Fires on explicit phrases like "daily station report for this week"
+            # so the agent always has per-day data on the table before synthesis,
+            # even in runs where the LLM flakes out and replies with a generic
+            # clarification question instead of driving the tool loop.
+            multi_day_window = (
+                None if planner_used_stream
+                else _detect_multi_day_station_window(request.message)
+            )
+            if multi_day_window and "get_station_daily_report" in ROLE_TOOL_PERMISSIONS.get(request.role, set()):
+                try:
+                    anchor_latest = self._repo._resolve_latest_date("gold.mart_energy_daily")
+                except Exception:
+                    anchor_latest = date.today()
+                window_start = anchor_latest - timedelta(days=multi_day_window - 1)
+                day = window_start
+                while day <= anchor_latest:
+                    step_idx = len(step_events)
+                    yield _sse(ThinkingStepEvent(
+                        step=step_idx, tool_name="get_station_daily_report",
+                        label=tool_label("get_station_daily_report"), trace_id=trace_id,
+                    ))
+                    t0 = time.perf_counter()
+                    try:
+                        tool_args = {"anchor_date": day.isoformat()}
+                        data, sources = self._tool_executor.execute(
+                            "get_station_daily_report", tool_args, request.role,
+                        )
+                        dur = int((time.perf_counter() - t0) * 1000)
+                        _merge_tool_result(all_metrics, "get_station_daily_report", data)
+                        all_sources.extend(sources)
+                        messages.append({
+                            "role": "model",
+                            "parts": [{"functionCall": {"name": "get_station_daily_report", "args": tool_args}}],
+                        })
+                        messages.append({
+                            "role": "user",
+                            "parts": [{"functionResponse": {"name": "get_station_daily_report", "response": data}}],
+                        })
+                        step_events.append({
+                            "step": step_idx, "tool": "get_station_daily_report", "status": "ok",
+                            "metric_keys": sorted(data.keys()), "source_count": len(sources),
+                        })
+                        yield _sse(ToolResultEvent(
+                            step=step_idx, tool_name="get_station_daily_report",
+                            status="ok", metric_keys=sorted(data.keys()),
+                            duration_ms=dur, trace_id=trace_id,
+                        ))
+                    except Exception as tool_err:
+                        dur = int((time.perf_counter() - t0) * 1000)
+                        step_events.append({
+                            "step": step_idx, "tool": "get_station_daily_report",
+                            "status": "error", "detail": str(tool_err)[:120],
+                        })
+                        yield _sse(ToolResultEvent(
+                            step=step_idx, tool_name="get_station_daily_report",
+                            status="error", duration_ms=dur, trace_id=trace_id,
+                        ))
+                    day = day + timedelta(days=1)
+                topic = ChatTopic.ENERGY_PERFORMANCE
+                planner_used_stream = True
+
             # Intent-based pre-fetch (step 0) — legacy fallback when planner
             # returned no actionable plan.
             prefetch_tool: str | None = None
@@ -924,7 +1094,7 @@ class SolarAIChatService:
                             prefetch_tool, tool_args, request.role
                         )
                         dur = int((time.perf_counter() - t0) * 1000)
-                        all_metrics.update(data)
+                        _merge_tool_result(all_metrics, prefetch_tool, data)
                         all_sources.extend(sources)
                         topic = intent_topic if user_query_date is None else ChatTopic.ENERGY_PERFORMANCE
                         messages.append({
@@ -993,8 +1163,6 @@ class SolarAIChatService:
                     fallback_used = True
                     step_events.append({"step": _SYNTH_STEP, "tool": "synthesize", "status": "error", "duration_ms": dur_syn})
                     yield _sse(ToolResultEvent(step=_SYNTH_STEP, tool_name="synthesize", status="error", duration_ms=dur_syn, trace_id=trace_id))
-
-            # Task 1.2 — direct web-search synthesis branch removed with Tavily.
 
             # Agentic loop
             for step_num in range(1, self._max_tool_steps + 1):
@@ -1121,7 +1289,7 @@ class SolarAIChatService:
                     data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
                     dur = int((time.perf_counter() - t0) * 1000)
                     all_sources.extend(sources)
-                    all_metrics.update(data)
+                    _merge_tool_result(all_metrics, tool_name, data)
                     if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
                         topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
                     messages.append({
@@ -1539,7 +1707,7 @@ class SolarAIChatService:
                     data, sources = self._tool_executor.execute(
                         prefetch_tool, tool_args, request.role
                     )
-                    all_metrics.update(data)
+                    _merge_tool_result(all_metrics, prefetch_tool, data)
                     all_sources.extend(sources)
                     topic = ChatTopic.ENERGY_PERFORMANCE
                     messages.append({
@@ -1599,7 +1767,7 @@ class SolarAIChatService:
                     data, sources = self._tool_executor.execute(
                         primary_tool, tool_args, request.role
                     )
-                    all_metrics.update(data)
+                    _merge_tool_result(all_metrics, primary_tool, data)
                     all_sources.extend(sources)
                     topic = intent_topic
                     # Inject as a completed tool call in the message thread
@@ -1677,11 +1845,9 @@ class SolarAIChatService:
                 answer = build_data_only_summary(all_metrics, all_sources, language)
                 fallback_used = True
 
-        # Task 1.2 — direct web-search synthesis branch removed with Tavily.
-
         # ------------------------------------------------------------------
         # Agentic loop — LLM may call additional tools or synthesise directly
-        # (only entered if neither fast-path nor direct web-search set answer)
+        # (only entered if fast-path did not already set answer)
         # ------------------------------------------------------------------
         allowed_tools = ROLE_TOOL_PERMISSIONS.get(request.role, set())
         role_tool_declarations = [td for td in TOOL_DECLARATIONS if td.get("name") in allowed_tools]
@@ -1807,7 +1973,7 @@ class SolarAIChatService:
             try:
                 data, sources = self._tool_executor.execute(tool_name, tool_args, request.role)
                 all_sources.extend(sources)
-                all_metrics.update(data)
+                _merge_tool_result(all_metrics, tool_name, data)
                 if tool_name in TOOL_NAME_TO_TOPIC and locked_topic is None:
                     topic = ChatTopic(TOOL_NAME_TO_TOPIC[tool_name])
                 messages.append({
@@ -1991,7 +2157,7 @@ class SolarAIChatService:
 
             try:
                 data, sources = self._tool_executor.execute(tool_name, tool_args, role)
-                all_metrics.update(data)
+                _merge_tool_result(all_metrics, tool_name, data)
                 all_sources.extend(sources)
                 messages.append({
                     "role": "model",
@@ -2025,10 +2191,9 @@ class SolarAIChatService:
         return derived_topic
 
     def _execute_web_lookup(self, tool_args: dict[str, Any]) -> dict[str, Any]:
-        """Task 1.2 — web search removed. Always returns a disabled error so
-        any dead web_search branch a future refactor overlooks still yields
-        a safe, empty response instead of a NameError."""
-        _ = tool_args  # noqa: B007 — signature kept for compat
+        """Web search is disabled; always returns a disabled-error payload so
+        any overlooked call site yields a safe response instead of raising."""
+        _ = tool_args  # noqa: B007
         return {"error": "Web search is not configured or is disabled."}
 
     # ------------------------------------------------------------------
