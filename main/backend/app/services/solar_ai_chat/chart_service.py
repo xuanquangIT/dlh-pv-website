@@ -576,24 +576,25 @@ def _build_chart(
         lat_col, lng_col = geo_pair
         return _build_geo_map_chart(metric_key, rows, columns, lat_col, lng_col, cat_col)
 
-    # Multi-day per-facility data (report_date present AND >1 unique date)
-    # should render as a time-series (one line per facility), not a scatter.
-    # Single-date multi-facility data correlates naturally (weather vs energy)
-    # and still goes through the scatter branch below.
-    multi_date = False
-    if time_col is not None:
+    # Accumulated multi-day station-daily-report data (specifically keyed by
+    # `report_date`) should render as a time-series (one line per facility)
+    # instead of a per-facility correlation scatter. Correlation marts that
+    # ship `energy_date` columns alongside multiple metrics still go through
+    # the scatter branch — that's the legitimate weather-vs-output use case.
+    is_station_report_multi_date = False
+    if time_col is not None and time_col.key == "report_date":
         seen: set[Any] = set()
         for r in rows:
             seen.add(r.get(time_col.key))
             if len(seen) > 1:
-                multi_date = True
+                is_station_report_multi_date = True
                 break
 
     # --- Correlation scatter -------------------------------------------------
     # Check BEFORE time-series so that weather-impact data that happens to
     # include an `energy_date` column still renders as a per-facility X-Y
     # scatter rather than a time-series line per facility.
-    if not multi_date and cat_col is not None and numeric_cols:
+    if not is_station_report_multi_date and cat_col is not None and numeric_cols:
         candidate_y = [c for c in numeric_cols if c.key != cat_col.key]
         correlation = _detect_correlation_axes(candidate_y, user_query)
         if correlation is not None:
