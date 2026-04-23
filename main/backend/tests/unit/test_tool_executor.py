@@ -130,14 +130,14 @@ class TestToolRBAC:
         with pytest.raises(PermissionError):
             executor.execute("get_pipeline_status", {}, ChatRole.ML_ENGINEER)
 
-    def test_data_engineer_allowed_energy(self, executor: ToolExecutor) -> None:
-        executor.execute("get_extreme_energy", {"query_type": "highest", "timeframe": "day"}, ChatRole.DATA_ENGINEER)
+    def test_data_analyst_allowed_energy(self, executor: ToolExecutor) -> None:
+        executor.execute("get_extreme_energy", {"query_type": "highest", "timeframe": "day"}, ChatRole.DATA_ANALYST)
 
 
 class TestStationDailyReport:
     def test_dispatch_calls_repository(self, executor: ToolExecutor, mock_repository: MagicMock) -> None:
         args = {"anchor_date": "2025-05-05", "metrics": ["energy_mwh", "aqi_value"]}
-        metrics, sources = executor.execute("get_station_daily_report", args, ChatRole.DATA_ENGINEER)
+        metrics, sources = executor.execute("get_station_daily_report", args, ChatRole.DATA_ANALYST)
         mock_repository.fetch_station_daily_report.assert_called_once()
         assert metrics["station_count"] == 2
         assert len(sources) == 3
@@ -149,13 +149,13 @@ class TestStationDailyReport:
         call_kwargs = mock_repository.fetch_station_daily_report.call_args[1]
         assert call_kwargs["anchor_date"] == date(2025, 5, 5)
 
-    def test_all_roles_can_access(self, executor: ToolExecutor) -> None:
+    def test_allowed_roles_can_access(self, executor: ToolExecutor) -> None:
         args = {"anchor_date": "2025-05-05"}
-        for role in ChatRole:
+        for role in (ChatRole.ADMIN, ChatRole.DATA_ANALYST):
             executor.execute("get_station_daily_report", args, role)
 
     def test_metrics_filter_passed(self, executor: ToolExecutor, mock_repository: MagicMock) -> None:
         args = {"anchor_date": "2025-05-05", "metrics": ["shortwave_radiation"]}
-        executor.execute("get_station_daily_report", args, ChatRole.DATA_ENGINEER)
+        executor.execute("get_station_daily_report", args, ChatRole.DATA_ANALYST)
         call_kwargs = mock_repository.fetch_station_daily_report.call_args[1]
         assert call_kwargs["metrics"] == ["shortwave_radiation"]

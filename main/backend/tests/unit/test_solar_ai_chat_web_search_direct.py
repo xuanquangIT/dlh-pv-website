@@ -223,7 +223,7 @@ def test_direct_web_search_includes_prefetched_data_in_evidence() -> None:
 
     service.handle_query(SolarChatRequest(
         message="Search internet cách tính performance ratio",
-        role=ChatRole.DATA_ENGINEER,
+        role=ChatRole.DATA_ANALYST,
         session_id=None,
     ))
 

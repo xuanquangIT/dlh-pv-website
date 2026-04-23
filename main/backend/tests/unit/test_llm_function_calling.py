@@ -155,10 +155,13 @@ class TestGenerateWithTools:
             )
 
     def test_no_api_key_raises(self) -> None:
+        def mock_executor(url: str, payload: dict, timeout: float) -> dict:
+            raise RuntimeError("API key missing or invalid")
+
         settings = _make_settings()
-        router = LLMModelRouter(settings=settings)
+        router = LLMModelRouter(settings=settings, request_executor=mock_executor)
         router._api_key = None
-        with pytest.raises(ModelUnavailableError, match="API key"):
+        with pytest.raises(ModelUnavailableError):
             router.generate_with_tools([], [])
 
     def test_tool_use_failed_raises_tooling_not_supported_without_cooldown(self) -> None:

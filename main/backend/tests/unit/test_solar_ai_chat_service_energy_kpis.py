@@ -56,7 +56,7 @@ def test_no_llm_returns_insufficient_data_response_for_kpi_question() -> None:
     response = service.handle_query(
         SolarChatRequest(
             message="Các chỉ số KPI nào để đánh giá nhà máy điện mặt trời?",
-            role=ChatRole.DATA_ENGINEER,
+            role=ChatRole.DATA_ANALYST,
             session_id=None,
         )
     )
@@ -72,7 +72,7 @@ def test_no_llm_returns_insufficient_data_response_for_ranking_question() -> Non
     response = service.handle_query(
         SolarChatRequest(
             message="Top facilities and peak hours today",
-            role=ChatRole.DATA_ENGINEER,
+            role=ChatRole.DATA_ANALYST,
             session_id=None,
         )
     )
@@ -85,7 +85,7 @@ def test_no_llm_returns_vietnamese_response_for_vietnamese_message() -> None:
     response = service.handle_query(
         SolarChatRequest(
             message="Trạm nào có sản lượng cao nhất?",
-            role=ChatRole.DATA_ENGINEER,
+            role=ChatRole.DATA_ANALYST,
             session_id=None,
         )
     )
@@ -134,7 +134,7 @@ def test_agentic_loop_returns_llm_answer() -> None:
     response = service.handle_query(
         SolarChatRequest(
             message="Trạm nào có sản lượng cao nhất?",
-            role=ChatRole.DATA_ENGINEER,
+            role=ChatRole.DATA_ANALYST,
             session_id=None,
         )
     )
@@ -189,7 +189,7 @@ def test_agentic_loop_with_tool_call_then_answer() -> None:
     response = service.handle_query(
         SolarChatRequest(
             message="Top facilities hôm nay?",
-            role=ChatRole.DATA_ENGINEER,
+            role=ChatRole.DATA_ANALYST,
             session_id=None,
         )
     )

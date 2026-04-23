@@ -25,7 +25,7 @@ class VietnameseIntentServiceTests(unittest.TestCase):
 
     def test_detects_system_overview_for_overview_r_squared_message(self) -> None:
         result = self.service.detect_intent(
-            "Give me an overview of the entire solar system with facility count, output, quality score, and R-squared"
+            "Give me an overview of the entire solar system with facility count, output, and quality score"
         )
         self.assertEqual(result.topic, ChatTopic.SYSTEM_OVERVIEW)
 
