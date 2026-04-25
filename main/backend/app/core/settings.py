@@ -112,6 +112,22 @@ class SolarChatSettings(BaseSettings):
     databricks_token: str | None = Field(default=None, alias="DATABRICKS_TOKEN")
     databricks_sql_http_path: str | None = Field(default=None, alias="DATABRICKS_SQL_HTTP_PATH")
     databricks_warehouse_id: str | None = Field(default=None, alias="DATABRICKS_WAREHOUSE_ID")
+    use_separate_warehouse_for_solar_chat: bool = Field(
+        default=False,
+        alias="USE_SEPARATE_WAREHOUSE_FOR_SOLAR_CHAT",
+    )
+    solar_chat_databricks_host: str | None = Field(
+        default=None, alias="SOLAR_CHAT_DATABRICKS_HOST"
+    )
+    solar_chat_databricks_token: str | None = Field(
+        default=None, alias="SOLAR_CHAT_DATABRICKS_TOKEN"
+    )
+    solar_chat_databricks_sql_http_path: str | None = Field(
+        default=None, alias="SOLAR_CHAT_DATABRICKS_SQL_HTTP_PATH"
+    )
+    solar_chat_databricks_warehouse_id: str | None = Field(
+        default=None, alias="SOLAR_CHAT_DATABRICKS_WAREHOUSE_ID"
+    )
     databricks_query_timeout_seconds: float = Field(
         default=12.0,
         validation_alias=AliasChoices(
@@ -235,6 +251,28 @@ class SolarChatSettings(BaseSettings):
                 return f"/sql/1.0/warehouses/{warehouse_id}"
 
         return None
+
+    @property
+    def solar_chat_databricks_host_resolved(self) -> str | None:
+        if self.use_separate_warehouse_for_solar_chat and (self.solar_chat_databricks_host or "").strip():
+            return self.solar_chat_databricks_host.strip()
+        return self.databricks_host
+
+    @property
+    def solar_chat_databricks_token_resolved(self) -> str | None:
+        if self.use_separate_warehouse_for_solar_chat and (self.solar_chat_databricks_token or "").strip():
+            return self.solar_chat_databricks_token.strip()
+        return self.databricks_token
+
+    @property
+    def solar_chat_databricks_http_path_resolved(self) -> str | None:
+        if self.use_separate_warehouse_for_solar_chat:
+            if (self.solar_chat_databricks_sql_http_path or "").strip():
+                return self.solar_chat_databricks_sql_http_path.strip()
+            warehouse_id = (self.solar_chat_databricks_warehouse_id or "").strip()
+            if warehouse_id:
+                return f"/sql/1.0/warehouses/{warehouse_id}"
+        return self.resolved_databricks_http_path
 
     @property
     def resolved_llm_base_url(self) -> str:

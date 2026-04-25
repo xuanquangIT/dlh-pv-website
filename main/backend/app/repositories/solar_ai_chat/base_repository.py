@@ -127,9 +127,9 @@ class BaseRepository:
         """Context manager ensuring Databricks SQL connections are always closed."""
         from databricks import sql as databricks_sql
 
-        host = (self._settings.databricks_host or "").strip()
-        token = (self._settings.databricks_token or "").strip()
-        http_path = (self._settings.resolved_databricks_http_path or "").strip()
+        host = (self._settings.solar_chat_databricks_host_resolved or "").strip()
+        token = (self._settings.solar_chat_databricks_token_resolved or "").strip()
+        http_path = (self._settings.solar_chat_databricks_http_path_resolved or "").strip()
 
         if not host or not token or not http_path:
             raise DatabricksDataUnavailableError(
