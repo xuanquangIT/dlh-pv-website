@@ -62,7 +62,7 @@ from app.services.solar_ai_chat.prompt_builder import (
 )
 from app.services.solar_ai_chat.query_rewriter import QueryRewriter
 from app.services.solar_ai_chat.chart_service import ChartSpecBuilder
-from app.services.solar_ai_chat.tool_executor import ToolExecutor
+from app.services.solar_ai_chat.tool_executor import ToolExecutor, ToolRoutingBlockedError
 from app.services.solar_ai_chat.answer_verifier import AnswerVerifier
 from app.services.solar_ai_chat.deep_planner import DeepPlanner
 from app.schemas.solar_ai_chat.agent import EvidenceItem, EvidenceStore
@@ -404,11 +404,24 @@ def _detect_multi_day_station_window(message: str) -> int | None:
     return None
 
 
+def _has_in_domain_history(history: list[ChatMessage]) -> bool:
+    """A prior assistant turn on a non-GENERAL topic establishes conversational
+    context — the next user message is almost certainly a contextual follow-up
+    even if it lacks explicit domain keywords (e.g. "phân tích sâu hơn",
+    "list từ cao đến thấp"). Used to bypass the deterministic scope guard
+    that would otherwise refuse such follow-ups."""
+    last_topic = _last_assistant_topic(history)
+    return last_topic is not None and last_topic != ChatTopic.GENERAL
+
+
 def _is_in_domain_query(message: str) -> bool:
     """Best-effort detector for PV-Lakehouse in-domain requests.
 
     Used only to avoid false-positive deterministic scope refusals when intent
     detection falls back to GENERAL for short/ambiguous but relevant prompts.
+    Meta questions about the assistant itself ("who are you", "what can you do",
+    greetings) are also treated as in-domain so the model can introduce itself
+    instead of being shut down by the deterministic scope guard.
     """
     norm = normalize_vietnamese_text(message)
     markers = (
@@ -433,7 +446,59 @@ def _is_in_domain_query(message: str) -> bool:
         "data quality",
         "chat luong du lieu",
     )
-    return any(m in norm for m in markers)
+    if any(m in norm for m in markers):
+        return True
+    return _is_meta_assistant_query(message)
+
+
+_META_ASSISTANT_MARKERS: tuple[str, ...] = (
+    "who are you",
+    "what are you",
+    "what is your name",
+    "introduce yourself",
+    "tell me about yourself",
+    "what can you do",
+    "what you can do",
+    "what can you help",
+    "what do you do",
+    "what do you offer",
+    "what do you support",
+    "your capabilities",
+    "your abilities",
+    "your features",
+    "how can you help",
+    "how do you work",
+    "ban la ai",
+    "ban ten gi",
+    "gioi thieu ban than",
+    "gioi thieu ve ban",
+    "ban co the lam gi",
+    "ban giup duoc gi",
+    "ban lam duoc gi",
+    "tinh nang cua ban",
+    "kha nang cua ban",
+    "huong dan su dung",
+    "hello",
+    "hi there",
+    "hey there",
+    "xin chao",
+    "chao ban",
+    "chao",
+)
+
+
+def _is_meta_assistant_query(message: str) -> bool:
+    """Detect self-introduction / capability / greeting questions."""
+    norm = normalize_vietnamese_text(message).strip()
+    if not norm:
+        return False
+    if any(m in norm for m in _META_ASSISTANT_MARKERS):
+        return True
+    # Bare one-word greetings (≤ 2 tokens) — e.g. "hi", "chao".
+    tokens = norm.split()
+    if len(tokens) <= 2 and tokens and tokens[0] in {"hi", "hello", "hey", "chao", "yo"}:
+        return True
+    return False
 
 
 def _extract_search_query(
@@ -774,6 +839,7 @@ class SolarAIChatService:
                 intent_topic == ChatTopic.GENERAL
                 and not _needs_web_search(request.message)
                 and not _is_in_domain_query(request.message)
+                and not _has_in_domain_history(history_messages)
             ):
                 final_resp = self._finalize_response(
                     request=request,
@@ -1304,6 +1370,23 @@ class SolarAIChatService:
                     ))
                 except DatabricksDataUnavailableError:
                     raise
+                except ToolRoutingBlockedError as block_err:
+                    # Soft-skip: feed the guidance back to the LLM so it can
+                    # pick a better tool, but don't surface a red ❌ to the user
+                    # — the model will recover on its next step.
+                    dur = int((time.perf_counter() - t0) * 1000)
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"functionResponse": {
+                            "name": tool_name,
+                            "response": {"error": str(block_err)},
+                        }}],
+                    })
+                    step_events.append({"step": step_num, "tool": tool_name, "status": "skipped",
+                                        "detail": "routed to better tool"})
+                    yield _sse(ToolResultEvent(
+                        step=step_num, tool_name=tool_name, status="skipped", duration_ms=dur, trace_id=trace_id,
+                    ))
                 except Exception as tool_err:
                     dur = int((time.perf_counter() - t0) * 1000)
                     messages.append({
@@ -1620,6 +1703,7 @@ class SolarAIChatService:
             intent_topic == ChatTopic.GENERAL
             and not _needs_web_search(request.message)
             and not _is_in_domain_query(request.message)
+            and not _has_in_domain_history(history_messages)
         ):
             return self._finalize_response(
                 request=request,

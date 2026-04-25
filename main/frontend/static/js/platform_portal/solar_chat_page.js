@@ -1465,6 +1465,14 @@
       }
     };
 
+    TaskTracker.prototype.removeStep = function (step) {
+      var idx = this._tasks.findIndex(function (t) { return t.step === step; });
+      if (idx >= 0) {
+        this._tasks.splice(idx, 1);
+        this._render();
+      }
+    };
+
     // ----------------------------------------------------------------
     // sendMessageFlow — streaming version
     // ----------------------------------------------------------------
@@ -1525,6 +1533,8 @@
         await new Promise(function (resolve, reject) {
           const toolSelection = (window.SolarToolPicker && window.SolarToolPicker.getSelection())
             || { tool_mode: "auto", allowed_tools: null, tool_hints: [] };
+          const modelSelection = (window.SolarModelPicker && window.SolarModelPicker.getSelection())
+            || { model_profile_id: "", model_name: "" };
           streamController = SolarChatApi.queryStream(
             {
               message: text,
@@ -1532,6 +1542,8 @@
               tool_mode: toolSelection.tool_mode || "auto",
               allowed_tools: toolSelection.allowed_tools || null,
               tool_hints: toolSelection.tool_hints || [],
+              model_profile_id: modelSelection.model_profile_id || null,
+              model_name: modelSelection.model_name || null,
             },
             {
               onStatus: function (evt) {
@@ -1542,7 +1554,15 @@
                 if (taskTracker) taskTracker.addRunning(evt.step, evt.tool_name, evt.label || evt.tool_name);
               },
               onToolResult: function (evt) {
-                if (taskTracker) taskTracker.markDone(evt.step, evt.status || "ok", evt.duration_ms);
+                if (!taskTracker) return;
+                // Routing-block soft skips: backend recovered automatically by
+                // calling a better tool, no need to clutter the UI with a
+                // misleading red ✗.
+                if (evt.status === "skipped" && evt.tool_name !== "answer_directly") {
+                  taskTracker.removeStep(evt.step);
+                  return;
+                }
+                taskTracker.markDone(evt.step, evt.status || "ok", evt.duration_ms);
               },
               onTextDelta: function (evt) {
                 if (textContentEl) {

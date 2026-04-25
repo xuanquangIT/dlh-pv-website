@@ -164,9 +164,17 @@ class SolarChatSettings(BaseSettings):
     pg_sslmode: str | None = Field(default=None, alias="POSTGRES_SSLMODE")
     pg_channel_binding: str | None = Field(default=None, alias="POSTGRES_CHANNEL_BINDING")
 
-    embedding_api_key: str | None = Field(
+    embedding_primary_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("SOLAR_CHAT_EMBEDDING_API_KEY", "SOLAR_CHAT_GEMINI_API_KEY"),
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_EMBEDDING_PRIMARY_API_KEY",
+            "SOLAR_CHAT_EMBEDDING_API_KEY",  # legacy
+            "SOLAR_CHAT_GEMINI_API_KEY",
+        ),
+    )
+    embedding_fallback_api_key: str | None = Field(
+        default=None,
+        alias="SOLAR_CHAT_EMBEDDING_FALLBACK_API_KEY",
     )
     embedding_base_url: str = Field(
         default="https://generativelanguage.googleapis.com/v1beta",
@@ -290,19 +298,20 @@ class SolarChatSettings(BaseSettings):
 
     @property
     def resolved_llm_api_format(self) -> str:
+        """Pick wire format with priority: explicit format > cloud URL > model name.
+
+        The explicit-format-wins rule is important for proxies (e.g. local
+        Copilot relays) that serve Claude/Gemini-named models over the
+        OpenAI wire protocol — naming "claude-haiku" should not flip the
+        client to Anthropic format if the user already declared ``openai``.
+        """
         normalized = self.llm_api_format.strip().lower()
+
+        # Local / openai-compatible aliases always speak OpenAI wire format.
         if normalized in {"local", "openai-compatible", "openai_compatible"}:
             return "openai"
 
-        if normalized in {"openai", "chatgpt", "groq"}:
-            inferred = "openai"
-        elif normalized in {"anthropic", "claude"}:
-            inferred = "anthropic"
-        elif normalized == "gemini":
-            inferred = "gemini"
-        else:
-            inferred = "openai"
-
+        # Hard-evidence cloud URLs (highest confidence — overrides everything).
         base_url = (self.llm_base_url or "").strip().lower()
         if "generativelanguage.googleapis.com" in base_url:
             return "gemini"
@@ -311,13 +320,23 @@ class SolarChatSettings(BaseSettings):
         if "api.openai.com" in base_url or "api.groq.com" in base_url or "/openai" in base_url:
             return "openai"
 
+        # Trust explicit user-declared format next. Critical for proxies that
+        # expose Claude/Gemini model names over OpenAI wire protocol.
+        if normalized in {"openai", "chatgpt", "groq"}:
+            return "openai"
+        if normalized in {"anthropic", "claude"}:
+            return "anthropic"
+        if normalized == "gemini":
+            return "gemini"
+
+        # Last-resort heuristic: model name prefix.
         primary_model = self.primary_model.strip().lower()
         if primary_model.startswith("gemini"):
             return "gemini"
         if primary_model.startswith("claude"):
             return "anthropic"
 
-        return inferred
+        return "openai"
 
     @property
     def resolved_data_root(self) -> Path:
@@ -326,6 +345,21 @@ class SolarChatSettings(BaseSettings):
 
         repository_root = Path(__file__).resolve().parents[4]
         return repository_root / "main" / "sql"
+
+    @property
+    def embedding_api_key(self) -> str | None:
+        """Backward-compatible alias for callers expecting a single key."""
+        return self.embedding_primary_api_key
+
+    @property
+    def embedding_api_keys(self) -> tuple[str, ...]:
+        """Ordered tuple of distinct embedding keys: primary first, then fallback."""
+        keys: list[str] = []
+        for candidate in (self.embedding_primary_api_key, self.embedding_fallback_api_key):
+            value = (candidate or "").strip()
+            if value and value not in keys:
+                keys.append(value)
+        return tuple(keys)
 
 
 @lru_cache(maxsize=1)

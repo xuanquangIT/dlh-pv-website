@@ -21,9 +21,31 @@ ToolMode = Literal["auto", "none", "selected"]
 
 
 class SolarChatRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     message: str = Field(min_length=1, max_length=1000)
     role: ChatRole | None = None
     session_id: str | None = Field(default=None, max_length=100)
+    model_profile_id: str | None = Field(
+        default=None,
+        max_length=100,
+        description=(
+            "Optional LLM profile override (provider-level: base_url + key + "
+            "wire format). Only honored for admin / ml_engineer roles; "
+            "ignored otherwise. Must match an ID returned by "
+            "GET /solar-ai-chat/llm-profiles. Falls back to the server "
+            "startup-default profile when omitted."
+        ),
+    )
+    model_name: str | None = Field(
+        default=None,
+        max_length=120,
+        description=(
+            "Optional model override within the chosen profile. Must be in "
+            "that profile's `models` list. When omitted, uses the profile's "
+            "`primary_model`."
+        ),
+    )
     tool_mode: ToolMode = Field(
         default="auto",
         description=(

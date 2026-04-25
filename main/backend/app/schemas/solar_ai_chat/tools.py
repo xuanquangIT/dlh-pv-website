@@ -283,14 +283,18 @@ TOOL_DECLARATIONS: list[dict] = [
     {
         "name": "get_station_hourly_report",
         "description": (
-            "Retrieve HOURLY energy generation for one or more stations on a specific date. "
-            "Returns rows with hour (0-23), facility, energy_mwh, capacity_factor_pct. "
-            "Use this ONLY when the user asks for an hour-by-hour breakdown within a day "
-            "('theo giờ', 'từng giờ', 'hourly', 'by hour'). "
+            "Retrieve HOURLY energy generation for one or more stations. "
+            "Two modes: "
+            "(1) Single day — pass anchor_date (or omit for the latest day with data); "
+            "returns 24 rows per facility for that calendar day. "
+            "(2) Range / month — pass BOTH start_date AND end_date (e.g. for "
+            "'this month', 'last 7 days', 'tháng này theo giờ'); returns the AVERAGE "
+            "hourly profile (hour 0-23) per facility across the range, plus "
+            "period_total_mwh. Use this whenever the user asks for an hourly trend "
+            "spanning more than one day — DO NOT call the single-day mode 30 times. "
             "DO NOT use this for cross-facility comparisons of totals, averages, or capacity "
             "factor summaries — use `get_energy_performance` instead (with focus='capacity' "
             "for capacity-factor questions, focus='energy' for energy-output rankings). "
-            "If anchor_date is omitted, the latest available date for the station is used. "
             "Always pass station_name for single-station requests; leave empty for all stations."
         ),
         "parameters": {
@@ -306,8 +310,24 @@ TOOL_DECLARATIONS: list[dict] = [
                 "anchor_date": {
                     "type": "string",
                     "description": (
-                        "Date for the hourly breakdown (YYYY-MM-DD). "
-                        "Leave empty to use the latest date with data for that station."
+                        "Single-day mode: date for the hourly breakdown (YYYY-MM-DD). "
+                        "Leave empty to use the latest date with data. Ignored when "
+                        "start_date and end_date are provided."
+                    ),
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": (
+                        "Range mode: inclusive start date (YYYY-MM-DD). "
+                        "Use together with end_date for monthly / multi-day hourly trends "
+                        "(e.g. start_date=first day of month, end_date=today)."
+                    ),
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": (
+                        "Range mode: inclusive end date (YYYY-MM-DD). "
+                        "Required when start_date is set."
                     ),
                 },
             },

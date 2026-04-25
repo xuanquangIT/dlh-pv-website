@@ -20,6 +20,8 @@ from app.schemas.solar_ai_chat import (
     ForkSessionRequest,
     IngestDocumentRequest,
     IngestDocumentResponse,
+    LLMProfileList,
+    LLMProfileSummary,
     RagStatsResponse,
     SolarChatRequest,
     SolarChatResponse,
@@ -29,6 +31,13 @@ from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailableError
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
 from app.services.solar_ai_chat.intent_service import VietnameseIntentService
+from app.services.solar_ai_chat.model_profile_service import (
+    PICKER_AUTH_ROLES,
+    get_default_profile_id,
+    list_profiles_for_role,
+    resolve_profile,
+    settings_with_profile_override,
+)
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
 
 router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
@@ -72,10 +81,11 @@ def _get_vector_repository() -> VectorRepository | None:
 @lru_cache(maxsize=1)
 def _get_embedding_client() -> GeminiEmbeddingClient | None:
     settings = get_solar_chat_settings()
-    if not settings.embedding_api_key:
+    keys = settings.embedding_api_keys
+    if not keys:
         return None
     return GeminiEmbeddingClient(
-        api_key=settings.embedding_api_key,
+        api_keys=keys,
         base_url=settings.embedding_base_url,
         model=settings.embedding_model,
         dimensions=settings.embedding_dimensions,
@@ -90,29 +100,33 @@ def _get_tool_usage_repository() -> ToolUsageRepository:
 
 
 @lru_cache(maxsize=1)
-def get_solar_ai_chat_service() -> SolarAIChatService:
+def _get_shared_intent_service() -> VietnameseIntentService:
+    """Intent service is expensive to bootstrap (embedding API calls for the
+    semantic router). Share one instance across default + per-profile services."""
     settings = get_solar_chat_settings()
-
-    model_router: LLMModelRouter | None = None
-    if settings.llm_api_key or settings.llm_base_url:
-        model_router = LLMModelRouter(settings=settings)
-
-    embedding_client = _get_embedding_client()
     intent_svc = VietnameseIntentService(
-        embedding_client=embedding_client,
+        embedding_client=_get_embedding_client(),
         semantic_enabled=settings.intent_semantic_enabled,
         semantic_min_confidence=settings.intent_semantic_min_confidence,
         semantic_keyword_score_threshold=settings.intent_keyword_fastpath_score,
     )
     intent_svc.initialize_semantic_router()
+    return intent_svc
 
+
+def _build_chat_service(settings, model_router: LLMModelRouter | None) -> SolarAIChatService:
+    """Construct a SolarAIChatService with a specific router + settings copy.
+
+    Used both for the cached default service and for per-request profile
+    overrides. All other dependencies (intent, repositories, embeddings) are
+    shared singletons so the override path stays cheap."""
     return SolarAIChatService(
         repository=SolarChatRepository(settings=settings),
-        intent_service=intent_svc,
+        intent_service=_get_shared_intent_service(),
         model_router=model_router,
         history_repository=_get_history_repository(),
         vector_repo=_get_vector_repository(),
-        embedding_client=embedding_client,
+        embedding_client=_get_embedding_client(),
         tool_usage_logger=_get_tool_usage_repository(),
         planner_enabled=settings.planner_enabled,
         orchestrator_enabled=settings.orchestrator_enabled,
@@ -124,6 +138,48 @@ def get_solar_ai_chat_service() -> SolarAIChatService:
         verifier_max_output_tokens=settings.llm_verifier_max_output_tokens,
         deep_planner_enabled=settings.planner_enabled,
     )
+
+
+@lru_cache(maxsize=1)
+def get_solar_ai_chat_service() -> SolarAIChatService:
+    settings = get_solar_chat_settings()
+    model_router: LLMModelRouter | None = None
+    if settings.llm_api_key or settings.llm_base_url:
+        model_router = LLMModelRouter(settings=settings)
+    return _build_chat_service(settings, model_router)
+
+
+def _resolve_chat_service_for_request(
+    request: SolarChatRequest, current_user: AuthUser
+) -> SolarAIChatService:
+    """Pick the cached default service, or build a per-request override
+    service when the caller is admin/ml_engineer and selected a valid
+    (profile, model) pair.
+
+    Unknown profile IDs raise 400 so the UI shows a clear error rather
+    than silently degrading to default. An unknown model name within a
+    valid profile silently falls back to the profile's primary model."""
+    profile_id = (request.model_profile_id or "").strip()
+    if not profile_id:
+        return get_solar_ai_chat_service()
+
+    if current_user.role_id not in PICKER_AUTH_ROLES:
+        # Silent fallback — non-picker roles never see the dropdown anyway.
+        return get_solar_ai_chat_service()
+
+    profile = resolve_profile(profile_id, current_user.role_id)
+    if profile is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown or unavailable LLM profile: '{profile_id}'.",
+        )
+
+    model_name = (request.model_name or "").strip() or None
+    overridden_settings = settings_with_profile_override(
+        get_solar_chat_settings(), profile, model_name=model_name,
+    )
+    router = LLMModelRouter(settings=overridden_settings)
+    return _build_chat_service(overridden_settings, router)
 
 
 # ------------------------------------------------------------------
@@ -140,13 +196,47 @@ def get_solar_ai_chat_topics(
     }
 
 
+@router.get("/llm-profiles", response_model=LLMProfileList)
+def list_llm_profiles(
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+) -> LLMProfileList:
+    """Return the LLM provider profiles the current user may pick from.
+
+    Each profile bundles a single provider connection with its list of
+    selectable models. Non-picker roles (data_engineer, analyst-mapped) get
+    an empty list so the frontend hides the dropdown entirely."""
+    profiles = list_profiles_for_role(current_user.role_id)
+    default_id = get_default_profile_id()
+    default_model_name: str | None = None
+    for p in profiles:
+        if p.id == default_id:
+            default_model_name = p.primary_model
+            break
+    return LLMProfileList(
+        profiles=[
+            LLMProfileSummary(
+                id=p.id,
+                label=p.label,
+                provider=p.provider,
+                primary_model=p.primary_model,
+                models=list(p.models),
+                fallback_model=p.fallback_model,
+                is_default=(p.id == default_id),
+            )
+            for p in profiles
+        ],
+        default_profile_id=default_id,
+        default_model_name=default_model_name,
+    )
+
+
 @router.post("/query", response_model=SolarChatResponse)
 def query_solar_ai_chat(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    service: SolarAIChatService = Depends(get_solar_ai_chat_service),
     history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> SolarChatResponse:
+    service = _resolve_chat_service_for_request(request, current_user)
     effective_role = _resolve_user_chat_role(current_user)
     if request.session_id:
         owned_session = history.session_exists(
@@ -187,9 +277,9 @@ def query_solar_ai_chat(
 def benchmark_solar_ai_chat_query(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    service: SolarAIChatService = Depends(get_solar_ai_chat_service),
     history: PostgresChatHistoryRepository = Depends(_get_history_repository),
 ) -> dict[str, object]:
+    service = _resolve_chat_service_for_request(request, current_user)
     endpoint_started = time.perf_counter()
     effective_role = _resolve_user_chat_role(current_user)
     if request.session_id:
@@ -414,7 +504,7 @@ def ingest_document(
     _: AuthUser = Depends(require_role(["admin"])),
 ) -> IngestDocumentResponse:
     settings = get_solar_chat_settings()
-    if not settings.embedding_api_key:
+    if not settings.embedding_api_keys:
         raise HTTPException(
             status_code=503,
             detail="Embedding API key is not configured.",

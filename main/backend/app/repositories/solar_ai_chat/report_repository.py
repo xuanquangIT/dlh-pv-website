@@ -128,13 +128,18 @@ class ReportRepository(BaseRepository):
         self,
         station_name: str | None,
         anchor_date: date | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
-        """Return per-hour energy breakdown for a station on a given date.
+        """Return per-hour energy breakdown for a station.
 
-        Queries gold.fact_energy (which already stores hourly rows keyed by
-        date_hour).  When anchor_date is None the latest date available for
-        the station is used.  Missing station -> aggregate across all
-        facilities for that date.
+        Single-day mode: pass anchor_date (or omit to use the latest day with
+        data) — returns hourly rows for that day.
+
+        Range mode: pass start_date AND end_date — returns the AVERAGE hourly
+        profile across the range (24 buckets per facility), so callers asking
+        for "this month's hourly trend" get a single hour-of-day view rather
+        than 24 × N rows. SUM is also returned via ``period_total_mwh``.
         """
         facility_filter_sql = ""
         normalized_station = self._normalize_station_filter(station_name)
@@ -152,7 +157,11 @@ class ReportRepository(BaseRepository):
         # local-time columns so "ngày X / giờ Y" matches what operators see
         # on station wall-clocks (e.g. Australian AEST/AEDT). UTC grouping
         # shifts peak hours 10 hours to the "wrong" side of midnight.
-        if anchor_date is None:
+        range_mode = start_date is not None and end_date is not None
+        if range_mode and start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        if not range_mode and anchor_date is None:
             row = self._execute_query(
                 "SELECT MAX(f.reading_date_local) AS max_date"
                 " FROM gold.fact_energy f"
@@ -171,42 +180,85 @@ class ReportRepository(BaseRepository):
             else:
                 anchor_date = date.today()
 
-        date_str = anchor_date.isoformat()
-        rows = self._execute_query(
-            "SELECT EXTRACT(HOUR FROM f.date_hour_local) AS hr,"
-            "       COALESCE(d.facility_name, f.facility_id) AS facility,"
-            "       SUM(f.energy_mwh) AS energy_mwh,"
-            "       AVG(f.capacity_factor_pct) AS capacity_factor_pct"
-            " FROM gold.fact_energy f"
-            " LEFT JOIN gold.dim_facility d"
-            "   ON f.facility_id = d.facility_id AND d.is_current = true"
-            f" WHERE f.reading_date_local = DATE '{date_str}'"
-            f"{facility_filter_sql}"
-            " GROUP BY EXTRACT(HOUR FROM f.date_hour_local), COALESCE(d.facility_name, f.facility_id)"
-            " ORDER BY facility, hr"
-        )
+        if range_mode:
+            where_clause = (
+                f" WHERE f.reading_date_local BETWEEN DATE '{start_date.isoformat()}'"
+                f" AND DATE '{end_date.isoformat()}'"
+            )
+            agg_sql = (
+                "SELECT EXTRACT(HOUR FROM f.date_hour_local) AS hr,"
+                "       COALESCE(d.facility_name, f.facility_id) AS facility,"
+                "       AVG(f.energy_mwh) AS energy_mwh,"
+                "       SUM(f.energy_mwh) AS energy_mwh_sum,"
+                "       AVG(f.capacity_factor_pct) AS capacity_factor_pct"
+                " FROM gold.fact_energy f"
+                " LEFT JOIN gold.dim_facility d"
+                "   ON f.facility_id = d.facility_id AND d.is_current = true"
+                f"{where_clause}"
+                f"{facility_filter_sql}"
+                " GROUP BY EXTRACT(HOUR FROM f.date_hour_local), COALESCE(d.facility_name, f.facility_id)"
+                " ORDER BY facility, hr"
+            )
+        else:
+            date_str = anchor_date.isoformat()
+            agg_sql = (
+                "SELECT EXTRACT(HOUR FROM f.date_hour_local) AS hr,"
+                "       COALESCE(d.facility_name, f.facility_id) AS facility,"
+                "       SUM(f.energy_mwh) AS energy_mwh,"
+                "       AVG(f.capacity_factor_pct) AS capacity_factor_pct"
+                " FROM gold.fact_energy f"
+                " LEFT JOIN gold.dim_facility d"
+                "   ON f.facility_id = d.facility_id AND d.is_current = true"
+                f" WHERE f.reading_date_local = DATE '{date_str}'"
+                f"{facility_filter_sql}"
+                " GROUP BY EXTRACT(HOUR FROM f.date_hour_local), COALESCE(d.facility_name, f.facility_id)"
+                " ORDER BY facility, hr"
+            )
+
+        rows = self._execute_query(agg_sql)
 
         hourly: list[dict[str, Any]] = []
+        period_total = 0.0
         for r in rows:
-            hourly.append({
+            energy_val = float(r["energy_mwh"]) if r.get("energy_mwh") is not None else 0.0
+            row_dict: dict[str, Any] = {
                 "hour": int(r["hr"]) if r.get("hr") is not None else None,
                 "facility": r.get("facility"),
-                "energy_mwh": round(float(r["energy_mwh"]), 4) if r.get("energy_mwh") is not None else 0.0,
+                "energy_mwh": round(energy_val, 4),
                 "capacity_factor_pct": (
                     round(float(r["capacity_factor_pct"]), 2)
                     if r.get("capacity_factor_pct") is not None else None
                 ),
-            })
+            }
+            if range_mode:
+                period_total += float(r.get("energy_mwh_sum") or 0.0)
+            hourly.append(row_dict)
 
-        total_mwh = round(sum(h["energy_mwh"] for h in hourly), 4)
-        result: dict[str, Any] = {
-            "report_date": date_str,
-            "station_filter": station_name or "",
-            "hourly_rows": hourly,
-            "row_count": len(hourly),
-            "total_energy_mwh": total_mwh,
-            "has_data": bool(hourly),
-        }
+        if range_mode:
+            period_label = f"{start_date.isoformat()} -> {end_date.isoformat()}"
+            num_days = (end_date - start_date).days + 1
+            result: dict[str, Any] = {
+                "report_period": period_label,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "days_covered": num_days,
+                "aggregation": "avg_per_hour_of_day",
+                "station_filter": station_name or "",
+                "hourly_rows": hourly,
+                "row_count": len(hourly),
+                "period_total_mwh": round(period_total, 4),
+                "has_data": bool(hourly),
+            }
+        else:
+            total_mwh = round(sum(h["energy_mwh"] for h in hourly), 4)
+            result = {
+                "report_date": anchor_date.isoformat(),
+                "station_filter": station_name or "",
+                "hourly_rows": hourly,
+                "row_count": len(hourly),
+                "total_energy_mwh": total_mwh,
+                "has_data": bool(hourly),
+            }
         sources = [
             {"layer": "Gold", "dataset": "gold.fact_energy", "data_source": "databricks"},
             {"layer": "Gold", "dataset": "gold.dim_facility", "data_source": "databricks"},
