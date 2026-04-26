@@ -38,15 +38,38 @@ class DataTablePayload(BaseModel):
 
 
 class ChartPayload(BaseModel):
-    """Plotly chart specification built on the backend; rendered by Plotly.js."""
+    """Chart specification built on the backend.
+
+    v1 engine: emits Plotly (`format='plotly'`, `plotly_spec` populated).
+    v2 engine: emits Vega-Lite (`format='vega-lite'`, `spec` populated).
+    Frontend chart_renderer.js dispatches on `format`.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
 
-    chart_type: Literal["line", "bar", "pie", "scatter", "histogram", "area", "scatter_geo"]
+    chart_type: str = Field(
+        description=(
+            "Chart kind. v1 Plotly: line|bar|pie|scatter|histogram|area|scatter_geo. "
+            "v2 Vega-Lite: bar|line|geoshape|point|circle|... (any Vega-Lite mark)."
+        ),
+    )
     title: str
     description: str | None = None
-    plotly_spec: dict[str, Any] = Field(
-        description="Dict with `data` (list of traces) and `layout` compatible with Plotly.newPlot."
+    format: Literal["plotly", "vega-lite"] = Field(
+        default="plotly",
+        description="Renderer to use: 'plotly' (v1) or 'vega-lite' (v2).",
+    )
+    plotly_spec: dict[str, Any] | None = Field(
+        default=None,
+        description="v1 only: Plotly.newPlot dict with `data` + `layout`.",
+    )
+    spec: dict[str, Any] | None = Field(
+        default=None,
+        description="v2 only: Vega-Lite spec with `mark` + `encoding` + `data.values`.",
+    )
+    row_count: int | None = Field(
+        default=None,
+        description="v2: number of rows backing the chart (Plotly carries this in plotly_spec.data).",
     )
     source_metric_key: str | None = Field(
         default=None,

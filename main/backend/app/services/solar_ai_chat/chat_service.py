@@ -677,6 +677,40 @@ class SolarAIChatService:
             trace_id,
             len(history_messages),
         )
+        # v2 engine cutover: when SOLAR_CHAT_ENGINE=v2, route the request
+        # through the slim primitive-based loop instead of the v1 ToolExecutor
+        # path. v1 stays untouched for safe rollback.
+        if self._is_v2_engine_enabled():
+            try:
+                return self._handle_with_v2_engine(
+                    request, started, history_messages, trace_id,
+                )
+            except DatabricksDataUnavailableError:
+                raise
+            except Exception as err:
+                logger.exception(
+                    "solar_chat_v2_engine_failed trace_id=%s error=%s",
+                    trace_id, err,
+                )
+                language = self._query_rewriter.rewrite(request.message).language
+                return self._finalize_response(
+                    request=request,
+                    answer=build_insufficient_data_response(language),
+                    topic=ChatTopic.GENERAL,
+                    metrics={},
+                    sources=[],
+                    model_used="v2-engine-error",
+                    fallback_used=True,
+                    started=started,
+                    trace_id=trace_id,
+                    intent_confidence=0.0,
+                    warning_message="v2 engine failed unexpectedly.",
+                    thinking_trace=ThinkingTrace(
+                        summary="v2 engine failed.",
+                        steps=[ThinkingStep(step="v2 failure", detail=str(err), status="warning")],
+                        trace_id=trace_id,
+                    ),
+                )
         try:
             return self._handle_with_agentic_loop(request, started, history_messages, trace_id)
         except DatabricksDataUnavailableError:
@@ -706,6 +740,151 @@ class SolarAIChatService:
                     trace_id=trace_id,
                 ),
             )
+
+    # ------------------------------------------------------------------
+    # v2 engine bridge
+    # ------------------------------------------------------------------
+
+    def _is_v2_engine_enabled(self) -> bool:
+        try:
+            from app.core.settings import SolarChatSettings
+            return SolarChatSettings().engine_version.lower() == "v2"
+        except Exception:  # noqa: BLE001 - never break v1 path on settings glitches
+            return False
+
+    def _handle_with_v2_engine(
+        self,
+        request: SolarChatRequest,
+        started: float,
+        history_messages: list[ChatMessage],
+        trace_id: str,
+    ) -> SolarChatResponse:
+        from app.core.settings import SolarChatSettings
+        from app.services.solar_ai_chat.v2.dispatcher import V2Dispatcher
+        from app.services.solar_ai_chat.v2.engine import V2ChatEngine
+
+        if self._model_router is None:
+            raise RuntimeError("v2 engine requires an LLMModelRouter")
+
+        settings = SolarChatSettings()
+        # role_id mirrors v1 chat-role mapping (analyst → data_analyst handled
+        # at the request layer; here we just pass through whatever's set).
+        role_id = (request.role.value if request.role else "admin").lower()
+
+        dispatcher = V2Dispatcher(settings, role_id=role_id)
+        engine = V2ChatEngine(self._model_router, dispatcher)
+        rewrite = self._query_rewriter.rewrite(request.message)
+
+        result = engine.run(
+            user_message=request.message,
+            history=history_messages,
+            language=rewrite.language or "en",
+        )
+
+        from app.schemas.solar_ai_chat.visualization import (
+            ChartPayload,
+            DataTableColumn,
+            DataTablePayload,
+            KpiCard,
+            KpiCardsPayload,
+        )
+
+        chart_payload: ChartPayload | None = None
+        if result.chart and result.chart.get("format") == "vega-lite":
+            spec = result.chart.get("spec") or {}
+            mark = spec.get("mark")
+            mark_type = mark if isinstance(mark, str) else (
+                (mark or {}).get("type") if isinstance(mark, dict) else "bar"
+            )
+            chart_payload = ChartPayload(
+                chart_type=mark_type or "bar",
+                title=str(result.chart.get("title") or ""),
+                format="vega-lite",
+                spec=spec,
+                row_count=result.chart.get("row_count"),
+            )
+
+        data_table_payload: DataTablePayload | None = None
+        if result.data_table:
+            data_table_payload = DataTablePayload(
+                title=(result.chart or {}).get("title", "Query result") or "Query result",
+                columns=[DataTableColumn(**c) for c in result.data_table.get("columns", [])],
+                rows=result.data_table.get("rows", []),
+                row_count=int(result.data_table.get("row_count", 0)),
+            )
+
+        kpi_payload: KpiCardsPayload | None = None
+        if result.key_metrics and not chart_payload:
+            cards = [
+                KpiCard(label=str(k), value=v if isinstance(v, (int, float, str)) else str(v))
+                for k, v in result.key_metrics.items()
+                if v is not None
+            ]
+            if cards:
+                kpi_payload = KpiCardsPayload(cards=cards)
+
+        viz_snapshot: dict | None = None
+        if chart_payload or data_table_payload or kpi_payload:
+            viz_snapshot = {
+                "chart": chart_payload.model_dump() if chart_payload else None,
+                "data_table": data_table_payload.model_dump() if data_table_payload else None,
+                "kpi_cards": kpi_payload.model_dump() if kpi_payload else None,
+            }
+
+        thinking_trace = ThinkingTrace(
+            summary=f"v2 engine ran {len(result.trace_steps)} primitive call(s).",
+            steps=[
+                ThinkingStep(
+                    step=f"{s['step']}. {s['primitive']}",
+                    detail=f"args={s['args_preview']} duration={s['duration_ms']}ms",
+                    status="ok" if s["ok"] else "warning",
+                )
+                for s in result.trace_steps
+            ],
+            trace_id=trace_id,
+        )
+
+        try:
+            self._persist_exchange(
+                session_id=request.session_id,
+                user_message=request.message,
+                answer=result.answer,
+                topic=ChatTopic.GENERAL,
+                sources=result.sources,
+                thinking_trace=thinking_trace,
+                key_metrics=result.key_metrics or None,
+                viz_requested=bool(result.chart),
+                viz_payload=viz_snapshot,
+            )
+        except Exception as persist_err:  # noqa: BLE001
+            logger.warning(
+                "v2_engine_persist_failed trace_id=%s err=%s",
+                trace_id, persist_err,
+            )
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "solar_chat_v2_done trace_id=%s steps=%d model=%s latency_ms=%d chart=%s",
+            trace_id, len(result.trace_steps), result.model_used, latency_ms,
+            "vega" if chart_payload else "none",
+        )
+        return SolarChatResponse(
+            answer=result.answer,
+            topic=ChatTopic.GENERAL,
+            role=request.role,
+            key_metrics=result.key_metrics or {},
+            sources=result.sources,
+            model_used=result.model_used,
+            fallback_used=result.fallback_used,
+            latency_ms=latency_ms,
+            intent_confidence=TOOL_PATH_CONFIDENCE,
+            warning_message=result.error,
+            thinking_trace=thinking_trace,
+            ui_features=resolve_ui_features(request.role),
+            data_table=data_table_payload,
+            chart=chart_payload,
+            kpi_cards=kpi_payload,
+        )
 
     @staticmethod
     def _select_tool_declarations(request: SolarChatRequest) -> list:
