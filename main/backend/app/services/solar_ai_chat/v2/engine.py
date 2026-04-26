@@ -116,12 +116,50 @@ class V2ChatEngine:
         # we inject an instruction and force a synthesis turn.
         recent_call_signatures: list[str] = []
         DUPLICATE_THRESHOLD = 2
+        banned_tools: set[str] = set()
 
         for step in range(1, self._max_steps + 1):
+            # If loop-breaker has flagged a tool, remove it from the schema so
+            # the model literally cannot call it again.
+            active_tools = [
+                t for t in self._tool_schemas if t.get("name") not in banned_tools
+            ]
             try:
                 turn: LLMToolResult = self._router.generate_with_tools(
-                    messages=messages, tools=self._tool_schemas,
+                    messages=messages, tools=active_tools,
                 )
+            except RuntimeError as exc:
+                # Some providers return empty responses when all tools are
+                # banned. Force a synthesis turn with all tools restored so
+                # the model produces text from gathered data.
+                if "neither tool call nor text" in str(exc):
+                    logger.warning(
+                        "v2_engine_empty_response step=%d banned=%s — forcing synthesis",
+                        step, sorted(banned_tools),
+                    )
+                    messages.append({
+                        "role": "user",
+                        "parts": [{"text": (
+                            "Trả lời người dùng bằng văn bản dựa trên dữ liệu "
+                            "đã thu thập được. Không gọi thêm tool."
+                            if language == "vi"
+                            else "Answer the user with plain text using the "
+                            "data you've gathered. Do not call any more tools."
+                        )}],
+                    })
+                    try:
+                        synth = self._router.generate_with_tools(
+                            messages=messages, tools=[],
+                        )
+                        final_text = (synth.text or "").strip()
+                        model_used = synth.model_used
+                        fallback_used = synth.fallback_used or fallback_used
+                    except Exception as synth_err:  # noqa: BLE001
+                        logger.warning(
+                            "v2_engine_forced_synthesis_failed err=%s", synth_err,
+                        )
+                    break
+                raise
             except ToolCallNotSupportedError as exc:
                 logger.warning("v2_engine_tool_unsupported err=%s", exc)
                 return V2EngineResult(
@@ -152,14 +190,29 @@ class V2ChatEngine:
                 break
 
             # Detect call-name loops (small models get stuck on recall_metric
-            # with slightly varied args). Match on tool name only — if the
-            # model calls the same tool 3+ times in a row, force a synthesis.
+            # with slightly varied args). Match on tool name only.
             sig = "|".join(c.name for c in calls)
             recent_call_signatures.append(sig)
-            if len(recent_call_signatures) > DUPLICATE_THRESHOLD and len(set(recent_call_signatures[-(DUPLICATE_THRESHOLD + 1):])) == 1:
-                logger.info("v2_engine_duplicate_loop_detected sig=%s", sig[:100])
+            logger.info(
+                "v2_engine_step step=%d calls=%s sig_history=%s",
+                step, [c.name for c in calls], recent_call_signatures[-4:],
+            )
+            same_recent = (
+                len(recent_call_signatures) > DUPLICATE_THRESHOLD
+                and len(set(recent_call_signatures[-(DUPLICATE_THRESHOLD + 1):])) == 1
+            )
+            if same_recent:
+                # Dispatch this set so traces stay consistent, then BAN the
+                # tool from future turns. Removing it from the schema is a
+                # forcing function the model can't ignore (vs. textual nudges
+                # which weak models routinely override).
+                offending = list({c.name for c in calls})
+                banned_tools.update(offending)
+                logger.warning(
+                    "v2_engine_duplicate_loop_detected sig=%s banning_tools=%s",
+                    sig[:100], offending,
+                )
                 messages.append(self._format_assistant_tool_calls(calls))
-                # Dispatch this last set so traces stay consistent, then inject break
                 for c in calls:
                     d = self._dispatcher.execute(c.name, dict(c.arguments or {}))
                     trace_steps.append({
@@ -171,11 +224,14 @@ class V2ChatEngine:
                 messages.append({
                     "role": "user",
                     "parts": [{"text": (
-                        "STOP calling the same tool with the same arguments. "
-                        "Either pick a sql_template from the recall_metric "
-                        "result and call execute_sql with the rendered SQL, "
-                        "OR answer the user directly with what you've gathered. "
-                        "Do NOT call recall_metric again."
+                        f"You called {offending} {DUPLICATE_THRESHOLD + 1} times in a row "
+                        "without making progress. Those tools are now disabled. "
+                        "Use the data already returned: pick a sql_template "
+                        "from the recall_metric result, render its SQL by "
+                        "substituting parameters (use defaults if unsure), "
+                        "and call execute_sql. If recall_metric returned no "
+                        "useful match, call inspect_table on a likely table "
+                        "and write your own SELECT."
                     )}],
                 })
                 continue
