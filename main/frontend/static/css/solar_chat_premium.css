@@ -1033,6 +1033,20 @@ html[data-theme="dark"] .solar-chart-desc { color: #8ea0b8; }
 .solar-chart-plot .main-svg {
   width: 100% !important;
 }
+/* Vega-Lite chart container (v2 engine) — vega-embed needs explicit width
+ * for `width: "container"` autosizing to work. */
+.solar-chart-vega {
+  width: 100% !important;
+}
+.solar-chart-vega .vega-embed {
+  width: 100%;
+  display: block;
+}
+.solar-chart-vega .vega-embed canvas,
+.solar-chart-vega .vega-embed svg {
+  max-width: 100%;
+  height: auto;
+}
 
 /* =====================================================================
  * Solar AI Chat — ChatGPT/Claude-style redesign
