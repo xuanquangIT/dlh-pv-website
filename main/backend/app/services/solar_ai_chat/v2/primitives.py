@@ -227,30 +227,45 @@ def recall_metric(
     scored.sort(key=lambda x: x[1], reverse=True)
     top = scored[:top_k]
 
+    matches = [
+        {
+            "name": m.name,
+            "score": round(score, 3),
+            "description": m.description,
+            "sql_template": m.sql_template,
+            "parameters": [
+                {
+                    "name": p.name, "type": p.type, "default": p.default,
+                    "values": list(p.values), "range": list(p.range) if p.range else None,
+                }
+                for p in m.parameters
+            ],
+            "suggested_chart": m.suggested_chart,
+            "suggested_kpi_cards": list(m.suggested_kpi_cards),
+            "synonyms": list(m.synonyms),
+            "sample_questions": list(m.sample_questions),
+        }
+        for m, score in top
+        if score > 0  # don't return 0-score noise
+    ]
+    if matches:
+        next_action = (
+            f"Use the top match's sql_template ({matches[0]['name']}). "
+            "Substitute parameter placeholders like {window_days} with actual "
+            "values, then call execute_sql with the resulting SQL string. "
+            "Do NOT call recall_metric again — pick a match and run it."
+        )
+    else:
+        next_action = (
+            "No metric matched. Call discover_schema(domain=...) to list "
+            "tables, then inspect_table on a likely table, then write your "
+            "own SELECT for execute_sql."
+        )
     return {
-        "matches": [
-            {
-                "name": m.name,
-                "score": round(score, 3),
-                "description": m.description,
-                "sql_template": m.sql_template,
-                "parameters": [
-                    {
-                        "name": p.name, "type": p.type, "default": p.default,
-                        "values": list(p.values), "range": list(p.range) if p.range else None,
-                    }
-                    for p in m.parameters
-                ],
-                "suggested_chart": m.suggested_chart,
-                "suggested_kpi_cards": list(m.suggested_kpi_cards),
-                "synonyms": list(m.synonyms),
-                "sample_questions": list(m.sample_questions),
-            }
-            for m, score in top
-            if score > 0  # don't return 0-score noise
-        ],
+        "matches": matches,
         "query": query,
         "filtered_by_role": role_id,
+        "next_action": next_action,
     }
 
 

@@ -111,6 +111,11 @@ class V2ChatEngine:
         model_used = "v2-unknown"
         fallback_used = False
         final_text: str = ""
+        # Duplicate-call detector: smaller models (Nemotron, gpt-oss) get stuck
+        # calling recall_metric repeatedly. After 2 consecutive identical calls
+        # we inject an instruction and force a synthesis turn.
+        recent_call_signatures: list[str] = []
+        DUPLICATE_THRESHOLD = 2
 
         for step in range(1, self._max_steps + 1):
             try:
@@ -145,6 +150,35 @@ class V2ChatEngine:
                 # LLM produced final text — done
                 final_text = (turn.text or "").strip()
                 break
+
+            # Detect call-name loops (small models get stuck on recall_metric
+            # with slightly varied args). Match on tool name only — if the
+            # model calls the same tool 3+ times in a row, force a synthesis.
+            sig = "|".join(c.name for c in calls)
+            recent_call_signatures.append(sig)
+            if len(recent_call_signatures) > DUPLICATE_THRESHOLD and len(set(recent_call_signatures[-(DUPLICATE_THRESHOLD + 1):])) == 1:
+                logger.info("v2_engine_duplicate_loop_detected sig=%s", sig[:100])
+                messages.append(self._format_assistant_tool_calls(calls))
+                # Dispatch this last set so traces stay consistent, then inject break
+                for c in calls:
+                    d = self._dispatcher.execute(c.name, dict(c.arguments or {}))
+                    trace_steps.append({
+                        "step": step, "primitive": c.name,
+                        "args_preview": _truncate_for_log(c.arguments),
+                        "duration_ms": d.duration_ms, "ok": d.ok,
+                    })
+                    messages.append(self._format_tool_result(c.name, d.result))
+                messages.append({
+                    "role": "user",
+                    "parts": [{"text": (
+                        "STOP calling the same tool with the same arguments. "
+                        "Either pick a sql_template from the recall_metric "
+                        "result and call execute_sql with the rendered SQL, "
+                        "OR answer the user directly with what you've gathered. "
+                        "Do NOT call recall_metric again."
+                    )}],
+                })
+                continue
 
             # Append the assistant turn's tool calls to the message thread,
             # then dispatch each call and append its result.
