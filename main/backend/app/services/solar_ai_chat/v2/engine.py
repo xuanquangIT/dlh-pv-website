@@ -115,6 +115,7 @@ class V2ChatEngine:
         # calling recall_metric repeatedly. After 2 consecutive identical calls
         # we inject an instruction and force a synthesis turn.
         recent_call_signatures: list[str] = []
+        recent_tool_sets: list[frozenset[str]] = []
         DUPLICATE_THRESHOLD = 2
         banned_tools: set[str] = set()
 
@@ -189,30 +190,36 @@ class V2ChatEngine:
                 final_text = (turn.text or "").strip()
                 break
 
-            # Detect call-name loops (small models get stuck on recall_metric
-            # with slightly varied args). Match on tool name only.
-            sig = "|".join(c.name for c in calls)
-            recent_call_signatures.append(sig)
+            # Detect call-name loops. Look for any tool that appears in EVERY
+            # one of the last (DUPLICATE_THRESHOLD + 1) turns — robust against
+            # both single-call loops AND parallel-call loops where the model
+            # varies args while reusing the same tool (e.g. discover_schema
+            # with domain=energy / "" / pipeline / forecast across turns).
+            turn_tools = frozenset(c.name for c in calls)
+            recent_tool_sets.append(turn_tools)
+            recent_call_signatures.append("|".join(sorted(turn_tools)))
             logger.info(
-                "v2_engine_step step=%d calls=%s sig_history=%s",
-                step, [c.name for c in calls], recent_call_signatures[-4:],
+                "v2_engine_step step=%d turn_tools=%s history=%s",
+                step, sorted(turn_tools), [sorted(s) for s in recent_tool_sets[-4:]],
             )
-            same_recent = (
-                len(recent_call_signatures) > DUPLICATE_THRESHOLD
-                and len(set(recent_call_signatures[-(DUPLICATE_THRESHOLD + 1):])) == 1
-            )
-            if same_recent:
+            persistent_tools: set[str] = set()
+            if len(recent_tool_sets) > DUPLICATE_THRESHOLD:
+                window = recent_tool_sets[-(DUPLICATE_THRESHOLD + 1):]
+                # tools present in every turn of the window AND not yet banned
+                persistent_tools = frozenset.intersection(*window) - banned_tools
+            if persistent_tools:
                 # Dispatch this set so traces stay consistent, then BAN the
-                # tool from future turns. Removing it from the schema is a
+                # tools from future turns. Removing them from the schema is a
                 # forcing function the model can't ignore (vs. textual nudges
                 # which weak models routinely override).
-                offending = list({c.name for c in calls})
-                banned_tools.update(offending)
+                offending = sorted(persistent_tools)
+                banned_tools.update(persistent_tools)
                 logger.warning(
-                    "v2_engine_duplicate_loop_detected sig=%s banning_tools=%s",
-                    sig[:100], offending,
+                    "v2_engine_duplicate_loop_detected persistent=%s banned_now=%s",
+                    offending, sorted(banned_tools),
                 )
                 messages.append(self._format_assistant_tool_calls(calls))
+                last_dispatch_results: list[tuple[str, dict[str, Any]]] = []
                 for c in calls:
                     d = self._dispatcher.execute(c.name, dict(c.arguments or {}))
                     trace_steps.append({
@@ -221,17 +228,50 @@ class V2ChatEngine:
                         "duration_ms": d.duration_ms, "ok": d.ok,
                     })
                     messages.append(self._format_tool_result(c.name, d.result))
+                    last_dispatch_results.append((c.name, d.result))
+
+                # If recall_metric was banned, inline the top match's
+                # sql_template + a rendered example into the correction so
+                # weak models get a copy-pasteable SQL to run with execute_sql.
+                inline_sql_hint = ""
+                if "recall_metric" in offending:
+                    for fn_name, result in last_dispatch_results:
+                        if fn_name != "recall_metric":
+                            continue
+                        matches = (result or {}).get("matches") or []
+                        if not matches:
+                            continue
+                        top = matches[0]
+                        rendered = top.get("sql_template", "")
+                        for p in top.get("parameters", []) or []:
+                            placeholder = "{" + str(p.get("name", "")) + "}"
+                            default = p.get("default")
+                            if default is None and p.get("values"):
+                                default = p["values"][0]
+                            if default is not None:
+                                rendered = rendered.replace(placeholder, str(default))
+                        inline_sql_hint = (
+                            f"\n\nThe top metric match was {top.get('name')!r}. "
+                            f"Its rendered SQL (parameters substituted with defaults) is:\n"
+                            f"```sql\n{rendered.strip()}\n```\n"
+                            "CALL execute_sql with this exact SQL string now."
+                        )
+                        break
+
                 messages.append({
                     "role": "user",
                     "parts": [{"text": (
-                        f"You called {offending} {DUPLICATE_THRESHOLD + 1} times in a row "
-                        "without making progress. Those tools are now disabled. "
-                        "Use the data already returned: pick a sql_template "
-                        "from the recall_metric result, render its SQL by "
-                        "substituting parameters (use defaults if unsure), "
-                        "and call execute_sql. If recall_metric returned no "
-                        "useful match, call inspect_table on a likely table "
-                        "and write your own SELECT."
+                        f"You called {offending} {DUPLICATE_THRESHOLD + 1} times "
+                        "in a row without making progress. Those tools are now "
+                        "disabled for the rest of this turn."
+                        + inline_sql_hint
+                        + (
+                            "" if inline_sql_hint else
+                            " Use the data already returned: pick a metric's "
+                            "sql_template, substitute parameters with defaults, "
+                            "and call execute_sql. If no match, call inspect_table "
+                            "on a likely table from discover_schema and write a SELECT."
+                        )
                     )}],
                 })
                 continue
