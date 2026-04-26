@@ -1,0 +1,210 @@
+"""Solar Chat v2 — tool schemas exposed to the LLM.
+
+These replace the 14 v1 tool schemas with 6 generic primitives. Format is
+OpenAI-style function-calling schema; the LLM router converts to provider
+formats as needed.
+"""
+from __future__ import annotations
+
+V2_TOOL_SCHEMAS: list[dict] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "discover_schema",
+            "description": (
+                "List tables you can query in the lakehouse. Use FIRST when "
+                "the user asks about data you don't already know exists. "
+                "Optional `domain` keyword filters tables by topic (e.g. "
+                "'weather', 'energy', 'forecast', 'pipeline')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {
+                        "type": "string",
+                        "description": "Optional keyword to filter tables by topic."
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_table",
+            "description": (
+                "Show columns, types, and sample rows for one table. "
+                "Use AFTER discover_schema to confirm column names before "
+                "writing SQL. Pass the fully-qualified name like "
+                "'pv.gold.dim_facility'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "table_fqn": {
+                        "type": "string",
+                        "description": "Fully-qualified table name (catalog.schema.table)."
+                    },
+                },
+                "required": ["table_fqn"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recall_metric",
+            "description": (
+                "Search the canonical metric registry for pre-defined SQL "
+                "templates matching the user's intent. Use BEFORE writing "
+                "ad-hoc SQL — most common questions match a known metric "
+                "(top facilities, system overview, forecast, map locations, "
+                "etc). Returns SQL templates + suggested chart specs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural language query describing what data is needed."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "How many candidate metrics to return (default 5).",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_sql",
+            "description": (
+                "Run a read-only SELECT against the lakehouse. Auto-LIMIT "
+                "is applied (max 10000 rows). Use a metric SQL template "
+                "from recall_metric, OR write a custom query using columns "
+                "you confirmed via inspect_table. Always JOIN to "
+                "pv.gold.dim_facility (is_current=TRUE) for facility names."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sql": {
+                        "type": "string",
+                        "description": "A single SELECT (or WITH ... SELECT) query. No DDL/DML, no semicolons."
+                    },
+                    "max_rows": {
+                        "type": "integer",
+                        "description": "Cap on rows returned (1-10000, default 1000).",
+                        "default": 1000,
+                    },
+                },
+                "required": ["sql"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "render_visualization",
+            "description": (
+                "Emit a Vega-Lite chart spec for the rows you just retrieved. "
+                "You decide the chart type based on the data shape and user "
+                "intent. Common picks: 'bar' for ranking, 'line' for time-series, "
+                "'geoshape' for maps (use longitude+latitude encodings), "
+                "'scatter' for correlation. Pass the row data unchanged from "
+                "execute_sql."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "spec": {
+                        "type": "object",
+                        "description": (
+                            "Vega-Lite spec WITHOUT the data field — that's "
+                            "injected for you. Required keys: 'mark', 'encoding'. "
+                            "Example: {\"mark\": \"bar\", \"encoding\": "
+                            "{\"x\": {\"field\": \"facility_name\", \"type\": \"nominal\"}, "
+                            "\"y\": {\"field\": \"total_energy_mwh\", \"type\": \"quantitative\"}}}"
+                        ),
+                    },
+                    "data": {
+                        "type": "array",
+                        "description": "Row data from execute_sql.",
+                        "items": {"type": "object"},
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional chart title.",
+                    },
+                },
+                "required": ["spec", "data"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": (
+                "Search internal documents (manuals, incident reports, model "
+                "changelogs) via RAG. Use ONLY for definitional questions or "
+                "context lookups — NOT for numeric/ranking data (use SQL for that)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {"type": "integer", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+# Slim system prompt — replaces the v1 16-rule prompt.
+V2_SYSTEM_PROMPT = """You are Solar AI for the PV Lakehouse — a solar energy
+analytics assistant grounded in real data from a Databricks lakehouse.
+
+You have 6 primitives:
+1. discover_schema(domain?) — list available tables, optionally filtered
+2. inspect_table(table_fqn) — see columns, types, sample rows
+3. recall_metric(query) — find pre-defined SQL templates for common questions
+4. execute_sql(sql, max_rows?) — run a read-only SELECT
+5. render_visualization(spec, data, title?) — emit a Vega-Lite chart spec
+6. search_documents(query) — RAG over manuals/incidents
+
+WORKFLOW for data questions:
+A. Try recall_metric FIRST — most common questions match a canonical metric.
+B. If no match: discover_schema → inspect_table → write your own SQL.
+C. Run execute_sql with the SQL from step A or B.
+D. If the user asked for a chart/visualization, emit render_visualization
+   with a Vega-Lite spec describing the user's intent.
+E. Synthesize the answer in the user's language. Cite the table(s) used.
+
+WORKFLOW for non-data questions:
+- Greetings / "who are you" / capabilities → introduce yourself briefly,
+  describe the lakehouse (8 PV facilities, hourly readings, weather, AQI,
+  forecasts, ML monitoring) and the kinds of questions you handle.
+- Off-topic (unrelated to solar / PV / energy / weather / AQI / pipeline /
+  ML monitoring) → politely redirect to in-scope topics.
+
+CONSTRAINTS:
+- Match the user's language (Vietnamese ↔ English). Do not code-switch.
+- Never expose primitive/tool names in your answer to the user.
+- Never write DDL/DML (no INSERT/UPDATE/DELETE/DROP/etc) — execute_sql
+  rejects these anyway.
+- For map questions, query lat+lng columns and emit a Vega-Lite geoshape
+  or 'point' mark with longitude/latitude encodings.
+- ML metrics in this system are REGRESSION (R², RMSE, MAE, NRMSE).
+  Never propose accuracy/precision/recall (those are classification).
+- If a query returns 0 rows, run inspect_table to verify column names
+  before answering "no data".
+- For non-data scope refusals, suggest 1-2 example questions you CAN answer.
+"""

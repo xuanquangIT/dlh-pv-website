@@ -136,6 +136,45 @@ SOLAR_CHAT_PROFILE_1_PRIMARY_MODEL=gpt-4.1
 SOLAR_CHAT_PROFILE_1_DEFAULT=true
 ```
 
+### v2 Engine Prototype (experimental)
+
+A new architecture is being prototyped on branch `feat/solar-chat-engine-v2` —
+replaces the v1 14-hardcoded-tools approach with **6 generic primitives + a
+YAML semantic layer**. Goal: let the LLM compose its own queries (`discover_schema`
+→ `inspect_table` → `recall_metric` → `execute_sql` → `render_visualization`)
+instead of being routed by 16 hardcoded prompt rules and 5 runtime tool reroutes.
+
+Status: Phase 1 prototype landed (primitives, semantic YAML, feature flag, 47
+unit tests, end-to-end Databricks verification). Phases 2-5 (Vega-Lite frontend,
+cutover, cleanup) pending.
+
+Switch on with `SOLAR_CHAT_ENGINE=v2` — runs side-by-side with v1.
+
+Compare v1 vs v2 with the eval CLI:
+```powershell
+# Capture baseline (v1, current)
+python main/backend/scripts/solar_chat_eval_cli.py capture `
+  --question-set main/backend/tests/eval/question_sets/regression_v1.yaml `
+  --engine v1 --output reports/baseline_v1.jsonl
+
+# Capture candidate (v2)
+$env:SOLAR_CHAT_ENGINE="v2"
+python main/backend/scripts/solar_chat_eval_cli.py capture `
+  --question-set main/backend/tests/eval/question_sets/regression_v1.yaml `
+  --engine v2 --output reports/run_v2.jsonl
+
+# LLM-judge the diff
+python main/backend/scripts/solar_chat_eval_cli.py judge `
+  --baseline reports/baseline_v1.jsonl --candidate reports/run_v2.jsonl `
+  --judge-model gpt-4.1 --output reports/judgment.jsonl
+
+# Aggregate to markdown
+python main/backend/scripts/solar_chat_eval_cli.py report `
+  --judgment reports/judgment.jsonl --output reports/v2_migration_report.md
+```
+
+Design doc: [../implementations/solar_chat_architecture_redesign_2026-04-26.md](../implementations/solar_chat_architecture_redesign_2026-04-26.md)
+
 ### Key Features
 
 - **Bilingual** — Vietnamese and English

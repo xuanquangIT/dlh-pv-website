@@ -1,0 +1,270 @@
+# Solar Chat regression test question set — v1 baseline / v2 candidate
+# Used by: scripts/solar_chat_eval_cli.py
+#
+# Each question covers a real user-reported failure mode OR a happy-path
+# topic that should not regress. Hard expectations auto-fail the eval if
+# violated; the LLM-judge handles softer comparisons (wording, completeness).
+
+# ============================================================================
+# CRITICAL — 3 user-reported failures (2026-04-26)
+# ============================================================================
+
+- id: q_facility_locations_map_vi
+  query: "Các trạm điện mặt trời này có vị trí ở đâu, cho tôi xem map"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_facility_info", "execute_sql", "discover_schema"]
+    must_have_chart_type: ["scatter_geo", "geo"]
+    must_have_dataset_columns: ["latitude", "longitude"]
+    min_dataset_rows: 1
+    forbidden_in_answer: ["Tôi chỉ hỗ trợ", "scope refusal", "không thể"]
+    forbidden_error_codes: ["AttributeError", "_load_csv"]
+
+- id: q_facility_locations_map_en
+  query: "Where are the solar facilities located? Show me a map."
+  role: admin
+  language: en
+  expectations:
+    must_have_chart_type: ["scatter_geo", "geo"]
+    must_have_dataset_columns: ["latitude", "longitude"]
+    forbidden_error_codes: ["AttributeError", "_load_csv"]
+
+- id: q_factor_ranking_vi
+  query: "Các yếu tố ảnh hưởng mạnh mẽ nhất đến hiệu suất tạo điện, list từ cao đến thấp"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_energy_performance", "query_gold_kpi", "execute_sql"]
+    must_mention: ["bức xạ", "irradiance", "công suất", "cloud", "thời tiết", "weather"]
+    forbidden_in_answer: ["menunjukkan", "menampilkan", "sản suất"]
+    min_dataset_rows: 1
+
+- id: q_top_wind_chart_vi
+  query: "Trạm nào có tốc độ gió trung bình lớn nhất, vẽ biểu đồ so sánh"
+  role: admin
+  language: vi
+  expectations:
+    must_have_chart_type: ["bar"]
+    must_have_dataset_columns: ["facility_name"]
+    min_dataset_rows: 1
+
+# ============================================================================
+# Bug 1 verification — _load_csv crash regression check
+# ============================================================================
+
+- id: q_facility_list_vi
+  query: "Liệt kê tất cả các trạm điện mặt trời"
+  role: admin
+  language: vi
+  expectations:
+    forbidden_error_codes: ["AttributeError", "_load_csv", "_dataset_path"]
+    min_dataset_rows: 1
+
+- id: q_facility_count_vi
+  query: "Hệ thống có bao nhiêu trạm? Mỗi trạm có công suất bao nhiêu MW?"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_facility_info", "execute_sql"]
+    must_have_dataset_columns: ["capacity_mw"]
+    forbidden_error_codes: ["AttributeError"]
+
+# ============================================================================
+# Bug 2 verification — focus enum drift
+# ============================================================================
+
+- id: q_top_5_facilities_energy_vi
+  query: "Top 5 trạm có sản lượng điện cao nhất 30 ngày qua"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_energy_performance", "execute_sql", "query_gold_kpi"]
+    min_dataset_rows: 1
+
+- id: q_bottom_3_capacity_factor_vi
+  query: "3 trạm có capacity factor thấp nhất tuần này"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_energy_performance", "execute_sql", "query_gold_kpi"]
+    min_dataset_rows: 1
+
+# ============================================================================
+# Happy-path coverage — must not regress
+# ============================================================================
+
+- id: q_system_overview_vi
+  query: "Tổng quan hệ thống cho tôi"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_system_overview", "execute_sql"]
+    forbidden_in_answer: ["Tôi chỉ hỗ trợ"]
+
+- id: q_system_overview_en
+  query: "Give me a system overview"
+  role: admin
+  language: en
+  expectations:
+    must_call_primitive_or_tool: ["get_system_overview", "execute_sql"]
+
+- id: q_pipeline_status_vi
+  query: "Pipeline đang chạy thế nào? Có bị lỗi gì không?"
+  role: data_engineer
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_pipeline_status", "execute_sql"]
+
+- id: q_data_quality_vi
+  query: "Chất lượng dữ liệu hôm nay như thế nào, trạm nào có vấn đề?"
+  role: data_engineer
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_data_quality_issues", "execute_sql"]
+
+- id: q_forecast_72h_vi
+  query: "Dự báo sản lượng 3 ngày tới của hệ thống"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_forecast_72h", "execute_sql"]
+    must_have_dataset_columns: ["forecast_mwh", "predicted_mwh", "energy_mwh"]
+
+- id: q_ml_model_info_vi
+  query: "Mô hình ML hiện tại có chỉ số như thế nào? R2 và RMSE bao nhiêu?"
+  role: ml_engineer
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_ml_model_info", "execute_sql"]
+    must_mention: ["R", "RMSE"]
+
+- id: q_extreme_aqi_vi
+  query: "Chỉ số AQI cao nhất trong 30 ngày qua ở trạm nào?"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_extreme_aqi", "execute_sql"]
+    min_dataset_rows: 1
+
+- id: q_extreme_energy_vi
+  query: "Ngày nào sản lượng điện cao nhất tháng này?"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_extreme_energy", "execute_sql"]
+
+- id: q_station_daily_report_vi
+  query: "Báo cáo trạm Avonlie ngày 2026-04-20"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_station_daily_report", "execute_sql"]
+    must_mention: ["Avonlie"]
+
+- id: q_hourly_trend_month_vi
+  query: "Cho tôi xem xu hướng sản lượng theo giờ trong tháng này"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["get_station_hourly_report", "execute_sql"]
+    must_have_chart_type: ["line", "bar"]
+
+# ============================================================================
+# Edge cases — scope guard, follow-up, meta questions
+# ============================================================================
+
+- id: q_meta_who_are_you_vi
+  query: "Bạn là ai? Bạn có thể giúp gì cho tôi?"
+  role: admin
+  language: vi
+  expectations:
+    forbidden_in_answer: ["Tôi chỉ hỗ trợ"]   # meta question must NOT be refused
+    must_mention: ["solar", "năng lượng", "PV", "trạm"]
+
+- id: q_meta_capabilities_en
+  query: "What can you do?"
+  role: admin
+  language: en
+  expectations:
+    forbidden_in_answer: ["I only support"]
+    must_mention: ["solar", "facility", "energy", "forecast"]
+
+- id: q_offtopic_weather_unrelated
+  query: "Thời tiết Hà Nội ngày mai thế nào?"
+  role: admin
+  language: vi
+  expectations:
+    # This SHOULD be refused — out of scope (Hanoi isn't in the lakehouse)
+    # OR redirected to facility-local weather. Either is acceptable.
+    forbidden_error_codes: ["AttributeError", "TypeError"]
+
+- id: q_offtopic_pure_chitchat
+  query: "1 + 1 bằng mấy?"
+  role: admin
+  language: vi
+  expectations:
+    # Pure off-topic — must refuse politely
+    must_mention: ["solar", "năng lượng", "không thuộc"]
+
+# ============================================================================
+# Compound / multi-step questions
+# ============================================================================
+
+- id: q_compound_overview_plus_quality_vi
+  query: "Tổng quan hệ thống và liệt kê các vấn đề chất lượng dữ liệu hiện tại"
+  role: admin
+  language: vi
+  expectations:
+    # Should call multiple tools
+    must_mention: ["chất lượng", "quality"]
+
+- id: q_correlation_irradiance_energy_vi
+  query: "Mối tương quan giữa bức xạ mặt trời và sản lượng điện trong 30 ngày qua"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["query_gold_kpi", "execute_sql"]
+    must_have_chart_type: ["scatter", "line"]
+
+# ============================================================================
+# Bilingual sanity — language quality / no code-switching
+# ============================================================================
+
+- id: q_lang_quality_vi
+  query: "Phân tích sản lượng các trạm trong tuần qua"
+  role: admin
+  language: vi
+  expectations:
+    forbidden_in_answer:
+      - "menunjukkan"     # Indonesian
+      - "menampilkan"     # Indonesian
+      - "sản suất"        # Vietnamese typo (should be "sản xuất")
+      - "che khuynh"      # Made-up Vietnamese (should be "che phủ")
+      - "kemudian"        # Indonesian "then"
+      - "facility-name"   # English code in Vietnamese answer
+
+- id: q_lang_quality_en
+  query: "Analyze the energy output across all facilities last week"
+  role: admin
+  language: en
+  expectations:
+    forbidden_in_answer: ["trạm", "công suất", "sản lượng"]   # No Vietnamese leak in EN answer
+
+# ============================================================================
+# Performance check (latency-only — judged in report)
+# ============================================================================
+
+- id: q_perf_simple_kpi_vi
+  query: "Tổng sản lượng hôm qua"
+  role: admin
+  language: vi
+  expectations:
+    forbidden_error_codes: ["TimeoutError"]
+
+- id: q_perf_complex_correlation_vi
+  query: "Phân tích tương quan giữa AQI, thời tiết và sản lượng theo từng trạm trong quý trước"
+  role: admin
+  language: vi
+  expectations:
+    forbidden_error_codes: ["TimeoutError", "AttributeError"]

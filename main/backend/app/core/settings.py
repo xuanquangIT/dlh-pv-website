@@ -188,6 +188,16 @@ class SolarChatSettings(BaseSettings):
         default=3072,
         alias="SOLAR_CHAT_EMBEDDING_DIMENSIONS",
     )
+    # ----- v2 engine (primitives + semantic layer) -----
+    # When set to "v2", the chat service routes through v2 primitives
+    # (discover_schema, execute_sql, etc) instead of the v1 14-tool loop.
+    # See implementations/solar_chat_architecture_redesign_2026-04-26.md
+    engine_version: str = Field(
+        default="v1",
+        alias="SOLAR_CHAT_ENGINE",
+        description="v1 (default, 14 hardcoded tools) | v2 (6 primitives + semantic layer)",
+    )
+
     rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
     rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
     rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
