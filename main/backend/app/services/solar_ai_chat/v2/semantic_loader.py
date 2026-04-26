@@ -65,6 +65,8 @@ class MetricDefinition:
     parameters: tuple[MetricParameter, ...] = ()
     suggested_chart: dict[str, Any] | None = None
     suggested_kpi_cards: tuple[str, ...] = ()
+    synonyms: tuple[str, ...] = ()        # VN+EN keywords for recall_metric scoring
+    sample_questions: tuple[str, ...] = ()  # canonical phrasings (also fed to scorer)
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,8 @@ def _load_from_yaml(path: Path) -> SemanticLayer:
             parameters=_parse_parameters(metric.get("parameters") or []),
             suggested_chart=metric.get("suggested_chart"),
             suggested_kpi_cards=tuple(metric.get("suggested_kpi_cards") or []),
+            synonyms=tuple(str(s).lower() for s in (metric.get("synonyms") or [])),
+            sample_questions=tuple(str(q) for q in (metric.get("sample_questions") or [])),
         ))
 
     return SemanticLayer(

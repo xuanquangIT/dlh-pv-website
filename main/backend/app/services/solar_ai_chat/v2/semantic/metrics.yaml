@@ -230,6 +230,12 @@ metrics:
   # === System overview ===
   system_overview:
     description: "Hệ thống tổng quan: tổng sản lượng + trung bình capacity factor + chất lượng dữ liệu trong N ngày qua. Use for 'tổng quan', 'system overview', 'KPI cards'."
+    synonyms: ["tổng quan", "tong quan", "overview", "kpi", "dashboard", "tóm tắt", "tom tat", "summary", "tình hình", "status hệ thống"]
+    sample_questions:
+      - "Cho tôi xem tổng quan hệ thống"
+      - "System overview last 7 days"
+      - "Tóm tắt hiệu suất hệ thống"
+      - "What's the overall fleet KPI"
     sql_template: |
       SELECT
         SUM(total_energy_mwh) AS total_energy_mwh,
@@ -248,6 +254,11 @@ metrics:
   # === Energy ranking ===
   top_facilities_by_energy:
     description: "Top N trạm theo tổng sản lượng. Use for 'top trạm', 'best facilities', 'ranking by energy'."
+    synonyms: ["top trạm", "top tram", "best facilities", "ranking", "xếp hạng", "xep hang", "tốt nhất", "tot nhat", "cao nhất", "cao nhat", "nhiều nhất", "highest production", "leaderboard"]
+    sample_questions:
+      - "Top 5 trạm sản lượng cao nhất 30 ngày qua"
+      - "Best facilities by energy this month"
+      - "Xếp hạng trạm theo sản lượng"
     sql_template: |
       SELECT facility_name,
              SUM(energy_mwh_daily) AS total_energy_mwh,
@@ -268,6 +279,11 @@ metrics:
 
   bottom_facilities_by_capacity_factor:
     description: "Trạm có capacity factor thấp nhất. Use for 'underperformers', 'trạm yếu', 'lowest CF'."
+    synonyms: ["underperformer", "trạm yếu", "tram yeu", "thấp nhất", "thap nhat", "kém nhất", "kem nhat", "lowest", "worst facilities", "tệ nhất", "te nhat"]
+    sample_questions:
+      - "Trạm nào hiệu suất kém nhất tháng qua"
+      - "Worst performing facilities last 30 days"
+      - "Show underperformers by capacity factor"
     sql_template: |
       SELECT facility_name,
              AVG(weighted_capacity_factor_pct) AS avg_capacity_factor_pct,
@@ -288,6 +304,11 @@ metrics:
   # === Hourly trends ===
   peak_hours_pattern:
     description: "Pattern sản lượng theo giờ trong ngày (avg per hour-of-day). Use for 'peak hour', 'hourly trend', 'giờ cao điểm'."
+    synonyms: ["peak hour", "giờ cao điểm", "gio cao diem", "hourly trend", "theo giờ", "theo gio", "by hour", "hour of day", "khung giờ", "khung gio"]
+    sample_questions:
+      - "Giờ nào sản lượng cao nhất trong ngày"
+      - "Peak production hour pattern"
+      - "Sản lượng theo từng giờ"
     sql_template: |
       SELECT EXTRACT(HOUR FROM date_hour) AS hour_of_day,
              AVG(energy_mwh) AS avg_energy_mwh
@@ -305,6 +326,12 @@ metrics:
   # === Facility info / map ===
   facility_locations_map:
     description: "Toạ độ tất cả trạm cho map visualization. Use for 'map', 'vị trí', 'where are', 'show locations'."
+    synonyms: ["map", "bản đồ", "ban do", "vị trí", "vi tri", "ở đâu", "o dau", "where are", "locations", "geo", "toạ độ", "toa do", "lat lng", "coordinates", "địa điểm", "dia diem"]
+    sample_questions:
+      - "Các trạm điện mặt trời ở đâu, cho tôi xem map"
+      - "Show me a map of all facilities"
+      - "Vị trí địa lý các trạm"
+      - "Where are the solar farms located"
     sql_template: |
       SELECT facility_name,
              facility_id,
@@ -325,6 +352,11 @@ metrics:
 
   facility_metadata_list:
     description: "Liệt kê chi tiết trạm (capacity, region, state). Use for 'list facilities', 'capacity của các trạm'."
+    synonyms: ["list facilities", "danh sách trạm", "danh sach tram", "capacity", "công suất", "cong suat", "chi tiết trạm", "chi tiet tram", "facility info", "thông tin trạm", "thong tin tram"]
+    sample_questions:
+      - "Danh sách công suất các trạm"
+      - "List all facilities with their capacity"
+      - "Thông tin chi tiết về các trạm"
     sql_template: |
       SELECT facility_id,
              facility_name,
@@ -344,6 +376,11 @@ metrics:
   # === Forecast ===
   forecast_72h:
     description: "Dự báo 3 ngày tới cho toàn hệ thống. Use for 'dự báo', 'forecast', 'predicted next days'."
+    synonyms: ["dự báo", "du bao", "forecast", "predict", "dự đoán", "du doan", "next days", "ngày tới", "ngay toi", "tomorrow", "ngày mai", "ngay mai", "72h", "3 ngày", "3 ngay"]
+    sample_questions:
+      - "Dự báo sản lượng 3 ngày tới"
+      - "Forecast next 3 days production"
+      - "Sản lượng dự kiến tuần này"
     sql_template: |
       SELECT forecast_date,
              SUM(predicted_energy_mwh_daily) AS predicted_energy_mwh
@@ -361,6 +398,10 @@ metrics:
 
   forecast_per_facility_72h:
     description: "Dự báo per-facility cho N ngày tới. Use when user wants per-station forecast breakdown."
+    synonyms: ["dự báo per trạm", "dự báo theo trạm", "forecast per facility", "per station forecast", "breakdown forecast", "từng trạm dự báo"]
+    sample_questions:
+      - "Dự báo từng trạm 3 ngày tới"
+      - "Per-facility forecast breakdown"
     sql_template: |
       SELECT facility_name,
              forecast_date,
@@ -380,6 +421,11 @@ metrics:
   # === Extreme values ===
   extreme_aqi:
     description: "Top/bottom AQI readings trong window. Use for 'AQI cao nhất', 'worst air quality'."
+    synonyms: ["aqi", "air quality", "chất lượng không khí", "chat luong khong khi", "ô nhiễm", "o nhiem", "pollution", "pm25", "pm2.5", "pm10", "khói bụi"]
+    sample_questions:
+      - "AQI cao nhất tuần qua ở đâu"
+      - "Worst air quality readings last 30 days"
+      - "Mức ô nhiễm cao nhất"
     sql_template: |
       SELECT location_id,
              aqi_timestamp_local AS observed_at,
@@ -402,6 +448,12 @@ metrics:
 
   extreme_weather:
     description: "Top/bottom giá trị weather (gió, mây, nhiệt độ) per facility. Use for 'gió mạnh nhất', 'cloudiest day', 'wind speed ranking'."
+    synonyms: ["gió mạnh", "gio manh", "wind speed", "tốc độ gió", "toc do gio", "mây nhiều", "may nhieu", "cloudy", "cloud cover", "nhiệt độ cao", "nhiet do cao", "temperature", "thời tiết khắc nghiệt", "thoi tiet", "weather extreme", "humidity", "độ ẩm", "do am"]
+    sample_questions:
+      - "Trạm nào có tốc độ gió cao nhất, vẽ biểu đồ"
+      - "Highest wind speed by facility"
+      - "Ngày nào nhiều mây nhất"
+      - "Top temperature readings"
     sql_template: |
       SELECT COALESCE(facility_name, location_id) AS facility,
              weather_timestamp_local AS observed_at,
@@ -423,6 +475,11 @@ metrics:
 
   extreme_energy:
     description: "Top/bottom hourly energy readings. Use for 'sản lượng cao nhất ngày nào', 'peak production hour'."
+    synonyms: ["sản lượng cao nhất", "san luong cao nhat", "peak production", "highest energy", "kỷ lục", "ky luc", "record production", "max output", "min output", "thấp nhất sản lượng"]
+    sample_questions:
+      - "Sản lượng cao nhất ngày nào tháng qua"
+      - "Peak hourly energy reading"
+      - "Lowest production hours"
     sql_template: |
       SELECT COALESCE(facility_name, facility_id) AS facility,
              date_hour_local AS observed_at,
@@ -440,6 +497,11 @@ metrics:
   # === ML model info ===
   ml_model_metrics:
     description: "Champion model R², RMSE, NRMSE, skill score (latest eval). Use for 'mô hình ML', 'model performance'."
+    synonyms: ["mô hình", "mo hinh", "model performance", "ml model", "machine learning", "champion model", "r2", "rmse", "mae", "skill score", "độ chính xác", "do chinh xac", "accuracy model", "drift"]
+    sample_questions:
+      - "Mô hình ML hiện tại đang dùng là gì, R2 bao nhiêu"
+      - "Champion model performance metrics"
+      - "RMSE của model dự báo"
     sql_template: |
       SELECT model_name,
              model_version,
@@ -460,6 +522,11 @@ metrics:
   # === Pipeline status ===
   pipeline_recent_runs:
     description: "Recent pipeline run health (success/failed counts). Use for 'pipeline status', 'có job nào fail không'."
+    synonyms: ["pipeline", "job", "status", "ingestion", "etl", "run history", "fail", "failed", "lỗi job", "loi job", "tình trạng pipeline", "tinh trang pipeline", "data flow"]
+    sample_questions:
+      - "Pipeline có job nào fail không"
+      - "Recent ETL run status"
+      - "Tình trạng ingestion 24h qua"
     sql_template: |
       SELECT pipeline_name,
              status,
@@ -476,6 +543,11 @@ metrics:
   # === Data quality ===
   data_quality_per_facility:
     description: "Quality / completeness per facility in last window. Use for 'chất lượng dữ liệu', 'trạm nào có vấn đề'."
+    synonyms: ["data quality", "chất lượng dữ liệu", "chat luong du lieu", "completeness", "missing data", "thiếu dữ liệu", "thieu du lieu", "null", "vấn đề", "van de", "anomaly", "bất thường", "bat thuong"]
+    sample_questions:
+      - "Trạm nào có vấn đề data quality"
+      - "Missing data by facility this week"
+      - "Chất lượng dữ liệu các trạm 7 ngày qua"
     sql_template: |
       SELECT facility_id,
              facility_name,
@@ -496,6 +568,12 @@ metrics:
   # === Correlation ===
   weather_energy_correlation:
     description: "Mối tương quan weather-energy theo facility (uses mart_energy_daily as source — has both weather + energy aggregates). Use for 'correlation', 'mối tương quan'."
+    synonyms: ["correlation", "tương quan", "tuong quan", "mối quan hệ", "moi quan he", "ảnh hưởng", "anh huong", "yếu tố ảnh hưởng", "yeu to anh huong", "factor", "irradiance", "bức xạ", "buc xa", "weather impact", "scatter", "regression"]
+    sample_questions:
+      - "Yếu tố nào ảnh hưởng nhất đến hiệu suất tạo điện"
+      - "Correlation between cloud cover and energy output"
+      - "Mối quan hệ giữa bức xạ và sản lượng"
+      - "Weather factors driving production"
     sql_template: |
       SELECT facility_id,
              facility_name,

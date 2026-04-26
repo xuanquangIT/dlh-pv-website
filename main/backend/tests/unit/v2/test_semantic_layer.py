@@ -46,6 +46,10 @@ catalogs:
 metrics:
   facility_locations_map:
     description: "Toạ độ tất cả trạm cho map visualization"
+    synonyms: ["bản đồ", "map", "ban do", "vị trí"]
+    sample_questions:
+      - "Cho tôi xem map các trạm"
+      - "Where are the facilities"
     sql_template: "SELECT facility_name, latitude, longitude FROM pv.gold.dim_facility"
     parameters: []
     suggested_chart:
@@ -260,6 +264,29 @@ class RecallMetricTests(unittest.TestCase):
             semantic_layer=self.layer,
         )
         self.assertEqual(len(result["matches"]), 0)
+
+    def test_vietnamese_synonym_matches_map_metric(self):
+        # Pure VN phrase with no English keyword overlap with metric name
+        result = recall_metric(
+            query="cho tôi xem bản đồ",
+            role_id="admin",
+            semantic_layer=self.layer,
+        )
+        names = [m["name"] for m in result["matches"]]
+        self.assertIn("facility_locations_map", names)
+        self.assertEqual(names[0], "facility_locations_map")
+
+    def test_recall_metric_returns_synonyms_in_payload(self):
+        result = recall_metric(
+            query="map locations",
+            role_id="admin",
+            semantic_layer=self.layer,
+        )
+        self.assertTrue(result["matches"])
+        top = result["matches"][0]
+        self.assertIn("synonyms", top)
+        self.assertIn("sample_questions", top)
+        self.assertIn("bản đồ", top["synonyms"])
 
     def test_role_filters_metric_palette(self):
         result = recall_metric(

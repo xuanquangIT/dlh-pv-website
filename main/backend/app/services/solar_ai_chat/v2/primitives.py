@@ -163,19 +163,43 @@ def inspect_table(
 # -----------------------------------------------------------------------------
 
 def _score_metric_relevance(query: str, metric: MetricDefinition) -> float:
-    """Lightweight keyword overlap score (0-1). Replace with embedding RAG
-    once the v2 cutover is happening at scale."""
+    """Lightweight relevance score (0-1+). Combines:
+      - token overlap against name + description
+      - synonym phrase boost (VN/EN keywords from YAML)
+      - sample-question phrase boost
+    Score can exceed 1.0 when multiple signals fire — sort still works.
+
+    Replace with embedding RAG once Phase 3 cutover lands at scale.
+    """
     q = query.lower()
-    text = (metric.name + " " + metric.description).lower()
-    hits = 0
-    total = 0
-    for token in re.findall(r"\w+", q):
-        if len(token) < 3:
+    text_parts = [metric.name, metric.description]
+    text_parts.extend(metric.sample_questions)
+    text = " ".join(text_parts).lower()
+
+    # Token overlap (skip stopwords < 3 chars)
+    tokens = [t for t in re.findall(r"\w+", q) if len(t) >= 3]
+    if not tokens:
+        return 0.0
+    hits = sum(1 for t in tokens if t in text)
+    base = hits / len(tokens)
+
+    # Synonym phrase boost — each matched synonym substring adds 0.5
+    synonym_boost = 0.0
+    for syn in metric.synonyms:
+        if syn and syn in q:
+            synonym_boost += 0.5
+
+    # Sample-question phrase overlap — strong signal
+    sample_boost = 0.0
+    for sample in metric.sample_questions:
+        sample_tokens = [t for t in re.findall(r"\w+", sample.lower()) if len(t) >= 3]
+        if not sample_tokens:
             continue
-        total += 1
-        if token in text:
-            hits += 1
-    return hits / total if total else 0.0
+        overlap = sum(1 for t in sample_tokens if t in q)
+        if overlap >= 2:           # need 2+ matching words to count
+            sample_boost = max(sample_boost, overlap / len(sample_tokens))
+
+    return base + synonym_boost + sample_boost
 
 
 def recall_metric(
@@ -219,6 +243,8 @@ def recall_metric(
                 ],
                 "suggested_chart": m.suggested_chart,
                 "suggested_kpi_cards": list(m.suggested_kpi_cards),
+                "synonyms": list(m.synonyms),
+                "sample_questions": list(m.sample_questions),
             }
             for m, score in top
             if score > 0  # don't return 0-score noise
