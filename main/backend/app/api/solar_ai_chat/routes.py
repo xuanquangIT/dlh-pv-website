@@ -142,11 +142,35 @@ def _build_chat_service(settings, model_router: LLMModelRouter | None) -> SolarA
 
 @lru_cache(maxsize=1)
 def get_solar_ai_chat_service() -> SolarAIChatService:
-    settings = get_solar_chat_settings()
+    """Build the cached server-default chat service.
+
+    Priority order for the default LLM connection:
+      1. Profile flagged ``SOLAR_CHAT_PROFILE_<N>_DEFAULT=true`` —
+         lets operators pick any provider as default without duplicating
+         credentials in the legacy ``SOLAR_CHAT_LLM_*`` keys.
+      2. Legacy ``SOLAR_CHAT_LLM_*`` env vars (still honoured for
+         backwards compatibility).
+      3. No router (chat falls back to scope-guard / direct synthesis).
+    """
+    base_settings = get_solar_chat_settings()
+    default_profile_id = get_default_profile_id()
+    default_profile = (
+        resolve_profile(default_profile_id, "admin")
+        if default_profile_id else None
+    )
+    if default_profile is not None:
+        # Use the default profile's connection (provider, base_url, key,
+        # primary/fallback model) — this becomes the server-wide default
+        # for every request that doesn't carry a per-request override.
+        effective_settings = settings_with_profile_override(
+            base_settings, default_profile, model_name=None,
+        )
+    else:
+        effective_settings = base_settings
     model_router: LLMModelRouter | None = None
-    if settings.llm_api_key or settings.llm_base_url:
-        model_router = LLMModelRouter(settings=settings)
-    return _build_chat_service(settings, model_router)
+    if effective_settings.llm_api_key or effective_settings.llm_base_url:
+        model_router = LLMModelRouter(settings=effective_settings)
+    return _build_chat_service(effective_settings, model_router)
 
 
 def _resolve_chat_service_for_request(

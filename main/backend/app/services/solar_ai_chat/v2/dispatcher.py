@@ -93,6 +93,17 @@ class V2Dispatcher:
             }
             ok = False
 
+        # Soft-error pass: primitives like inspect_table return
+        # {"error": "..."} for unknown tables without raising. Treat those
+        # as failed so loop-detection + traces reflect reality (otherwise a
+        # model that fans out inspect_table on 5 hallucinated tables sees
+        # 5 green checks in the trace UI).
+        if ok and isinstance(result, dict) and "error" in result:
+            useful_keys = {"rows", "matches", "spec", "format", "tables",
+                           "schemas", "fqn", "columns"}
+            if not (useful_keys & set(result.keys())):
+                ok = False
+
         duration_ms = int((time.time() - started) * 1000)
         return V2DispatchResult(
             function_name=function_name,

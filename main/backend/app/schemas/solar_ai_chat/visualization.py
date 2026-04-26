@@ -55,9 +55,9 @@ class ChartPayload(BaseModel):
     )
     title: str
     description: str | None = None
-    format: Literal["plotly", "vega-lite"] = Field(
+    format: Literal["plotly", "vega-lite", "leaflet-map"] = Field(
         default="plotly",
-        description="Renderer to use: 'plotly' (v1) or 'vega-lite' (v2).",
+        description="Renderer: 'plotly' (v1), 'vega-lite' (v2 charts), 'leaflet-map' (v2 geographic maps with native pan/zoom).",
     )
     plotly_spec: dict[str, Any] | None = Field(
         default=None,
@@ -66,6 +66,18 @@ class ChartPayload(BaseModel):
     spec: dict[str, Any] | None = Field(
         default=None,
         description="v2 only: Vega-Lite spec with `mark` + `encoding` + `data.values`.",
+    )
+    points: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="leaflet-map only: list of {lat, lng, label, size_value, attrs} points.",
+    )
+    size_field: str | None = Field(
+        default=None,
+        description="leaflet-map only: column name used to size circle markers (legend label).",
+    )
+    label_field: str | None = Field(
+        default=None,
+        description="leaflet-map only: column name used as the marker label / popup title.",
     )
     row_count: int | None = Field(
         default=None,

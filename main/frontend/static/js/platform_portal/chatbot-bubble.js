@@ -365,6 +365,13 @@ form.addEventListener("submit", async function (e) {
 
         pendingAssistantEl = appendMessage("assistant", "", null, null, true);
 
+        // Pull picker selections (model + tool toggles) so the widget
+        // honours the same UI controls as the full /solar-chat page.
+        var modelSelection = (window.SolarModelPicker && window.SolarModelPicker.getSelection())
+            || { model_profile_id: "", model_name: "" };
+        var toolSelection = (window.SolarToolPicker && window.SolarToolPicker.getSelection())
+            || { tool_mode: "auto", allowed_tools: null, tool_hints: [] };
+
         var resp = await fetch("/solar-ai-chat/query", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -372,6 +379,11 @@ form.addEventListener("submit", async function (e) {
                 role: currentRole(),
                 session_id: activeSessionId,
                 message: message,
+                model_profile_id: modelSelection.model_profile_id || null,
+                model_name: modelSelection.model_name || null,
+                tool_mode: toolSelection.tool_mode || "auto",
+                allowed_tools: toolSelection.allowed_tools || null,
+                tool_hints: toolSelection.tool_hints || [],
             }),
         });
 

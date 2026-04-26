@@ -19,13 +19,31 @@ class ValidateSqlTests(unittest.TestCase):
     """Pure validation — no executor."""
 
     def test_simple_select_is_safe(self):
-        result = validate_sql("SELECT 1 FROM dual")
+        result = validate_sql("SELECT facility_id FROM pv.gold.dim_facility")
         self.assertTrue(result.safe)
         self.assertEqual(result.violations, [])
 
     def test_with_cte_is_safe(self):
-        result = validate_sql("WITH t AS (SELECT 1 AS x) SELECT * FROM t")
+        result = validate_sql(
+            "WITH t AS (SELECT facility_id FROM pv.gold.dim_facility) SELECT * FROM t"
+        )
         self.assertTrue(result.safe)
+
+    def test_values_literal_blocked(self):
+        """Regression: model hallucinated facilities by writing
+        SELECT * FROM (VALUES (...)) AS t — must be rejected because no
+        real lakehouse table is referenced."""
+        result = validate_sql(
+            "SELECT * FROM (VALUES (1,'Desert Sun Mega',150,33.45,-114.71)) "
+            "AS t(id, name, mw, lat, lng)"
+        )
+        self.assertFalse(result.safe)
+        self.assertTrue(any("lakehouse" in v.lower() for v in result.violations))
+
+    def test_select_constant_blocked(self):
+        """`SELECT 1` doesn't read from any real table."""
+        result = validate_sql("SELECT 1")
+        self.assertFalse(result.safe)
 
     def test_insert_is_blocked(self):
         result = validate_sql("INSERT INTO foo VALUES (1)")
@@ -94,7 +112,10 @@ class ValidateSqlTests(unittest.TestCase):
         self.assertFalse(result.auto_limit_applied)
 
     def test_max_rows_capped_at_hard_max(self):
-        result = validate_sql("SELECT 1", max_rows=HARD_MAX_ROWS + 999_999)
+        result = validate_sql(
+            "SELECT facility_id FROM pv.gold.dim_facility",
+            max_rows=HARD_MAX_ROWS + 999_999,
+        )
         # validate_sql doesn't clamp — execute_sql does. Just confirm no crash.
         self.assertTrue(result.safe)
 
@@ -144,7 +165,7 @@ class ExecuteSqlTests(unittest.TestCase):
             raise RuntimeError("warehouse offline")
 
         result = execute_sql(
-            sql="SELECT 1",
+            sql="SELECT facility_id FROM pv.gold.dim_facility",
             sql_executor=_broken,
         )
         self.assertIn("error", result)
@@ -152,7 +173,7 @@ class ExecuteSqlTests(unittest.TestCase):
         self.assertIn("guidance", result)
 
     def test_no_executor_returns_dry_run(self):
-        result = execute_sql(sql="SELECT 1", sql_executor=None)
+        result = execute_sql(sql="SELECT facility_id FROM pv.gold.dim_facility", sql_executor=None)
         self.assertIn("error", result)
         self.assertIn("executed_sql", result)
 
@@ -164,7 +185,7 @@ class ExecuteSqlTests(unittest.TestCase):
             return []
 
         execute_sql(
-            sql="SELECT 1",
+            sql="SELECT facility_id FROM pv.gold.dim_facility",
             max_rows=HARD_MAX_ROWS + 1_000_000,
             sql_executor=_fake,
         )

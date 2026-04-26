@@ -773,12 +773,19 @@ class SolarAIChatService:
 
         dispatcher = V2Dispatcher(settings, role_id=role_id)
         engine = V2ChatEngine(self._model_router, dispatcher)
-        rewrite = self._query_rewriter.rewrite(request.message)
+        # Detect language directly from the user message — query_rewriter
+        # has been observed mis-classifying English questions as Vietnamese
+        # when no diacritics are present in tokens it knows.
+        from app.services.solar_ai_chat.v2.engine import _detect_language
+        language = _detect_language(request.message)
+        force_chart = bool(getattr(request, "tool_hints", None) and
+                           "visualize" in (request.tool_hints or []))
 
         result = engine.run(
             user_message=request.message,
             history=history_messages,
-            language=rewrite.language or "en",
+            language=language,
+            force_chart=force_chart,
         )
 
         from app.schemas.solar_ai_chat.visualization import (
@@ -790,7 +797,17 @@ class SolarAIChatService:
         )
 
         chart_payload: ChartPayload | None = None
-        if result.chart and result.chart.get("format") == "vega-lite":
+        if result.chart and result.chart.get("format") == "leaflet-map":
+            chart_payload = ChartPayload(
+                chart_type="map",
+                title=str(result.chart.get("title") or ""),
+                format="leaflet-map",
+                points=result.chart.get("points") or [],
+                size_field=result.chart.get("size_field"),
+                label_field=result.chart.get("label_field"),
+                row_count=result.chart.get("row_count"),
+            )
+        elif result.chart and result.chart.get("format") == "vega-lite":
             spec = result.chart.get("spec") or {}
             mark = spec.get("mark")
             mark_type = mark if isinstance(mark, str) else (
@@ -884,7 +901,242 @@ class SolarAIChatService:
             data_table=data_table_payload,
             chart=chart_payload,
             kpi_cards=kpi_payload,
+            engine_version="v2",
         )
+
+    def _stream_with_v2_engine(
+        self,
+        request: SolarChatRequest,
+        started: float,
+        history_messages: list[ChatMessage],
+        trace_id: str,
+        language: str,
+    ):
+        """Streaming variant of the v2 engine bridge.
+
+        Runs the engine synchronously, then re-emits its trace as a
+        sequence of ThinkingStep + ToolResult SSE events so the Task
+        Tracker UI can show what the agent did, followed by a final
+        DoneEvent carrying the answer + visualization payloads.
+        """
+        import json as _json
+        from app.core.settings import SolarChatSettings
+        from app.schemas.solar_ai_chat.stream import (
+            DoneEvent,
+            StatusUpdateEvent,
+            ThinkingStepEvent,
+            ToolResultEvent,
+            tool_label,
+        )
+        from app.schemas.solar_ai_chat.visualization import (
+            ChartPayload,
+            DataTableColumn,
+            DataTablePayload,
+            KpiCard,
+            KpiCardsPayload,
+        )
+        from app.services.solar_ai_chat.v2.dispatcher import V2Dispatcher
+        from app.services.solar_ai_chat.v2.engine import V2ChatEngine
+
+        def _sse(obj) -> str:
+            return "data: " + _json.dumps(obj.model_dump()) + "\n\n"
+
+        if self._model_router is None:
+            raise RuntimeError("v2 engine requires an LLMModelRouter")
+
+        yield _sse(StatusUpdateEvent(text="Running v2 engine…"))
+
+        settings = SolarChatSettings()
+        role_id = (request.role.value if request.role else "admin").lower()
+        dispatcher = V2Dispatcher(settings, role_id=role_id)
+        engine = V2ChatEngine(self._model_router, dispatcher)
+        from app.services.solar_ai_chat.v2.engine import _detect_language
+        language = _detect_language(request.message)
+        force_chart = bool(getattr(request, "tool_hints", None) and
+                           "visualize" in (request.tool_hints or []))
+
+        # Run the engine in a worker thread so we can drain its progress
+        # callback events into SSE while the loop is still in-flight.
+        # Without this, all "thinking_step" events arrive at once after the
+        # 30-60s tool turns finish — UI shows a long blank spinner then a
+        # firehose of completed steps.
+        import queue as _queue
+        import threading as _threading
+
+        events_q: _queue.Queue = _queue.Queue()
+        SENTINEL = object()
+        result_holder: dict[str, Any] = {}
+        seen_steps: set[tuple[int, str, str]] = set()  # (step, primitive, "start"|"end")
+
+        def _on_progress(payload: dict[str, Any]) -> None:
+            events_q.put(payload)
+
+        def _runner() -> None:
+            try:
+                r = engine.run(
+                    user_message=request.message,
+                    history=history_messages,
+                    language=language or "en",
+                    force_chart=force_chart,
+                    progress_callback=_on_progress,
+                )
+                result_holder["result"] = r
+            except Exception as run_err:  # noqa: BLE001
+                result_holder["error"] = run_err
+            finally:
+                events_q.put(SENTINEL)
+
+        thread = _threading.Thread(target=_runner, daemon=True)
+        thread.start()
+
+        # Drain events as they arrive. Each tool_start → ThinkingStepEvent,
+        # each tool_end → ToolResultEvent. Step numbering matches the v1
+        # widget convention (0-indexed across the whole conversation turn).
+        global_step = -1
+        step_index_for_call: dict[tuple[int, str], int] = {}
+        while True:
+            ev = events_q.get()
+            if ev is SENTINEL:
+                break
+            if not isinstance(ev, dict):
+                continue
+            kind = ev.get("event")
+            primitive = str(ev.get("primitive") or "")
+            step_num = int(ev.get("step", 0))
+            key = (step_num, primitive)
+            if kind == "tool_start":
+                global_step += 1
+                step_index_for_call[key] = global_step
+                yield _sse(ThinkingStepEvent(
+                    step=global_step, tool_name=primitive,
+                    label=tool_label(primitive), trace_id=trace_id,
+                ))
+            elif kind == "tool_end":
+                idx = step_index_for_call.get(key, global_step)
+                yield _sse(ToolResultEvent(
+                    step=idx, tool_name=primitive,
+                    status="ok" if ev.get("ok") else "error",
+                    duration_ms=int(ev.get("duration_ms", 0)),
+                    trace_id=trace_id,
+                ))
+
+        thread.join(timeout=1.0)
+        if "error" in result_holder:
+            raise result_holder["error"]
+        result = result_holder.get("result")
+        if result is None:
+            raise RuntimeError("v2 engine returned no result")
+
+        # Build viz payloads (mirror non-stream branch).
+        chart_payload: ChartPayload | None = None
+        if result.chart and result.chart.get("format") == "leaflet-map":
+            chart_payload = ChartPayload(
+                chart_type="map",
+                title=str(result.chart.get("title") or ""),
+                format="leaflet-map",
+                points=result.chart.get("points") or [],
+                size_field=result.chart.get("size_field"),
+                label_field=result.chart.get("label_field"),
+                row_count=result.chart.get("row_count"),
+            )
+        elif result.chart and result.chart.get("format") == "vega-lite":
+            spec = result.chart.get("spec") or {}
+            mark = spec.get("mark")
+            mark_type = mark if isinstance(mark, str) else (
+                (mark or {}).get("type") if isinstance(mark, dict) else "bar"
+            )
+            chart_payload = ChartPayload(
+                chart_type=mark_type or "bar",
+                title=str(result.chart.get("title") or ""),
+                format="vega-lite",
+                spec=spec,
+                row_count=result.chart.get("row_count"),
+            )
+
+        data_table_payload: DataTablePayload | None = None
+        if result.data_table:
+            data_table_payload = DataTablePayload(
+                title=(result.chart or {}).get("title", "Query result") or "Query result",
+                columns=[DataTableColumn(**c) for c in result.data_table.get("columns", [])],
+                rows=result.data_table.get("rows", []),
+                row_count=int(result.data_table.get("row_count", 0)),
+            )
+
+        kpi_payload: KpiCardsPayload | None = None
+        if result.key_metrics and not chart_payload:
+            cards = [
+                KpiCard(label=str(k), value=v if isinstance(v, (int, float, str)) else str(v))
+                for k, v in result.key_metrics.items()
+                if v is not None
+            ]
+            if cards:
+                kpi_payload = KpiCardsPayload(cards=cards)
+
+        viz_snapshot: dict | None = None
+        if chart_payload or data_table_payload or kpi_payload:
+            viz_snapshot = {
+                "chart": chart_payload.model_dump() if chart_payload else None,
+                "data_table": data_table_payload.model_dump() if data_table_payload else None,
+                "kpi_cards": kpi_payload.model_dump() if kpi_payload else None,
+            }
+
+        thinking_trace = ThinkingTrace(
+            summary=f"v2 engine ran {len(result.trace_steps)} primitive call(s).",
+            steps=[
+                ThinkingStep(
+                    step=f"{s['step']}. {s['primitive']}",
+                    detail=f"args={s['args_preview']} duration={s['duration_ms']}ms",
+                    status="success" if s["ok"] else "warning",
+                )
+                for s in result.trace_steps
+            ],
+            trace_id=trace_id,
+        )
+
+        try:
+            self._persist_exchange(
+                session_id=request.session_id,
+                user_message=request.message,
+                answer=result.answer,
+                topic=ChatTopic.GENERAL,
+                sources=result.sources,
+                thinking_trace=thinking_trace,
+                key_metrics=result.key_metrics or None,
+                viz_requested=bool(result.chart),
+                viz_payload=viz_snapshot,
+            )
+        except Exception as persist_err:  # noqa: BLE001
+            logger.warning(
+                "v2_stream_persist_failed trace_id=%s err=%s",
+                trace_id, persist_err,
+            )
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "solar_chat_v2_stream_done trace_id=%s steps=%d model=%s latency_ms=%d chart=%s",
+            trace_id, len(result.trace_steps), result.model_used, latency_ms,
+            "vega" if chart_payload else "none",
+        )
+
+        yield _sse(DoneEvent(
+            answer=result.answer,
+            topic=ChatTopic.GENERAL.value,
+            role=request.role.value if request.role else "admin",
+            sources=[s if isinstance(s, dict) else s.model_dump() for s in result.sources],
+            key_metrics=result.key_metrics or {},
+            model_used=result.model_used,
+            fallback_used=result.fallback_used,
+            latency_ms=latency_ms,
+            intent_confidence=TOOL_PATH_CONFIDENCE,
+            warning_message=result.error,
+            thinking_trace=thinking_trace.model_dump(),
+            ui_features=resolve_ui_features(request.role),
+            data_table=data_table_payload.model_dump() if data_table_payload else None,
+            chart=chart_payload.model_dump() if chart_payload else None,
+            kpi_cards=kpi_payload.model_dump() if kpi_payload else None,
+            trace_id=trace_id,
+            engine_version="v2",
+        ))
 
     @staticmethod
     def _select_tool_declarations(request: SolarChatRequest) -> list:
@@ -962,6 +1214,27 @@ class SolarAIChatService:
             if self._model_router is None:
                 yield _sse(ErrorEvent(message="No LLM configured.", code="no_llm"))
                 return
+
+            # v2 engine cutover (streaming): when SOLAR_CHAT_ENGINE=v2,
+            # route through the slim primitive-based loop and emit SSE
+            # events per primitive call.
+            if self._is_v2_engine_enabled():
+                try:
+                    yield from self._stream_with_v2_engine(
+                        request, started, history_messages, trace_id, language,
+                    )
+                    return
+                except DatabricksDataUnavailableError:
+                    raise
+                except Exception as v2_err:
+                    logger.exception(
+                        "solar_chat_v2_stream_failed trace_id=%s error=%s",
+                        trace_id, v2_err,
+                    )
+                    yield _sse(ErrorEvent(
+                        message=f"v2 engine failed: {v2_err}", code="v2_engine_error",
+                    ))
+                    return
 
             # Prompt injection check
             if _is_prompt_injection_request(request.message):

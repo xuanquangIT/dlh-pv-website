@@ -98,3 +98,4 @@ class SolarChatResponse(BaseModel):
     data_table: DataTablePayload | None = None
     chart: ChartPayload | None = None
     kpi_cards: KpiCardsPayload | None = None
+    engine_version: str | None = None  # "v1" or "v2"; helps clients/telemetry

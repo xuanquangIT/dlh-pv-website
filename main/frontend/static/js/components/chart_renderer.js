@@ -128,10 +128,107 @@
     }
   }
 
+  function renderLeafletMap(container, payload) {
+    var mapDiv = document.createElement("div");
+    mapDiv.className = "solar-chart-plot solar-chart-leaflet";
+    mapDiv.style.height = "440px";
+    mapDiv.style.width = "100%";
+    mapDiv.style.borderRadius = "8px";
+    mapDiv.style.overflow = "hidden";
+    container.appendChild(mapDiv);
+
+    if (!global.L) {
+      mapDiv.innerHTML = '<div class="solar-chart-fallback">Map unavailable: Leaflet not loaded.</div>';
+      return;
+    }
+
+    var points = Array.isArray(payload.points) ? payload.points : [];
+    if (!points.length) {
+      mapDiv.innerHTML = '<div class="solar-chart-fallback">No geographic points to plot.</div>';
+      return;
+    }
+
+    try {
+      var map = global.L.map(mapDiv, {
+        scrollWheelZoom: true,
+        zoomControl: true,
+      });
+
+      // OpenStreetMap tiles — free, no key required.
+      global.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      }).addTo(map);
+
+      // Compute size scaling so the largest point is ~22px and smallest ~6px.
+      var sizes = points.map(function (p) {
+        return typeof p.size_value === "number" ? p.size_value : null;
+      }).filter(function (v) { return v !== null; });
+      var minSize = sizes.length ? Math.min.apply(null, sizes) : 0;
+      var maxSize = sizes.length ? Math.max.apply(null, sizes) : 1;
+      var sizeRange = Math.max(maxSize - minSize, 1);
+
+      function radiusFor(p) {
+        if (typeof p.size_value !== "number") return 7;
+        var t = (p.size_value - minSize) / sizeRange;
+        return 6 + t * 16;
+      }
+
+      var bounds = [];
+      points.forEach(function (p) {
+        if (typeof p.lat !== "number" || typeof p.lng !== "number") return;
+        bounds.push([p.lat, p.lng]);
+        var marker = global.L.circleMarker([p.lat, p.lng], {
+          radius: radiusFor(p),
+          color: "#fff",
+          weight: 1.5,
+          fillColor: "#FFB100",
+          fillOpacity: 0.85,
+        }).addTo(map);
+
+        // Build popup HTML from label + size + extra attrs.
+        var rows = [];
+        if (p.label) {
+          rows.push('<div style="font-weight:600;margin-bottom:4px;">' +
+                    escapeHtml(p.label) + '</div>');
+        }
+        if (payload.size_field && typeof p.size_value === "number") {
+          rows.push('<div><b>' + escapeHtml(payload.size_field) + ':</b> ' +
+                    p.size_value.toLocaleString(undefined, { maximumFractionDigits: 2 }) + '</div>');
+        }
+        var attrs = p.attrs || {};
+        Object.keys(attrs).slice(0, 8).forEach(function (k) {
+          if (k === payload.label_field || k === payload.size_field) return;
+          var v = attrs[k];
+          if (v === null || v === undefined || v === "") return;
+          rows.push('<div><b>' + escapeHtml(k) + ':</b> ' + escapeHtml(v) + '</div>');
+        });
+        marker.bindPopup(rows.join(""));
+        marker.bindTooltip(p.label || "", { direction: "top", offset: [0, -6] });
+      });
+
+      if (bounds.length) {
+        map.fitBounds(bounds, { padding: [40, 40] });
+      } else {
+        map.setView([0, 0], 2);
+      }
+
+      // Resize-aware: when chart container becomes visible, refresh tiles.
+      setTimeout(function () { try { map.invalidateSize(); } catch (_) {} }, 50);
+    } catch (err) {
+      mapDiv.innerHTML = '<div class="solar-chart-fallback">Map render failed: ' +
+        escapeHtml(err && err.message ? err.message : "unknown error") + '</div>';
+    }
+  }
+
   function render(container, payload) {
     if (!container || !payload) return;
     buildHeader(container, payload);
 
+    if (payload.format === "leaflet-map") {
+      renderLeafletMap(container, payload);
+      return;
+    }
     if (payload.format === "vega-lite") {
       renderVegaLite(container, payload);
       return;

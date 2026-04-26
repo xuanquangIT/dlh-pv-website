@@ -1,0 +1,279 @@
+# Solar Chat v2 — ground-truth battery
+# Each case is run end-to-end via the v2 engine. Assertions cover:
+#   • answer_must_contain  — substrings the answer text must mention
+#   • answer_must_not_contain — refusal phrases that should never appear
+#   • expect_kpi.<key>     — KPI cards must include this key (numeric ≈ ground_truth)
+#   • expect_chart.format  — "vega-lite" / null
+#   • expect_chart.mark    — "bar" / "line" / "circle" / "geoshape"
+#   • expect_data_table    — true if a multi-row table should be returned
+#   • expect_min_rows      — minimum row_count
+#   • expect_source_table  — fully-qualified table name in result.sources
+#   • ground_truth_sql     — SQL the runner executes via the same dispatcher to
+#                            verify the engine's KPI matches reality (numeric
+#                            tolerance from `tolerance_pct`)
+#   • ground_truth_key     — which row/column of the gt SQL to compare against
+#   • tolerance_pct        — % tolerance for numeric comparison (default 1.0)
+#   • difficulty           — easy / medium / hard
+
+cases:
+  - id: easy_01_system_overview_en
+    question: "Summarize energy performance across all facilities"
+    difficulty: easy
+    answer_must_contain: ["MWh"]
+    answer_must_not_contain: ["i don't have", "tools are offline", "would you like", "i've prepared"]
+    expect_kpi:
+      total_energy_mwh: gt_total_energy
+      avg_capacity_factor_pct: gt_avg_cf
+      facility_count: gt_facility_count
+    expect_source_table: "pv.gold.mart_system_kpi_daily"
+    ground_truth_sql: |
+      SELECT
+        SUM(total_energy_mwh) AS gt_total_energy,
+        AVG(avg_capacity_factor_pct) AS gt_avg_cf,
+        MAX(total_facility_count) AS gt_facility_count
+      FROM pv.gold.mart_system_kpi_daily
+      WHERE kpi_date >= CURRENT_DATE - INTERVAL '30' DAY
+    tolerance_pct: 0.5
+
+  - id: easy_02_system_overview_vi
+    question: "Tổng quan hệ thống cho tôi 7 ngày qua"
+    difficulty: easy
+    answer_must_contain: ["MWh"]
+    answer_must_not_contain: ["sorry", "tool offline", "không thể"]
+    expect_kpi:
+      total_energy_mwh: gt_total_energy
+    expect_source_table: "pv.gold.mart_system_kpi_daily"
+    ground_truth_sql: |
+      SELECT SUM(total_energy_mwh) AS gt_total_energy
+      FROM pv.gold.mart_system_kpi_daily
+      WHERE kpi_date >= CURRENT_DATE - INTERVAL '7' DAY
+    tolerance_pct: 1.0
+
+  - id: medium_01_top_facilities
+    question: "Top 5 facilities by energy in the last 30 days"
+    difficulty: medium
+    answer_must_not_contain: ["i don't have", "tools are offline"]
+    expect_data_table: true
+    expect_min_rows: 5
+    expect_source_table: "pv.gold.mart_energy_daily"
+    ground_truth_sql: |
+      SELECT facility_name, SUM(energy_mwh_daily) AS gt_total
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '30' DAY
+      GROUP BY facility_name
+      ORDER BY gt_total DESC
+      LIMIT 5
+    tolerance_pct: 1.0
+
+  - id: medium_02_facility_map
+    question: "Show me a map of all facilities"
+    difficulty: medium
+    expect_chart:
+      format: leaflet-map
+      mark: map
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.dim_facility"
+    # Ground truth here just sanity-checks Databricks has the 8 facilities;
+    # the engine returns geographic rows so we don't compare via KPI keys.
+    ground_truth_sql: |
+      SELECT COUNT(*) AS gt_count
+      FROM pv.gold.dim_facility
+      WHERE is_current = TRUE
+
+  - id: medium_03_daily_report_with_viz
+    question: "Show the daily station report for this week"
+    tool_hints: ["visualize"]
+    difficulty: medium
+    answer_must_not_contain: ["i don't have", "would you like", "i've prepared"]
+    expect_chart:
+      format: vega-lite
+    expect_data_table: true
+    expect_min_rows: 8        # 8 facilities × N days
+    expect_source_table: "pv.gold.mart_energy_daily"
+
+  - id: hard_01_hourly_trend_chart
+    question: "Show hourly energy generation trend for this month"
+    tool_hints: ["visualize"]
+    difficulty: hard
+    expect_chart:
+      format: vega-lite
+      mark: line
+    expect_data_table: true
+    expect_min_rows: 24       # at least 1 day of hours
+    expect_source_table: "pv.gold.fact_energy"
+
+  - id: hard_02_underperformers
+    question: "Which facilities underperformed last 30 days by capacity factor"
+    difficulty: hard
+    answer_must_not_contain: ["i don't have"]
+    expect_data_table: true
+    expect_source_table: "pv.gold.mart_energy_daily"
+
+  - id: easy_03_greeting
+    question: "Hello, who are you?"
+    difficulty: easy
+    answer_must_contain: ["Solar"]
+    expect_data_table: false
+    expect_no_tool_calls: true
+
+  # === EXTRA CASES — added after ranking + viz bugs ===
+  - id: medium_04_facility_count_and_details_vi
+    question: "Hiện tại hệ thống có bao nhiêu trạm đang hoạt động, thông tin của từng trạm"
+    tool_hints: ["visualize"]
+    difficulty: medium
+    answer_must_not_contain: ["sorry", "tôi chưa", "i don't have"]
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.dim_facility"
+    ground_truth_sql: |
+      SELECT COUNT(*) AS gt_count
+      FROM pv.gold.dim_facility
+      WHERE is_current = TRUE
+
+  - id: medium_05_list_facilities_en
+    question: "List all facilities with their info"
+    difficulty: medium
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.dim_facility"
+
+  - id: medium_06_what_facilities_exist
+    question: "What facilities do we have"
+    difficulty: medium
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.dim_facility"
+
+  - id: hard_03_forecast_3_days
+    question: "Forecast next 3 days production"
+    difficulty: hard
+    answer_must_not_contain: ["i don't have", "tools are offline"]
+    expect_data_table: true
+    expect_source_table: "pv.gold.forecast_daily"
+
+  - id: hard_04_ml_champion
+    question: "What ML model are we currently using and its R2 score"
+    difficulty: hard
+    answer_must_not_contain: ["i don't have"]
+    expect_data_table: true
+    expect_source_table: "pv.gold.model_monitoring_daily"
+
+  - id: hard_05_pipeline_status
+    question: "Show me the recent pipeline runs status"
+    difficulty: hard
+    answer_must_not_contain: ["i don't have"]
+    expect_data_table: true
+    expect_source_table: "pv.gold.pipeline_run_diagnostics"
+
+  - id: hard_06_data_quality_per_facility
+    question: "Which facility has the worst data quality this week"
+    difficulty: hard
+    answer_must_not_contain: ["i don't have"]
+    expect_data_table: true
+
+  - id: medium_07_peak_hour
+    question: "Giờ nào sản lượng cao nhất trong ngày"
+    difficulty: medium
+    expect_data_table: true
+    expect_source_table: "pv.gold.fact_energy"
+
+  - id: easy_04_off_topic_redirect
+    question: "What's the weather forecast for New York tomorrow?"
+    difficulty: easy
+    # Off-topic question — engine should NOT pull lakehouse data, should
+    # politely redirect. The redirect message itself mentions "facility"
+    # as a topic suggestion, so we only forbid actual data values + tool use.
+    answer_must_contain: ["PV"]
+    answer_must_not_contain: ["112,134", "MWh", "32,486"]
+    expect_data_table: false
+    expect_no_tool_calls: true
+
+  - id: medium_09_energy_contribution_vi
+    question: "Tỉ lệ đóng góp điện năng của 8 trạm trong hệ thống"
+    tool_hints: ["visualize"]
+    difficulty: medium
+    answer_must_not_contain: ["latitude", "longitude", "i don't have"]
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.mart_energy_daily"
+
+  - id: medium_10_facility_info_with_map
+    question: "Thông tin về các trạm trong hệ thống"
+    tool_hints: ["visualize"]
+    difficulty: medium
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_chart:
+      format: leaflet-map
+      mark: map
+    expect_source_table: "pv.gold.dim_facility"
+
+  - id: hard_07_temperature_correlation_vi
+    question: "Phân tích tương quan giữa nhiệt độ và hiệu suất tạo điện"
+    tool_hints: ["visualize"]
+    difficulty: hard
+    answer_must_not_contain: ["i don't have"]
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_chart:
+      format: vega-lite
+      mark: point
+    expect_source_table: "pv.gold.mart_energy_daily"
+
+  - id: medium_12_highest_yesterday
+    question: "Which facility had the highest energy output yesterday?"
+    difficulty: medium
+    answer_must_not_contain: ["i can't", "i don't have", "energy_mwh"]
+    expect_data_table: true
+    expect_min_rows: 1
+    expect_source_table: "pv.gold.mart_energy_daily"
+
+  - id: medium_11_pr_ranking_vi
+    question: "Trạm trong hệ thống có PR tốt nhất"
+    difficulty: medium
+    answer_must_not_contain: ["i don't have", "không thể xác định"]
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.mart_energy_daily"
+
+  - id: easy_05_conceptual_definition_vi
+    question: "Performance Ratio là gì"
+    difficulty: easy
+    # Conceptual question — engine should answer with text only, NOT pull
+    # KPIs from system_overview as a fallback.
+    answer_must_contain: ["Performance Ratio"]
+    answer_must_not_contain: ["112,134", "114,349", "33.69", "33.70"]
+    expect_data_table: false
+    expect_no_tool_calls: true
+
+  - id: easy_06_conceptual_definition_en
+    question: "What is capacity factor and how is it calculated"
+    difficulty: easy
+    answer_must_contain: ["capacity factor"]
+    answer_must_not_contain: ["112,134", "114,349"]
+    expect_data_table: false
+    expect_no_tool_calls: true
+
+  - id: hard_08_wind_impact_vi
+    question: "Phân tích ảnh hưởng của tốc độ gió đến hiệu suất"
+    tool_hints: ["visualize"]
+    difficulty: hard
+    answer_must_not_contain: ["cơ sở 1", "cơ sở 2", "facility 1", "facility 2", "i don't have"]
+    expect_data_table: true
+    expect_min_rows: 8
+    expect_source_table: "pv.gold.mart_weather_impact_daily"
+
+  - id: medium_08_capacity_factor_avg_30d
+    question: "Fleet-wide average capacity factor over the last 30 days"
+    difficulty: medium
+    # System overview returns a single-row aggregate, so KPI cards include
+    # the avg_capacity_factor_pct directly.
+    expect_kpi:
+      avg_capacity_factor_pct: gt_avg_cf
+    expect_source_table: "pv.gold.mart_system_kpi_daily"
+    ground_truth_sql: |
+      SELECT AVG(avg_capacity_factor_pct) AS gt_avg_cf
+      FROM pv.gold.mart_system_kpi_daily
+      WHERE kpi_date >= CURRENT_DATE - INTERVAL '30' DAY
+    tolerance_pct: 1.0

@@ -162,6 +162,30 @@ def inspect_table(
 # Primitive 3: recall_metric(query)
 # -----------------------------------------------------------------------------
 
+_STOPWORDS: frozenset[str] = frozenset({
+    # English filler / interrogative words that show up in sample questions
+    # without carrying domain meaning. Keep this list short — words that
+    # legitimately discriminate metrics (e.g. "energy", "facility", "weather")
+    # MUST NOT be here.
+    "the", "and", "for", "with", "this", "that", "from", "have", "are", "you",
+    "all", "any", "now", "today", "show", "give", "tell", "what", "whats",
+    "let", "can", "could", "would", "may", "much", "many", "how", "why",
+    "when", "where", "which", "who", "whom", "into", "over", "out", "off",
+    "one", "two", "ten", "yes", "see", "got", "get", "use",
+    # Vietnamese function words / interrogatives (with + without diacritics)
+    "cho", "tôi", "toi", "bạn", "ban", "các", "cac", "của", "cua",
+    "là", "la", "có", "co", "không", "khong", "này", "nay", "đó", "do",
+    "với", "voi", "đang", "dang", "đã", "da", "sẽ", "se",
+    "và", "va", "hay", "thì", "thi", "rồi", "roi", "mà", "ma",
+    "hiện", "hien", "tại", "tai", "bao", "nhiêu", "nhieu",
+    "thông", "thong", "tin", "từng", "tung", "mỗi", "moi",
+    "trong", "trên", "tren", "dưới", "duoi", "ngoài", "ngoai",
+    "đây", "day", "đấy", "day2", "kia", "ai", "gì", "gi",
+    "ra", "vào", "vao", "lên", "len", "xuống", "xuong",
+    "nó", "no", "nào", "nao", "đến", "den",
+})
+
+
 def _score_metric_relevance(query: str, metric: MetricDefinition) -> float:
     """Lightweight relevance score (0-1+). Combines:
       - token overlap against name + description
@@ -172,31 +196,58 @@ def _score_metric_relevance(query: str, metric: MetricDefinition) -> float:
     Replace with embedding RAG once Phase 3 cutover lands at scale.
     """
     q = query.lower()
-    text_parts = [metric.name, metric.description]
-    text_parts.extend(metric.sample_questions)
+    # Include synonyms in the searchable text so a query like "summarize"
+    # matches a metric whose synonym list includes "summary" / "tóm tắt".
+    text_parts = [metric.name, metric.description, *metric.sample_questions, *metric.synonyms]
     text = " ".join(text_parts).lower()
 
-    # Token overlap (skip stopwords < 3 chars)
-    tokens = [t for t in re.findall(r"\w+", q) if len(t) >= 3]
+    # Token overlap (skip stopwords < 3 chars). Use word-boundary matching so
+    # "all" doesn't match "overall" and "map" doesn't match "summarize".
+    # Filter Vietnamese + English function words on BOTH sides so a query
+    # full of "hiện tại / bao nhiêu / đang / của" doesn't incidentally
+    # match a metric whose sample question contains the same fillers.
+    raw_tokens = [t for t in re.findall(r"\w+", q) if len(t) >= 3]
+    tokens = [t for t in raw_tokens if t not in _STOPWORDS]
     if not tokens:
-        return 0.0
-    hits = sum(1 for t in tokens if t in text)
+        # Fall back to raw tokens if the query is *entirely* stopwords
+        # (rare — happens for greetings only).
+        tokens = raw_tokens
+        if not tokens:
+            return 0.0
+    text_tokens = set(re.findall(r"\w+", text)) - _STOPWORDS
+    hits = sum(1 for t in tokens if t in text_tokens)
     base = hits / len(tokens)
 
-    # Synonym phrase boost — each matched synonym substring adds 0.5
+    # Synonym phrase boost — each matched synonym phrase adds 0.5. Use
+    # word-boundary regex to avoid "map" matching "summary".
     synonym_boost = 0.0
     for syn in metric.synonyms:
-        if syn and syn in q:
-            synonym_boost += 0.5
-
-    # Sample-question phrase overlap — strong signal
-    sample_boost = 0.0
-    for sample in metric.sample_questions:
-        sample_tokens = [t for t in re.findall(r"\w+", sample.lower()) if len(t) >= 3]
-        if not sample_tokens:
+        if not syn:
             continue
-        overlap = sum(1 for t in sample_tokens if t in q)
-        if overlap >= 2:           # need 2+ matching words to count
+        s = syn.lower()
+        if " " in s:                   # multi-word phrase: substring is fine
+            if s in q:
+                synonym_boost += 0.5
+        else:
+            if re.search(rf"\b{re.escape(s)}\b", q):
+                synonym_boost += 0.5
+
+    # Sample-question phrase overlap — only count distinctive words (skip the
+    # generic "all"/"the"/"show" set that fires on every English sample).
+    sample_boost = 0.0
+    GENERIC = {"all", "the", "show", "give", "tell", "what", "what's", "for",
+               "and", "with", "this", "that", "from", "now", "today", "have",
+               "you", "can", "cho", "toi", "tôi", "xem", "các", "cac"}
+    q_set = set(tokens)
+    for sample in metric.sample_questions:
+        sample_tokens = [
+            t for t in re.findall(r"\w+", sample.lower())
+            if len(t) >= 3 and t not in GENERIC
+        ]
+        if len(sample_tokens) < 2:
+            continue
+        overlap = sum(1 for t in sample_tokens if t in q_set)
+        if overlap >= 2:
             sample_boost = max(sample_boost, overlap / len(sample_tokens))
 
     return base + synonym_boost + sample_boost
@@ -291,6 +342,9 @@ def validate_sql(sql: str, *, max_rows: int = DEFAULT_MAX_ROWS) -> SqlValidation
       3. No system catalog references (information_schema, system.*, pg_catalog)
       4. Append LIMIT N if missing
       5. No semicolons (prevents stacked queries)
+      6. Must reference at least one real lakehouse table (pv.<schema>.<table>)
+         — blocks `SELECT * FROM (VALUES ...)` literals where weak models
+         hallucinate facility data and pass it off as real.
     """
     violations: list[str] = []
     s = sql.strip().rstrip(";").strip()
@@ -313,6 +367,15 @@ def validate_sql(sql: str, *, max_rows: int = DEFAULT_MAX_ROWS) -> SqlValidation
     for blocked in _BLOCKED_CATALOG_PREFIXES:
         if re.search(rf"\b{re.escape(blocked)}\b", s, re.IGNORECASE):
             violations.append(f"Access to {blocked} catalog/schema is blocked.")
+
+    # Real-table requirement. Look for at least one FROM/JOIN pv.<schema>.<table>
+    # pattern. Reject if missing — the model is hallucinating data via a
+    # VALUES literal or a CTE that never reads from the lakehouse.
+    if not re.search(r"\b(?:FROM|JOIN)\s+pv\.\w+\.\w+", s, re.IGNORECASE):
+        violations.append(
+            "SQL must reference at least one lakehouse table (pv.<schema>.<table>). "
+            "VALUES literals and synthetic CTEs are not allowed — quote real data only."
+        )
 
     # Auto-LIMIT
     auto_limit = False
@@ -462,4 +525,5 @@ def render_visualization(
         "spec": full_spec,
         "row_count": len(data),
         "title": title or full_spec.get("title", ""),
+        "mark": mark_type,
     }
