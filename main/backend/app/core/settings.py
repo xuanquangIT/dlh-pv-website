@@ -59,7 +59,7 @@ class SolarChatSettings(BaseSettings):
         validation_alias=AliasChoices("SOLAR_CHAT_FALLBACK_MODEL", "fallback_model"),
     )
     request_timeout_seconds: float = Field(
-        default=15.0,
+        default=90.0,
         validation_alias=AliasChoices("SOLAR_CHAT_REQUEST_TIMEOUT_SECONDS", "request_timeout_seconds"),
     )
     llm_default_max_output_tokens: int = Field(
@@ -76,6 +76,13 @@ class SolarChatSettings(BaseSettings):
             "SOLAR_CHAT_LLM_TOOL_CALL_MAX_OUTPUT_TOKENS",
             "SOLAR_AI_TOOL_CALL_MAX_OUTPUT_TOKENS",
             "llm_tool_call_max_output_tokens",
+        ),
+    )
+    llm_reasoning_effort: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "SOLAR_CHAT_REASONING_EFFORT",
+            "llm_reasoning_effort",
         ),
     )
     llm_planner_max_output_tokens: int = Field(

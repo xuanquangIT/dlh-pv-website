@@ -49,16 +49,21 @@ V2_TOOL_SCHEMAS: list[dict] = [
         "description": (
             "Search the canonical metric registry for pre-defined SQL "
             "templates matching the user's intent. Use BEFORE writing "
-            "ad-hoc SQL — most common questions match a known metric "
-            "(top facilities, system overview, forecast, map locations, "
-            "etc). Returns SQL templates + suggested chart specs."
+            "ad-hoc SQL — most common questions match a known metric. "
+            "Returns SQL templates + suggested chart specs."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Natural language query describing what data is needed.",
+                    "description": (
+                        "Pass the user's ORIGINAL question verbatim (or a "
+                        "near-verbatim translation if you must shorten). "
+                        "DO NOT rewrite into category labels like "
+                        "'system overview' — the registry uses the user's "
+                        "real wording for similarity matching."
+                    ),
                 },
                 "top_k": {
                     "type": "integer",
@@ -183,4 +188,16 @@ CONSTRAINTS:
 - If a query returns 0 rows, run inspect_table to verify column names
   before answering "no data".
 - For non-data scope refusals, suggest 1-2 example questions you CAN answer.
+
+FACILITY COMPARISON:
+- For "compare X and Y" or "so sánh X và Y" questions: use recall_metric
+  with query "facility comparison" — this matches the `facility_comparison`
+  canonical metric that returns capacity + energy + weather side-by-side.
+- Map facility names to IDs: Darlington Point → DARLSF, Avonlie → AVLSF,
+  Bomen → BOMENSF, Yatpool → YATSF1, Limondale → LIMOSF2,
+  Finley → FINLEYSF, Emerald → EMERASF, Daroobalgie → WRSF1.
+- Fill both `facility_id_1` and `facility_id_2` in the SQL template.
+- After the comparison SQL, synthesize a direct side-by-side narrative:
+  which facility has higher capacity, higher energy output, better CF/PR,
+  different weather conditions — do NOT ask the user what fields to show.
 """

@@ -78,6 +78,10 @@ class LLMModelRouter:
         self._anthropic_version = settings.llm_anthropic_version
         self._default_max_output_tokens = max(1, int(settings.llm_default_max_output_tokens))
         self._tool_call_max_output_tokens = max(1, int(settings.llm_tool_call_max_output_tokens))
+        # OpenAI reasoning models (o1, o3, gpt-5, codex-oauth proxies) accept
+        # `reasoning_effort` ∈ {low, medium, high}. None ⇒ omit the field.
+        raw_effort = (getattr(settings, "llm_reasoning_effort", None) or "").strip().lower()
+        self._reasoning_effort = raw_effort if raw_effort in {"low", "medium", "high"} else None
         self._request_executor = request_executor
         # Models that produced invalid tool invocations are skipped for a short TTL window.
         self._tool_call_disabled_models: dict[str, float] = {}
@@ -932,6 +936,10 @@ class LLMModelRouter:
         endpoint = f"{self._base_url}/chat/completions"
         request_payload = dict(payload)
         request_payload["model"] = model_name
+        # Inject reasoning_effort for OpenAI-compatible reasoning models.
+        # Server ignores the field if the model isn't a reasoning model.
+        if self._reasoning_effort and "reasoning_effort" not in request_payload:
+            request_payload["reasoning_effort"] = self._reasoning_effort
         if self._request_executor is not None:
             return self._request_executor(endpoint, request_payload, self._timeout)
         headers: dict[str, str] = {"Content-Type": "application/json"}

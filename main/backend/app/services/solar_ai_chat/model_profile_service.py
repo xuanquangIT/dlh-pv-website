@@ -67,6 +67,7 @@ class LLMProfile:
     api_key: str | None = None
     is_startup_default: bool = False
     allowed_roles: frozenset[str] = field(default_factory=lambda: PICKER_AUTH_ROLES)
+    reasoning_effort: str | None = None  # "low" | "medium" | "high" | None
 
     def has_model(self, model_name: str) -> bool:
         return model_name in self.models
@@ -178,12 +179,24 @@ def _load_one_profile(index: int) -> LLMProfile | None:
                     )
                 return None
     if not api_key:
-        logger.warning(
-            "solar_chat_profile_skipped id=%s index=%d reason=no_api_key "
-            "set either SOLAR_CHAT_PROFILE_%d_API_KEY=<raw> or _API_KEY_ENV=<other-env-var-name>.",
-            profile_id, index, index,
-        )
-        return None
+        base_url_raw = _read_env(prefix + "BASE_URL").strip()
+        if base_url_raw:
+            # Local/self-hosted proxy — no key required; auth header is skipped.
+            logger.info(
+                "solar_chat_profile_keyless id=%s index=%d base_url=%s — no API key, "
+                "running as keyless local proxy.",
+                profile_id, index, base_url_raw,
+            )
+        else:
+            logger.warning(
+                "solar_chat_profile_skipped id=%s index=%d reason=no_api_key "
+                "set either SOLAR_CHAT_PROFILE_%d_API_KEY=<raw> or _API_KEY_ENV=<other-env-var-name>.",
+                profile_id, index, index,
+            )
+            return None
+
+    raw_effort = _read_env(prefix + "REASONING_EFFORT").lower()
+    reasoning_effort = raw_effort if raw_effort in {"low", "medium", "high"} else None
 
     return LLMProfile(
         id=profile_id,
@@ -196,6 +209,7 @@ def _load_one_profile(index: int) -> LLMProfile | None:
         api_key=api_key,
         is_startup_default=_parse_bool(_read_env(prefix + "DEFAULT")),
         allowed_roles=_parse_roles(_read_env(prefix + "ALLOWED_ROLES")),
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -289,11 +303,14 @@ def settings_with_profile_override(
         "fallback_model": profile.fallback_model or chosen_model,
     }
     api_key = profile.resolve_api_key()
-    if api_key is not None:
-        overrides["llm_api_key"] = api_key
+    # Explicitly set (or clear) the key so the base-settings key is never
+    # leaked to a different provider's endpoint (important for keyless proxies).
+    overrides["llm_api_key"] = api_key or ""
     base_url = profile.resolve_base_url()
     if base_url is not None:
         overrides["llm_base_url"] = base_url
+    if profile.reasoning_effort is not None:
+        overrides["llm_reasoning_effort"] = profile.reasoning_effort
     return base_settings.model_copy(update=overrides)
 
 
