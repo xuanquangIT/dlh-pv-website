@@ -837,7 +837,7 @@ class SolarAIChatService:
                 ThinkingStep(
                     step=f"{s['step']}. {s['primitive']}",
                     detail=f"args={s['args_preview']} duration={s['duration_ms']}ms",
-                    status="ok" if s["ok"] else "warning",
+                    status="success" if s["ok"] else "warning",
                 )
                 for s in result.trace_steps
             ],

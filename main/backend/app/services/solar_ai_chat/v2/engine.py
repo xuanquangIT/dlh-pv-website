@@ -263,20 +263,22 @@ class V2ChatEngine:
 
     @staticmethod
     def _format_tool_result(name: str, result: dict[str, Any]) -> dict[str, object]:
-        # Truncate big payloads (huge row dumps) to keep prompt size bounded
+        # 1. Deep-convert non-JSON types (datetime, Decimal, bytes) to strings
+        #    so the LLM client can serialize the function_response payload.
+        json_safe = _to_json_safe(result)
+        # 2. Truncate huge row dumps so we don't blow the LLM context budget.
         try:
-            serialized = json.dumps(result, ensure_ascii=False, default=str)
+            serialized = json.dumps(json_safe, ensure_ascii=False)
         except Exception:  # noqa: BLE001
-            serialized = str(result)
+            serialized = str(json_safe)
         if len(serialized) > MAX_TOOL_RESULT_CHARS:
-            serialized = serialized[:MAX_TOOL_RESULT_CHARS] + "...[truncated]"
-            try:
-                trimmed = json.loads(serialized.replace("...[truncated]", '"[truncated]"'))
-            except Exception:  # noqa: BLE001
-                trimmed = {"_truncated": serialized}
-            payload = trimmed
+            payload: Any = {
+                "_truncated_for_prompt_size": True,
+                "preview_chars": serialized[:MAX_TOOL_RESULT_CHARS],
+                "guidance": "Result truncated. Refine your query (smaller window, fewer columns) and try again.",
+            }
         else:
-            payload = result
+            payload = json_safe
         return {
             "role": "function",
             "parts": [{"function_response": {"name": name, "response": payload}}],
@@ -286,6 +288,32 @@ class V2ChatEngine:
 # -----------------------------------------------------------------------------
 # Helpers (module-level so they're testable)
 # -----------------------------------------------------------------------------
+
+def _to_json_safe(value: Any) -> Any:
+    """Recursively convert types the stdlib json encoder rejects (datetime,
+    date, Decimal, bytes, set) into JSON-serialisable equivalents. We pass
+    the cleaned dict back into LLM tool messages, so the upstream
+    json.dumps in the LLM client doesn't blow up on Databricks row payloads."""
+    from datetime import date, datetime, time
+    from decimal import Decimal
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return str(value)
+    if isinstance(value, dict):
+        return {str(k): _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_to_json_safe(v) for v in value]
+    return str(value)
+
 
 def _truncate_for_log(value: Any, limit: int = 200) -> str:
     s = json.dumps(value, ensure_ascii=False, default=str) if not isinstance(value, str) else value
