@@ -13,6 +13,13 @@ from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.intent_service import normalize_vietnamese_text
 from app.services.solar_ai_chat.permissions import ROLE_TOOL_PERMISSIONS
 
+class ToolRoutingBlockedError(ValueError):
+    """Raised when a tool call is intentionally blocked by a routing guardrail
+    (e.g. ``search_documents`` invoked for numeric ranking). The message is
+    fed back to the LLM so it can self-correct, but the UI should treat this
+    as a soft skip rather than an error — the user does not need to see it."""
+
+
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     _handler = logging.StreamHandler()
@@ -366,7 +373,7 @@ class ToolExecutor:
                     "reason=performance_ratio_not_supported args=%s",
                     self._short(arguments, 200),
                 )
-                raise ValueError(
+                raise ToolRoutingBlockedError(
                     "get_station_daily_report does not return performance_ratio. "
                     "For PR correlation / relationship queries call "
                     "query_gold_kpi(table_name='energy', limit=100) instead — "
@@ -410,7 +417,7 @@ class ToolExecutor:
                     "reason=correlation_or_ranking_of_metrics query=%r",
                     q[:200],
                 )
-                raise ValueError(
+                raise ToolRoutingBlockedError(
                     "search_documents only returns text chunks from manuals / "
                     "incident reports / model changelogs — it has no numeric "
                     "data and cannot produce a chart. For correlation or "
@@ -496,10 +503,14 @@ class ToolExecutor:
         self, arguments: dict[str, Any],
     ) -> tuple[dict[str, Any], list[dict[str, str]]]:
         anchor = self._parse_date(arguments.get("anchor_date"))
+        start = self._parse_date(arguments.get("start_date"))
+        end = self._parse_date(arguments.get("end_date"))
         station_name = arguments.get("station_name")
         return self._repository.fetch_station_hourly_report(
             station_name=station_name,
             anchor_date=anchor,
+            start_date=start,
+            end_date=end,
         )
 
     def _get_station_daily_report(self, arguments: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:

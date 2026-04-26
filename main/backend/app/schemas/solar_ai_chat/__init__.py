@@ -43,6 +43,10 @@ from app.schemas.solar_ai_chat.visualization import (
     KpiCard,
     KpiCardsPayload,
 )
+from app.schemas.solar_ai_chat.model_profile import (
+    LLMProfileList,
+    LLMProfileSummary,
+)
 from app.schemas.solar_ai_chat.stream import (
     ThinkingStepEvent,
     ToolResultEvent,
@@ -98,4 +102,6 @@ __all__ = [
     "DataTablePayload",
     "KpiCard",
     "KpiCardsPayload",
+    "LLMProfileList",
+    "LLMProfileSummary",
 ]

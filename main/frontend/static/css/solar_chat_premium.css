@@ -1680,3 +1680,104 @@ html[data-theme="dark"] .stp-pill.is-active {
   .stp-toolbar { padding: 4px 14px 2px; }
   .stp-hint-text { display: none; }
 }
+
+/* ==========================================================================
+   Model picker (admin / ml_engineer) — header pill next to "New chat"
+   ========================================================================== */
+.solar-chat-model-picker-slot {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+}
+.smp-toolbar.smp-hidden { display: none !important; }
+
+.smp-toolbar-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  background: #ffffff;
+  color: #3a465f;
+  font-family: "Inter", sans-serif;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  max-width: 320px;
+}
+.smp-toolbar-inline:hover {
+  border-color: rgba(46, 175, 111, 0.45);
+  background: #f6fbf8;
+}
+.smp-toolbar-inline:focus-within {
+  border-color: rgba(46, 175, 111, 0.7);
+  box-shadow: 0 0 0 3px rgba(46, 175, 111, 0.15);
+  background: #ffffff;
+}
+.smp-icon {
+  flex-shrink: 0;
+  color: #6f7d96;
+}
+.smp-toolbar-inline:hover .smp-icon { color: #2eaf6f; }
+.smp-toolbar-inline:focus-within .smp-icon { color: #1f8e57; }
+
+.smp-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0 18px 0 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  max-width: 250px;
+  text-overflow: ellipsis;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    calc(100% - 9px) 50%,
+    calc(100% - 5px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.smp-select:focus { outline: none; }
+.smp-select option {
+  background: #ffffff;
+  color: #3a465f;
+  font-weight: 500;
+}
+
+html[data-theme="dark"] .smp-toolbar-inline {
+  background: rgba(255, 255, 255, 0.04);
+  color: #e7ecf5;
+  border-color: rgba(255, 255, 255, 0.10);
+}
+html[data-theme="dark"] .smp-toolbar-inline:hover {
+  background: rgba(90, 200, 140, 0.10);
+  border-color: rgba(90, 200, 140, 0.4);
+}
+html[data-theme="dark"] .smp-toolbar-inline:focus-within {
+  border-color: rgba(90, 200, 140, 0.6);
+  box-shadow: 0 0 0 3px rgba(90, 200, 140, 0.15);
+}
+html[data-theme="dark"] .smp-icon { color: #8ea0b8; }
+html[data-theme="dark"] .smp-toolbar-inline:hover .smp-icon,
+html[data-theme="dark"] .smp-toolbar-inline:focus-within .smp-icon {
+  color: #7be6b3;
+}
+html[data-theme="dark"] .smp-select option {
+  background: #1a2233;
+  color: #e7ecf5;
+}
+
+@media (max-width: 720px) {
+  .smp-toolbar-inline { max-width: 200px; }
+  .smp-select { max-width: 150px; font-size: 12px; }
+}
+@media (max-width: 480px) {
+  .solar-chat-model-picker-slot { display: none; }
+}

@@ -930,6 +930,16 @@ class LLMModelRouter:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+        # OpenRouter-specific optional headers for leaderboard attribution.
+        # Harmless on other OpenAI-compatible endpoints (they ignore unknown headers).
+        if "openrouter.ai" in self._base_url:
+            import os
+            referer = os.environ.get("SOLAR_CHAT_OPENROUTER_REFERER", "http://localhost:8000").strip()
+            title = os.environ.get("SOLAR_CHAT_OPENROUTER_APP_NAME", "PV Lakehouse Solar Chat").strip()
+            if referer:
+                headers["HTTP-Referer"] = referer
+            if title:
+                headers["X-Title"] = title
         return self._execute_request(endpoint, request_payload, self._timeout, headers)
 
     @staticmethod

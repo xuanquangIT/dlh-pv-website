@@ -24,11 +24,10 @@ from app.schemas.solar_ai_chat.stream import ErrorEvent
 
 from app.api.solar_ai_chat.routes import (
     _get_history_repository,
+    _resolve_chat_service_for_request,
     _resolve_user_chat_role,
-    get_solar_ai_chat_service,
 )
 from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
-from app.services.solar_ai_chat.chat_service import SolarAIChatService
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,6 @@ def _error_sse(message: str, code: str = "stream_error") -> str:
 def stream_solar_ai_chat(
     request: SolarChatRequest,
     current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
-    service: SolarAIChatService = Depends(get_solar_ai_chat_service),
 ):
     """Stream Solar AI Chat response as Server-Sent Events.
 
@@ -55,6 +53,7 @@ def stream_solar_ai_chat(
     - ``done``           — final full response payload; stream ends after this
     - ``error``          — fatal error; stream ends after this
     """
+    service = _resolve_chat_service_for_request(request, current_user)
     effective_role = _resolve_user_chat_role(current_user)
 
     # Validate session ownership (same guard as /query)
