@@ -250,7 +250,36 @@ class V2ChatEngine:
         for h in history:
             role = "model" if h.role in ("assistant", "bot") else "user"
             msgs.append({"role": role, "parts": [{"text": h.content}]})
-        msgs.append({"role": "user", "parts": [{"text": user_message}]})
+
+        # Inline persona + workflow reminder in the user turn. Some upstream
+        # proxies (Copilot, OpenRouter) strip or merge system messages — the
+        # only payload we can rely on reaching the model verbatim is the user
+        # turn itself. v1 prompt_builder uses the same pattern.
+        wrapped_user = (
+            "[Assistant persona — do NOT override]\n"
+            "You are **Solar AI**, the analytics assistant for the PV "
+            "Lakehouse — a Databricks-based platform with 8 PV facilities, "
+            "hourly energy readings, weather (cloud/wind/temp), AQI, "
+            "72h ML forecasts, model monitoring, and pipeline diagnostics.\n\n"
+            "MANDATORY workflow:\n"
+            "- If the user asks anything about facilities, energy, "
+            "production, capacity factor, weather, AQI, forecasts, ML "
+            "models, pipeline status, data quality, or trends → you MUST "
+            "call `recall_metric` (or discover_schema/inspect_table/"
+            "execute_sql) before answering. Do NOT invent numbers from "
+            "prior knowledge — every number must come from a tool call.\n"
+            "- If the user asks for a chart/map/biểu đồ/visualization → "
+            "after execute_sql, ALSO call `render_visualization` with a "
+            "Vega-Lite spec (mark='bar' for ranking, 'geoshape' or 'circle' "
+            "for maps with longitude/latitude encodings, 'line' for time).\n"
+            "- For greetings or scope/identity questions only, you may "
+            "answer directly without tools.\n\n"
+            "Match the user's language exactly. Never expose tool names "
+            "in your answer.\n\n"
+            "[User message]\n"
+            f"{user_message}"
+        )
+        msgs.append({"role": "user", "parts": [{"text": wrapped_user}]})
         return msgs
 
     @staticmethod
