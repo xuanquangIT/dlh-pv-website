@@ -147,16 +147,6 @@ class SolarChatSettings(BaseSettings):
     pg_sslmode: str | None = Field(default=None, alias="POSTGRES_SSLMODE")
     pg_channel_binding: str | None = Field(default=None, alias="POSTGRES_CHANNEL_BINDING")
 
-    # ----- v2 engine (primitives + semantic layer) -----
-    # When set to "v2", the chat service routes through v2 primitives
-    # (discover_schema, execute_sql, etc) instead of the v1 14-tool loop.
-    # See implementations/solar_chat_architecture_redesign_2026-04-26.md
-    engine_version: str = Field(
-        default="v1",
-        alias="SOLAR_CHAT_ENGINE",
-        description="v1 (default, 14 hardcoded tools) | v2 (6 primitives + semantic layer)",
-    )
-
     @property
     def gemini_api_key(self) -> str | None:
         """Backward-compatible alias for legacy callsites/tests."""

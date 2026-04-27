@@ -1,4 +1,4 @@
-"""Validate `services/solar_ai_chat/v2/semantic/metrics.yaml` against
+"""Validate `services/solar_ai_chat/semantic/metrics.yaml` against
 live Databricks schema. Catches schema drift before users hit it.
 
 Two modes:
@@ -31,7 +31,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
-from app.services.solar_ai_chat.v2.semantic_loader import (  # noqa: E402
+from app.services.solar_ai_chat.semantic_loader import (  # noqa: E402
     load_semantic_layer,
     SemanticLayer,
 )
@@ -121,7 +121,7 @@ def check_live(layer: SemanticLayer) -> list[str]:
 
     try:
         from app.core.settings import SolarChatSettings
-        from app.services.solar_ai_chat.v2.databricks_adapter import (
+        from app.services.solar_ai_chat.databricks_adapter import (
             make_sql_executor,
         )
     except Exception as e:  # noqa: BLE001

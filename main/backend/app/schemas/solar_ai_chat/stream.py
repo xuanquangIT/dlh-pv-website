@@ -62,7 +62,6 @@ class DoneEvent(BaseModel):
     chart: dict[str, Any] | None = None
     kpi_cards: dict[str, Any] | None = None
     trace_id: str = ""
-    engine_version: str | None = None
 
 
 class ErrorEvent(BaseModel):
@@ -97,7 +96,7 @@ TOOL_DISPLAY_LABELS: dict[str, str] = {
     "web_lookup_direct":         "Searching the web",
     "answer_directly":           "Preparing direct answer",
     "synthesize":                "Synthesizing answer",
-    # v2 primitives
+    # Engine primitives
     "discover_schema":           "Discovering tables",
     "inspect_table":             "Inspecting table schema",
     "recall_metric":             "Looking up canonical metric",

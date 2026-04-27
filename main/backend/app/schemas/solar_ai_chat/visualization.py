@@ -40,32 +40,33 @@ class DataTablePayload(BaseModel):
 class ChartPayload(BaseModel):
     """Chart specification built on the backend.
 
-    v1 engine: emits Plotly (`format='plotly'`, `plotly_spec` populated).
-    v2 engine: emits Vega-Lite (`format='vega-lite'`, `spec` populated).
-    Frontend chart_renderer.js dispatches on `format`.
+    The engine emits Vega-Lite (`format='vega-lite'`, `spec` populated)
+    or Leaflet maps (`format='leaflet-map'`, `points` populated). Frontend
+    `chart_renderer.js` dispatches on `format`. Plotly fields stay on the
+    model so old persisted snapshots keep deserialising.
     """
 
     model_config = ConfigDict(protected_namespaces=())
 
     chart_type: str = Field(
         description=(
-            "Chart kind. v1 Plotly: line|bar|pie|scatter|histogram|area|scatter_geo. "
-            "v2 Vega-Lite: bar|line|geoshape|point|circle|... (any Vega-Lite mark)."
+            "Chart kind: bar|line|scatter|point|circle|area|geoshape|map|"
+            "histogram|pie|scatter_geo. Vega-Lite renders any built-in mark."
         ),
     )
     title: str
     description: str | None = None
     format: Literal["plotly", "vega-lite", "leaflet-map"] = Field(
-        default="plotly",
-        description="Renderer: 'plotly' (v1), 'vega-lite' (v2 charts), 'leaflet-map' (v2 geographic maps with native pan/zoom).",
+        default="vega-lite",
+        description="Renderer: 'vega-lite' (default), 'leaflet-map' (geo maps with native pan/zoom), 'plotly' (legacy snapshots only).",
     )
     plotly_spec: dict[str, Any] | None = Field(
         default=None,
-        description="v1 only: Plotly.newPlot dict with `data` + `layout`.",
+        description="Legacy Plotly.newPlot dict; populated only on stored snapshots from before the Vega-Lite cutover.",
     )
     spec: dict[str, Any] | None = Field(
         default=None,
-        description="v2 only: Vega-Lite spec with `mark` + `encoding` + `data.values`.",
+        description="Vega-Lite spec with `mark` + `encoding` + `data.values`.",
     )
     points: list[dict[str, Any]] | None = Field(
         default=None,
@@ -81,7 +82,7 @@ class ChartPayload(BaseModel):
     )
     row_count: int | None = Field(
         default=None,
-        description="v2: number of rows backing the chart (Plotly carries this in plotly_spec.data).",
+        description="Number of rows backing the chart.",
     )
     source_metric_key: str | None = Field(
         default=None,

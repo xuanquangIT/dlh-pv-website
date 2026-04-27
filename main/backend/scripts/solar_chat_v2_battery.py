@@ -57,8 +57,8 @@ from app.services.solar_ai_chat.model_profile_service import (  # noqa: E402
     resolve_profile,
     settings_with_profile_override,
 )
-from app.services.solar_ai_chat.v2.dispatcher import V2Dispatcher  # noqa: E402
-from app.services.solar_ai_chat.v2.engine import V2ChatEngine  # noqa: E402
+from app.services.solar_ai_chat.dispatcher import Dispatcher  # noqa: E402
+from app.services.solar_ai_chat.engine import ChatEngine  # noqa: E402
 
 
 GREEN = "\x1b[32m"
@@ -92,7 +92,7 @@ def _within_tolerance(actual: float, expected: float, tolerance_pct: float) -> b
     return abs(actual - expected) / abs(expected) <= tolerance_pct / 100.0
 
 
-def _execute_ground_truth(dispatcher: V2Dispatcher, sql: str) -> dict[str, Any]:
+def _execute_ground_truth(dispatcher: Dispatcher, sql: str) -> dict[str, Any]:
     """Run a ground-truth SQL via the same dispatcher used by the engine."""
     result = dispatcher.execute("execute_sql", {"sql": sql})
     if not result.ok:
@@ -184,7 +184,7 @@ def _check_assertions(
 
 
 def _result_to_dict(r) -> dict[str, Any]:
-    """Convert V2EngineResult dataclass to plain dict for serialisation/asserts."""
+    """Convert ChatEngineResult dataclass to plain dict for serialisation/asserts."""
     return {
         "answer": r.answer,
         "model_used": r.model_used,
@@ -264,8 +264,8 @@ def main() -> int:
         settings = settings.model_copy(update=update)
 
     router = LLMModelRouter(settings=settings)
-    dispatcher = V2Dispatcher(settings, role_id="admin")
-    engine = V2ChatEngine(router, dispatcher)
+    dispatcher = Dispatcher(settings, role_id="admin")
+    engine = ChatEngine(router, dispatcher)
     print(_clr(f"\n=== Solar Chat v2 battery — {len(cases)} cases ===", DIM))
     print(_clr(f"Engine version: {settings.engine_version} | "
                f"Primary model: {settings.primary_model} | "
@@ -302,7 +302,7 @@ def main() -> int:
         # 2. Run the engine
         t0 = time.perf_counter()
         try:
-            from app.services.solar_ai_chat.v2.engine import _detect_language
+            from app.services.solar_ai_chat.engine import _detect_language
             lang = _detect_language(question) or args.language_default
             r = engine.run(
                 user_message=question,

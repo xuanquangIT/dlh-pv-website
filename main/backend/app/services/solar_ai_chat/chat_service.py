@@ -1,8 +1,8 @@
-"""Solar AI Chat service — v2-only orchestration layer.
+"""Solar AI Chat service — orchestration layer.
 
 Phase 4 cleanup: the v1 14-tool agentic loop, intent overrides, prompt-rule
 context, deep planner, and answer verifier have been deleted. The only
-runtime path is the v2 engine (`services/solar_ai_chat/v2/`) which composes
+runtime path is the engine (`services/solar_ai_chat/`) which composes
 6 generic primitives over a YAML semantic layer.
 
 This file owns:
@@ -12,9 +12,9 @@ This file owns:
   - SSE streaming bridge (handle_query_stream)
 
 It does NOT own (any more):
-  - v1 ToolExecutor / DeepPlanner / AnswerVerifier — deleted
+  - Legacy ToolExecutor / DeepPlanner / AnswerVerifier — deleted
   - intent_service / nlp_parser / query_rewriter / chart_service /
-    prompt_builder — deleted (v2 has its own off-topic + chart-intent
+    prompt_builder — deleted (engine has its own off-topic + chart-intent
     + language detection)
 """
 from __future__ import annotations
@@ -101,7 +101,7 @@ def _scope_refusal(language: str) -> str:
 
 
 class SolarAIChatService:
-    """Solar AI Chat — v2 engine orchestrator.
+    """Solar AI Chat orchestrator.
 
     Constructor accepts the full pre-Phase-4 kwarg surface so existing
     factory code in `api/solar_ai_chat/routes.py` and tests keep working;
@@ -155,29 +155,29 @@ class SolarAIChatService:
         )
 
         try:
-            return self._handle_with_v2_engine(
+            return self._handle_with_engine(
                 request, started, history_messages, trace_id,
             )
         except DatabricksDataUnavailableError:
             raise
         except Exception as err:  # noqa: BLE001
             logger.exception(
-                "solar_chat_v2_engine_failed trace_id=%s error=%s",
+                "solar_chat_engine_failed trace_id=%s error=%s",
                 trace_id, err,
             )
-            from app.services.solar_ai_chat.v2.engine import _detect_language
+            from app.services.solar_ai_chat.engine import _detect_language
             language = _detect_language(request.message)
             return self._build_refusal_response(
                 request, started, trace_id,
-                warning=f"v2 engine failed: {err}",
-                model_used="v2-engine-error",
+                warning=f"Engine failed: {err}",
+                model_used="engine-error",
                 answer=(
                     "Xin lỗi, hiện chưa thể trả lời. Vui lòng thử lại sau."
                     if language == "vi"
                     else "Sorry, I couldn't answer that. Please try again."
                 ),
                 fallback_used=True,
-                steps=[ThinkingStep(step="v2 failure", detail=str(err), status="warning")],
+                steps=[ThinkingStep(step="engine failure", detail=str(err), status="warning")],
             )
 
     # ------------------------------------------------------------------
@@ -185,7 +185,7 @@ class SolarAIChatService:
     # ------------------------------------------------------------------
 
     def handle_query_stream(self, request: SolarChatRequest):
-        """Yield SSE-ready ``data: <json>\\n\\n`` strings for the v2 engine."""
+        """Yield SSE-ready ``data: <json>\\n\\n`` strings."""
         from app.schemas.solar_ai_chat.stream import (
             DoneEvent,
             ErrorEvent,
@@ -205,7 +205,7 @@ class SolarAIChatService:
                 yield _sse(ErrorEvent(message="No LLM configured.", code="no_llm"))
                 return
 
-            from app.services.solar_ai_chat.v2.engine import _detect_language
+            from app.services.solar_ai_chat.engine import _detect_language
             language = _detect_language(request.message)
 
             if _is_prompt_injection_request(request.message):
@@ -222,28 +222,27 @@ class SolarAIChatService:
                     intent_confidence=0.0,
                     warning_message="Prompt-injection request refused.",
                     ui_features=resolve_ui_features(request.role),
-                    trace_id=trace_id,
-                    engine_version="v2",
+                    trace_id=trace_id
                 ))
                 return
 
             history_messages = self._load_history(request.session_id)
 
             try:
-                yield from self._stream_with_v2_engine(
+                yield from self._stream_with_engine(
                     request, started, history_messages, trace_id, language,
                 )
                 return
             except DatabricksDataUnavailableError:
                 raise
-            except Exception as v2_err:  # noqa: BLE001
+            except Exception as engine_err:  # noqa: BLE001
                 logger.exception(
-                    "solar_chat_v2_stream_failed trace_id=%s error=%s",
-                    trace_id, v2_err,
+                    "solar_chat_stream_failed trace_id=%s error=%s",
+                    trace_id, engine_err,
                 )
                 yield _sse(ErrorEvent(
-                    message=f"v2 engine failed: {v2_err}",
-                    code="v2_engine_error",
+                    message=f"Engine failed: {engine_err}",
+                    code="engine_error",
                 ))
                 return
         except DatabricksDataUnavailableError:
@@ -259,10 +258,10 @@ class SolarAIChatService:
             ))
 
     # ------------------------------------------------------------------
-    # v2 engine bridge — non-streaming
+    # Engine bridge — non-streaming
     # ------------------------------------------------------------------
 
-    def _handle_with_v2_engine(
+    def _handle_with_engine(
         self,
         request: SolarChatRequest,
         started: float,
@@ -270,16 +269,16 @@ class SolarAIChatService:
         trace_id: str,
     ) -> SolarChatResponse:
         from app.core.settings import SolarChatSettings
-        from app.services.solar_ai_chat.v2.dispatcher import V2Dispatcher
-        from app.services.solar_ai_chat.v2.engine import V2ChatEngine, _detect_language
+        from app.services.solar_ai_chat.dispatcher import Dispatcher
+        from app.services.solar_ai_chat.engine import ChatEngine, _detect_language
 
         if self._model_router is None:
-            raise RuntimeError("v2 engine requires an LLMModelRouter")
+            raise RuntimeError("ChatEngine requires an LLMModelRouter")
 
         settings = SolarChatSettings()
         role_id = (request.role.value if request.role else "admin").lower()
-        dispatcher = V2Dispatcher(settings, role_id=role_id)
-        engine = V2ChatEngine(self._model_router, dispatcher)
+        dispatcher = Dispatcher(settings, role_id=role_id)
+        engine = ChatEngine(self._model_router, dispatcher)
         language = _detect_language(request.message)
         force_chart = bool(
             getattr(request, "tool_hints", None)
@@ -312,13 +311,13 @@ class SolarAIChatService:
             )
         except Exception as persist_err:  # noqa: BLE001
             logger.warning(
-                "v2_engine_persist_failed trace_id=%s err=%s",
+                "engine_persist_failed trace_id=%s err=%s",
                 trace_id, persist_err,
             )
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-            "solar_chat_v2_done trace_id=%s steps=%d model=%s latency_ms=%d chart=%s",
+            "solar_chat_done trace_id=%s steps=%d model=%s latency_ms=%d chart=%s",
             trace_id, len(result.trace_steps), result.model_used, latency_ms,
             chart_payload.format if chart_payload else "none",
         )
@@ -337,15 +336,14 @@ class SolarAIChatService:
             ui_features=resolve_ui_features(request.role),
             data_table=data_table_payload,
             chart=chart_payload,
-            kpi_cards=kpi_payload,
-            engine_version="v2",
+            kpi_cards=kpi_payload
         )
 
     # ------------------------------------------------------------------
-    # v2 engine bridge — streaming
+    # Engine bridge — streaming
     # ------------------------------------------------------------------
 
-    def _stream_with_v2_engine(
+    def _stream_with_engine(
         self,
         request: SolarChatRequest,
         started: float,
@@ -353,7 +351,7 @@ class SolarAIChatService:
         trace_id: str,
         language: str,
     ):
-        """Run the v2 engine in a worker thread and stream progress events."""
+        """Run the engine in a worker thread and stream progress events."""
         import queue as _queue
         import threading as _threading
 
@@ -365,21 +363,21 @@ class SolarAIChatService:
             ToolResultEvent,
             tool_label,
         )
-        from app.services.solar_ai_chat.v2.dispatcher import V2Dispatcher
-        from app.services.solar_ai_chat.v2.engine import V2ChatEngine, _detect_language
+        from app.services.solar_ai_chat.dispatcher import Dispatcher
+        from app.services.solar_ai_chat.engine import ChatEngine, _detect_language
 
         def _sse(event_obj) -> str:
             return "data: " + _json.dumps(event_obj.model_dump()) + "\n\n"
 
         if self._model_router is None:
-            raise RuntimeError("v2 engine requires an LLMModelRouter")
+            raise RuntimeError("ChatEngine requires an LLMModelRouter")
 
-        yield _sse(StatusUpdateEvent(text="Running v2 engine…"))
+        yield _sse(StatusUpdateEvent(text="Running engine…"))
 
         settings = SolarChatSettings()
         role_id = (request.role.value if request.role else "admin").lower()
-        dispatcher = V2Dispatcher(settings, role_id=role_id)
-        engine = V2ChatEngine(self._model_router, dispatcher)
+        dispatcher = Dispatcher(settings, role_id=role_id)
+        engine = ChatEngine(self._model_router, dispatcher)
         language = _detect_language(request.message)
         force_chart = bool(
             getattr(request, "tool_hints", None)
@@ -444,7 +442,7 @@ class SolarAIChatService:
             raise result_holder["error"]
         result = result_holder.get("result")
         if result is None:
-            raise RuntimeError("v2 engine returned no result")
+            raise RuntimeError("ChatEngine returned no result")
 
         chart_payload, data_table_payload, kpi_payload, viz_snapshot = (
             self._build_viz_payloads(result)
@@ -465,13 +463,13 @@ class SolarAIChatService:
             )
         except Exception as persist_err:  # noqa: BLE001
             logger.warning(
-                "v2_stream_persist_failed trace_id=%s err=%s",
+                "stream_persist_failed trace_id=%s err=%s",
                 trace_id, persist_err,
             )
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-            "solar_chat_v2_stream_done trace_id=%s steps=%d model=%s latency_ms=%d chart=%s",
+            "solar_chat_stream_done trace_id=%s steps=%d model=%s latency_ms=%d chart=%s",
             trace_id, len(result.trace_steps), result.model_used, latency_ms,
             chart_payload.format if chart_payload else "none",
         )
@@ -492,8 +490,7 @@ class SolarAIChatService:
             data_table=data_table_payload.model_dump() if data_table_payload else None,
             chart=chart_payload.model_dump() if chart_payload else None,
             kpi_cards=kpi_payload.model_dump() if kpi_payload else None,
-            trace_id=trace_id,
-            engine_version="v2",
+            trace_id=trace_id
         ))
 
     # ------------------------------------------------------------------
@@ -567,7 +564,7 @@ class SolarAIChatService:
     @staticmethod
     def _build_thinking_trace(result, trace_id: str) -> ThinkingTrace:
         return ThinkingTrace(
-            summary=f"v2 engine ran {len(result.trace_steps)} primitive call(s).",
+            summary=f"Engine ran {len(result.trace_steps)} primitive call(s).",
             steps=[
                 ThinkingStep(
                     step=f"{s['step']}. {s['primitive']}",
@@ -595,7 +592,7 @@ class SolarAIChatService:
         fallback_used: bool = True,
         steps: list[ThinkingStep] | None = None,
     ) -> SolarChatResponse:
-        from app.services.solar_ai_chat.v2.engine import _detect_language
+        from app.services.solar_ai_chat.engine import _detect_language
         language = _detect_language(request.message)
         latency_ms = int((time.perf_counter() - started) * 1000)
         return SolarChatResponse(
@@ -614,8 +611,7 @@ class SolarAIChatService:
                 steps=steps or [],
                 trace_id=trace_id,
             ),
-            ui_features=resolve_ui_features(request.role),
-            engine_version="v2",
+            ui_features=resolve_ui_features(request.role)
         )
 
     # ------------------------------------------------------------------

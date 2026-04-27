@@ -26,7 +26,7 @@ from app.schemas.solar_ai_chat import (
 from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailableError
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
 # RAG / embedding stack was removed in Phase 4.5 — never wired into the
-# v2 chat path; the manual ingest endpoints had no live consumers.
+# chat path; the manual ingest endpoints had no live consumers.
 from app.services.solar_ai_chat.model_profile_service import (
     PICKER_AUTH_ROLES,
     get_default_profile_id,

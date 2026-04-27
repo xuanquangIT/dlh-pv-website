@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.services.solar_ai_chat.v2.primitives import (
+from app.services.solar_ai_chat.primitives import (
     DEFAULT_MAX_ROWS,
     HARD_MAX_ROWS,
     execute_sql,

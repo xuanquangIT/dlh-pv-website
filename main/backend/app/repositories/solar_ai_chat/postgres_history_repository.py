@@ -75,9 +75,9 @@ class PostgresChatHistoryRepository:
             except Exception:
                 kpi_cards = None
         # NOTE: pre-Phase-4 messages without a viz_payload snapshot used to
-        # rebuild charts via the v1 ChartSpecBuilder heuristics. That module
+        # rebuild charts via the legacy ChartSpecBuilder heuristics. That module
         # was removed in Phase 4 — old messages will surface key_metrics
-        # only (no chart). v2 messages always carry their viz_payload from
+        # only (no chart). engine messages always carry their viz_payload from
         # _persist_exchange, so the live UX is unaffected.
 
         return ChatMessage(

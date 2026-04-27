@@ -1,18 +1,14 @@
-"""Solar Chat v2 — agentic engine.
+"""Solar AI Chat — agentic engine.
 
-Replaces the v1 ToolExecutor + 16-rule prompt + chart_service heuristics with
-a thin loop:
+The engine runs a thin tool-calling loop:
 
-    LLM(messages, V2_TOOL_SCHEMAS)
-      -> tool_call -> V2Dispatcher.execute(...) -> result
+    LLM(messages, TOOL_SCHEMAS)
+      -> tool_call -> Dispatcher.execute(...) -> result
       -> append result -> repeat
       -> final text answer
 
-Outputs a normalized dict the v1 chat_service can adapt into SolarChatResponse
-(answer + key_metrics + sources + chart + trace), so v2 plugs in without
-rewriting persistence, SSE, or auth.
-
-Used only when settings.engine_version == "v2". v1 path is untouched.
+Outputs a normalized dict ``chat_service`` adapts into a ``SolarChatResponse``
+(answer + key_metrics + sources + chart + trace).
 
 Design doc: implementations/solar_chat_architecture_redesign_2026-04-26.md
 """
@@ -32,15 +28,15 @@ from app.services.solar_ai_chat.llm_client import (
     LLMToolResult,
     ToolCallNotSupportedError,
 )
-from app.services.solar_ai_chat.v2.dispatcher import V2Dispatcher, V2DispatchResult
-from app.services.solar_ai_chat.v2.tool_schemas import (
-    V2_SYSTEM_PROMPT,
-    V2_TOOL_SCHEMAS,
+from app.services.solar_ai_chat.dispatcher import Dispatcher, DispatchResult
+from app.services.solar_ai_chat.tool_schemas import (
+    SYSTEM_PROMPT,
+    TOOL_SCHEMAS,
 )
 
 logger = logging.getLogger(__name__)
 
-MAX_LOOP_STEPS = 8           # hard cap on tool turns (v1 default = 6)
+MAX_LOOP_STEPS = 8           # hard cap on tool turns
 MAX_TOOL_RESULT_CHARS = 12_000  # truncate huge SQL row payloads going back to LLM
 MAX_PARALLEL_CALLS_PER_TURN = 3  # cap fan-out (Grok loves to emit 6 inspects)
 
@@ -50,7 +46,7 @@ MAX_PARALLEL_CALLS_PER_TURN = 3  # cap fan-out (Grok loves to emit 6 inspects)
 # -----------------------------------------------------------------------------
 
 @dataclass
-class V2EngineResult:
+class ChatEngineResult:
     answer: str
     model_used: str
     fallback_used: bool
@@ -66,24 +62,24 @@ class V2EngineResult:
 # Engine
 # -----------------------------------------------------------------------------
 
-class V2ChatEngine:
+class ChatEngine:
     """Stateless orchestrator. Construct once per chat_service instance;
     `run(...)` is reentrant per request."""
 
     def __init__(
         self,
         model_router: LLMModelRouter,
-        dispatcher: V2Dispatcher,
+        dispatcher: Dispatcher,
         *,
         max_steps: int = MAX_LOOP_STEPS,
-        system_prompt: str = V2_SYSTEM_PROMPT,
+        system_prompt: str = SYSTEM_PROMPT,
         tool_schemas: list[dict] | None = None,
     ) -> None:
         self._router = model_router
         self._dispatcher = dispatcher
         self._max_steps = max(1, max_steps)
         self._system_prompt = system_prompt
-        self._tool_schemas = tool_schemas or V2_TOOL_SCHEMAS
+        self._tool_schemas = tool_schemas or TOOL_SCHEMAS
 
     # ------------------------------------------------------------------
     # Public
@@ -98,7 +94,7 @@ class V2ChatEngine:
         today_str: str | None = None,
         force_chart: bool = False,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    ) -> V2EngineResult:
+    ) -> ChatEngineResult:
         """Run the agentic loop.
 
         progress_callback (optional): invoked at every primitive call boundary
@@ -113,7 +109,7 @@ class V2ChatEngine:
             try:
                 progress_callback(payload)
             except Exception as cb_err:  # noqa: BLE001 — callback failures must not poison the engine
-                logger.warning("v2_engine_progress_callback_failed err=%s", cb_err)
+                logger.warning("engine_progress_callback_failed err=%s", cb_err)
 
         parsed_hints = _parse_user_hints(user_message)
         wants_chart = force_chart or _detect_chart_intent(user_message)
@@ -124,10 +120,10 @@ class V2ChatEngine:
         # obvious off-topic patterns up-front and return a polite redirect
         # without burning tool calls.
         if _is_off_topic(user_message):
-            logger.info("v2_engine_off_topic_redirect msg=%r", user_message[:120])
-            return V2EngineResult(
+            logger.info("engine_off_topic_redirect msg=%r", user_message[:120])
+            return ChatEngineResult(
                 answer=_build_scope_redirect(language),
-                model_used="v2-scope-guard",
+                model_used="engine-scope-guard",
                 fallback_used=False,
                 trace_steps=[],
             )
@@ -140,7 +136,7 @@ class V2ChatEngine:
         # weak match, auto-execute runs, and the user sees irrelevant KPI
         # cards alongside the definition.
         if _is_conceptual_question(user_message):
-            logger.info("v2_engine_conceptual_question msg=%r", user_message[:120])
+            logger.info("engine_conceptual_question msg=%r", user_message[:120])
             return self._answer_conceptual(
                 user_message, language, history or [],
                 today_str or date.today().isoformat(),
@@ -161,7 +157,7 @@ class V2ChatEngine:
         data_table_payload: dict[str, Any] | None = None
         key_metrics: dict[str, Any] = {}
         last_sql_result: dict[str, Any] | None = None
-        model_used = "v2-unknown"
+        model_used = "engine-unknown"
         fallback_used = False
         final_text: str = ""
         # Duplicate-call detector: smaller models (Nemotron, gpt-oss) get stuck
@@ -217,7 +213,7 @@ class V2ChatEngine:
                 # the model produces text from gathered data.
                 if "neither tool call nor text" in str(exc):
                     logger.warning(
-                        "v2_engine_empty_response step=%d banned=%s — forcing synthesis",
+                        "engine_empty_response step=%d banned=%s — forcing synthesis",
                         step, sorted(banned_tools),
                     )
                     auto = self._maybe_auto_execute(
@@ -238,19 +234,19 @@ class V2ChatEngine:
                     break
                 raise
             except ToolCallNotSupportedError as exc:
-                logger.warning("v2_engine_tool_unsupported err=%s", exc)
-                return V2EngineResult(
+                logger.warning("engine_tool_unsupported err=%s", exc)
+                return ChatEngineResult(
                     answer=(
                         "Mô hình hiện tại không hỗ trợ tool-calling cần thiết "
-                        "cho engine v2. Hãy chọn một model có function-calling "
+                        "cho engine. Hãy chọn một model có function-calling "
                         "(VD: gpt-4.1, gemini-3.1-pro, claude-haiku-4.5)."
                         if language == "vi"
                         else
                         "The current model does not support tool-calling for "
-                        "v2 engine. Pick a function-calling model (e.g. gpt-4.1, "
+                        "engine. Pick a function-calling model (e.g. gpt-4.1, "
                         "gemini-3.1-pro, claude-haiku-4.5)."
                     ),
-                    model_used="v2-tool-unsupported",
+                    model_used="engine-tool-unsupported",
                     fallback_used=True,
                     error=str(exc),
                 )
@@ -272,7 +268,7 @@ class V2ChatEngine:
             # primitive calls in one go. Take only the first N.
             if len(calls) > MAX_PARALLEL_CALLS_PER_TURN:
                 logger.warning(
-                    "v2_engine_parallel_calls_capped step=%d emitted=%d kept=%d",
+                    "engine_parallel_calls_capped step=%d emitted=%d kept=%d",
                     step, len(calls), MAX_PARALLEL_CALLS_PER_TURN,
                 )
                 calls = calls[:MAX_PARALLEL_CALLS_PER_TURN]
@@ -284,7 +280,7 @@ class V2ChatEngine:
             # turn is banned, jump straight to forced synthesis.
             if banned_tools and all(c.name in banned_tools for c in calls):
                 logger.warning(
-                    "v2_engine_all_calls_banned step=%d called=%s banned=%s — forcing synthesis",
+                    "engine_all_calls_banned step=%d called=%s banned=%s — forcing synthesis",
                     step, [c.name for c in calls], sorted(banned_tools),
                 )
                 # Last-chance auto-execute before bailing to synthesis: if
@@ -349,7 +345,7 @@ class V2ChatEngine:
             if exact_dups:
                 banned_tools.update(exact_dups)
                 logger.warning(
-                    "v2_engine_exact_dup_detected dups=%s banned_now=%s",
+                    "engine_exact_dup_detected dups=%s banned_now=%s",
                     sorted(exact_dups), sorted(banned_tools),
                 )
                 # Re-dispatch this turn's calls so the trace stays consistent,
@@ -402,7 +398,7 @@ class V2ChatEngine:
             recent_tool_sets.append(turn_tools)
             recent_call_signatures.append("|".join(sorted(turn_tools)))
             logger.info(
-                "v2_engine_step step=%d turn_tools=%s history=%s",
+                "engine_step step=%d turn_tools=%s history=%s",
                 step, sorted(turn_tools), [sorted(s) for s in recent_tool_sets[-4:]],
             )
             # Per-tool persistence check. A tool is "persistent" when it
@@ -429,7 +425,7 @@ class V2ChatEngine:
                 offending = sorted(persistent_tools)
                 banned_tools.update(persistent_tools)
                 logger.warning(
-                    "v2_engine_duplicate_loop_detected persistent=%s banned_now=%s",
+                    "engine_duplicate_loop_detected persistent=%s banned_now=%s",
                     offending, sorted(banned_tools),
                 )
                 messages.append(self._format_assistant_tool_calls(calls))
@@ -515,7 +511,7 @@ class V2ChatEngine:
             messages.append(self._format_assistant_tool_calls(calls))
             for call in calls:
                 _emit({"event": "tool_start", "step": step, "primitive": call.name})
-                dispatch: V2DispatchResult = self._dispatcher.execute(
+                dispatch: DispatchResult = self._dispatcher.execute(
                     call.name, dict(call.arguments or {}),
                 )
                 trace_steps.append({
@@ -624,13 +620,13 @@ class V2ChatEngine:
             draft = _render_answer_draft(rows_for_check, language)
             if draft:
                 logger.warning(
-                    "v2_engine_post_hoc_hedge_replace model_text=%r → draft (%d chars)",
+                    "engine_post_hoc_hedge_replace model_text=%r → draft (%d chars)",
                     final_text[:160], len(draft),
                 )
                 final_text = _strip_draft_instruction_suffix(draft)
                 fallback_used = True
 
-        return V2EngineResult(
+        return ChatEngineResult(
             answer=final_text,
             model_used=model_used,
             fallback_used=fallback_used,
@@ -731,7 +727,7 @@ class V2ChatEngine:
         language: str,
         history: list[ChatMessage],
         today_str: str,
-    ) -> V2EngineResult:
+    ) -> ChatEngineResult:
         """Answer a definition / explainer question with LLM knowledge —
         no tools, no KPIs, no data table. Keeps the response focused on
         the concept the user actually asked about."""
@@ -763,7 +759,7 @@ class V2ChatEngine:
         try:
             resp = self._router.generate_with_tools(messages=msgs, tools=[])
             answer = (resp.text or "").strip()
-            return V2EngineResult(
+            return ChatEngineResult(
                 answer=answer or (
                     "Xin lỗi, tôi chưa thể trả lời câu hỏi đó."
                     if language == "vi"
@@ -774,14 +770,14 @@ class V2ChatEngine:
                 trace_steps=[],
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning("v2_engine_conceptual_failed err=%s", exc)
-            return V2EngineResult(
+            logger.warning("engine_conceptual_failed err=%s", exc)
+            return ChatEngineResult(
                 answer=(
                     "Xin lỗi, hiện tôi chưa trả lời được câu hỏi này."
                     if language == "vi"
                     else "Sorry, I can't answer that right now."
                 ),
-                model_used="v2-conceptual-error",
+                model_used="engine-conceptual-error",
                 fallback_used=True,
                 error=str(exc),
             )
@@ -826,7 +822,7 @@ class V2ChatEngine:
             if not recall_name:
                 return None
             logger.info(
-                "v2_auto_execute_refresh stale_metric=%s → recall_top=%s",
+                "engine_auto_execute_refresh stale_metric=%s → recall_top=%s",
                 last_sql_metric, recall_name,
             )
         rendered = recall_top.get("sql_template", "") or ""
@@ -843,14 +839,14 @@ class V2ChatEngine:
             if default is None:
                 # Missing required parameter — give up rather than guess.
                 logger.info(
-                    "v2_auto_execute_skipped reason=missing_param param=%s metric=%s",
+                    "engine_auto_execute_skipped reason=missing_param param=%s metric=%s",
                     pname, recall_top.get("name"),
                 )
                 return None
             rendered = rendered.replace(placeholder, str(default))
 
         logger.info(
-            "v2_auto_execute_triggered metric=%s sql=%s",
+            "engine_auto_execute_triggered metric=%s sql=%s",
             recall_top.get("name"), rendered[:120].replace("\n", " "),
         )
         emit({"event": "tool_start", "step": step, "primitive": "execute_sql"})
@@ -973,7 +969,7 @@ class V2ChatEngine:
             model_used = synth.model_used
             fb_used = synth.fallback_used or fallback_used
         except Exception as exc:  # noqa: BLE001
-            logger.warning("v2_engine_fresh_synthesis_failed err=%s", exc)
+            logger.warning("engine_fresh_synthesis_failed err=%s", exc)
             return _strip_draft_instruction_suffix(draft), fallback_model, fallback_used or True
 
         # Hedge / refusal / clarifying-question detection. If the model still
@@ -981,7 +977,7 @@ class V2ChatEngine:
         # draft so the user gets a usable answer.
         if _is_hedging_response(text, rows):
             logger.warning(
-                "v2_engine_synthesis_hedging — falling back to deterministic draft. "
+                "engine_synthesis_hedging — falling back to deterministic draft. "
                 "model_text=%r", text[:200],
             )
             return _strip_draft_instruction_suffix(draft), model_used, True
@@ -1752,7 +1748,7 @@ def _build_scope_redirect(language: str) -> str:
 
 
 def _detect_language(message: str) -> str:
-    """Quick VN/EN detector for v2 routing.
+    """Quick VN/EN detector for engine routing.
 
     Heuristic: presence of Vietnamese-specific diacritics or known VN
     function-word tokens → 'vi'. Otherwise → 'en'. Avoids the
