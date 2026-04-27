@@ -1,4 +1,4 @@
-﻿"""Extreme metric repository: highest/lowest AQI, energy, and weather queries."""
+"""Extreme metric repository: highest/lowest AQI, energy, and weather queries."""
 from __future__ import annotations
 
 import logging
