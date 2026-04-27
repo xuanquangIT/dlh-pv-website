@@ -159,41 +159,41 @@ class V2EngineToolLoopTests(unittest.TestCase):
         self.assertEqual(result.chart["title"], "Facility map")
 
     def test_max_steps_forces_synthesis_turn(self):
-        # Three identical tool calls in a row. The engine bans recall_metric
-        # on the 2nd (exact_dup), then on the 3rd attempt the only call is to
-        # a banned tool → triggers the "all calls banned" branch and forces
-        # synthesis. Net dispatches: 2 (step 1 + step 2 dup re-dispatch).
+        # Three identical execute_sql calls in a row. exact_dup bans on 2nd,
+        # 3rd hits the all_calls_banned branch and forces synthesis.
+        # Net dispatches: 2 (step 1 + step 2 dup re-dispatch).
+        # NOTE: recall_metric is exempt from exact-dup banning (search tools
+        # may legitimately re-issue identical queries when matches look weak),
+        # so this test uses execute_sql which IS banned on identical re-call.
         scripted = [
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),))
+            _Turn(calls=(ToolCallRequest(name="execute_sql", arguments={"sql": "SELECT 1 FROM pv.gold.x"}),))
             for _ in range(3)
         ]
         scripted.append(_Turn(text="OK gathered enough."))   # synthesis
         router = FakeRouter(scripted)
-        dispatcher = FakeDispatcher({"recall_metric": {"matches": []}})
+        dispatcher = FakeDispatcher({"execute_sql": {"rows": [], "columns": []}})
 
         engine = V2ChatEngine(router, dispatcher, max_steps=3)
         result = engine.run(user_message="thử test loop", language="en")
 
         # 2 dispatched calls (step 1 + step 2 re-dispatch on dup detection);
-        # step 3 hits the banned-tool branch which forces synthesis. Since
-        # the dispatcher returned no SQL rows (recall_metric only), the
-        # forced synth uses the no-data fallback message rather than the
-        # LLM thread (which would otherwise hedge).
+        # step 3 hits the banned-tool branch which forces synthesis.
         self.assertEqual(len(result.trace_steps), 2)
         self.assertIn("couldn't retrieve", result.answer.lower())
 
     def test_banned_tool_call_blocked_at_engine_layer(self):
         """Weak models (gemini-flash-lite) re-call banned tools even after
         we filter the schema. The engine MUST physically block dispatch and
-        force synthesis instead of executing the banned call."""
+        force synthesis instead of executing the banned call.
+        Uses execute_sql since recall_metric is exempt from exact-dup ban."""
         scripted = [
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),)),
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),)),  # dup → ban
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),)),  # banned → synth
+            _Turn(calls=(ToolCallRequest(name="execute_sql", arguments={"sql": "SELECT 1"}),)),
+            _Turn(calls=(ToolCallRequest(name="execute_sql", arguments={"sql": "SELECT 1"}),)),  # dup → ban
+            _Turn(calls=(ToolCallRequest(name="execute_sql", arguments={"sql": "SELECT 1"}),)),  # banned → synth
             _Turn(text="Synthesised."),
         ]
         router = FakeRouter(scripted)
-        dispatcher = FakeDispatcher({"recall_metric": {"matches": []}})
+        dispatcher = FakeDispatcher({"execute_sql": {"rows": [], "columns": []}})
         engine = V2ChatEngine(router, dispatcher, max_steps=5)
 
         result = engine.run(user_message="ping", language="en")
@@ -272,16 +272,17 @@ class V2EngineToolLoopTests(unittest.TestCase):
 
     def test_auto_execute_runs_recall_top_when_model_loops(self):
         """Weak models loop on recall_metric without ever calling execute_sql.
-        When recall is banned, the engine MUST auto-execute the top match's
-        rendered SQL so the user still gets data."""
-        # Model calls recall_metric twice (identical → exact_dup), then on
-        # turn 3 calls recall_metric again (banned). All_calls_banned fires →
-        # _maybe_auto_execute should run the YAML SQL via dispatcher and
-        # produce real data + a final synthesised answer.
+        When persistent-loop ban triggers (recall_metric in 4+ consecutive
+        turns), the engine MUST auto-execute the top match's rendered SQL
+        so the user still gets data.
+        NOTE: recall_metric is exempt from exact-dup ban; the persistent-loop
+        threshold for it is 3 (i.e. ban after appearing in 4 consecutive turns)."""
         scripted = [
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),)),
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),)),  # exact dup → ban
-            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x"}),)),  # banned → synth
+            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": f"x{i}"}),))
+            for i in range(4)
+        ] + [
+            # 5th turn: recall_metric persistent for 4 turns → ban + auto_execute
+            _Turn(calls=(ToolCallRequest(name="recall_metric", arguments={"query": "x4"}),)),
             _Turn(text="Total energy 112,134.77 MWh."),
         ]
         router = FakeRouter(scripted)

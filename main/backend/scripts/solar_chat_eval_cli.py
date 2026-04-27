@@ -286,7 +286,13 @@ def _check_expectations(envelope: dict[str, Any]) -> list[str]:
     chart = envelope.get("chart") or {}
     dataset = envelope.get("dataset") or {}
     trace_steps = ((envelope.get("trace") or {}).get("steps") or [])
-    trace_text = " ".join((s.get("detail") or "") for s in trace_steps)
+    # The primitive name lives in step["step"] (e.g. "1. execute_sql"); the
+    # detail field only carries args JSON. Scanning detail for primitive
+    # names was a bug that flagged every passing v2 run as failing.
+    trace_text = " ".join(
+        (s.get("step") or "") + " " + (s.get("detail") or "")
+        for s in trace_steps
+    )
 
     # must_call_primitive_or_tool
     expected_tools = exp.get("must_call_primitive_or_tool") or []

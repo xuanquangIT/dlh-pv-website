@@ -165,11 +165,22 @@ class V2ChatEngine:
         fallback_used = False
         final_text: str = ""
         # Duplicate-call detector: smaller models (Nemotron, gpt-oss) get stuck
-        # calling recall_metric repeatedly. After 2 consecutive identical calls
-        # we inject an instruction and force a synthesis turn.
+        # calling the same tool repeatedly. We use per-tool thresholds because
+        # `recall_metric` is a SEARCH tool — fan-out across 3-4 phrasings is
+        # legitimate behaviour for compound queries (e.g. "compare X and Y"
+        # may reasonably search "facility metadata", "energy ranking", and
+        # "weather impact"). Banning it after 3 consecutive turns burns the
+        # model's only path to canonical SQL templates.
         recent_call_signatures: list[str] = []
         recent_tool_sets: list[frozenset[str]] = []
-        DUPLICATE_THRESHOLD = 2
+        # Default: ban after appearing in 3 consecutive turns (threshold=2).
+        # `recall_metric` gets +1 — search fan-out is expected for compound
+        # questions; we only ban after 4 consecutive turns of pure searching.
+        DEFAULT_DUPLICATE_THRESHOLD = 2
+        PER_TOOL_DUPLICATE_THRESHOLD = {
+            "recall_metric": 3,
+            "discover_schema": 3,
+        }
         banned_tools: set[str] = set()
         # Exact-call signatures we've already executed. If the model issues
         # the SAME (name, args) twice we ban the tool immediately — gemini-flash
@@ -316,11 +327,23 @@ class V2ChatEngine:
             # (name, args) call we've already dispatched, ban that tool now —
             # weak models like gemini-flash will otherwise loop on the same
             # successful execute_sql 5+ times before exhausting max_steps.
+            #
+            # EXCEPTION: `recall_metric` is a search tool. The model may
+            # re-issue an identical search if the matches looked weak (top
+            # score low) — banning recall_metric on the 2nd call leaves
+            # the model with no path to canonical SQL templates and forces
+            # forced-synthesis with empty data. For recall_metric we just
+            # nudge the model with a correction message and let it try the
+            # top match's SQL via execute_sql instead.
             exact_dups: set[str] = set()
             for c in calls:
                 args_repr = json.dumps(dict(c.arguments or {}), sort_keys=True, default=str)
                 key = f"{c.name}::{args_repr}"
-                if key in executed_call_keys and c.name not in banned_tools:
+                if (
+                    key in executed_call_keys
+                    and c.name not in banned_tools
+                    and c.name != "recall_metric"
+                ):
                     exact_dups.add(c.name)
                 executed_call_keys.add(key)
             if exact_dups:
@@ -382,11 +405,22 @@ class V2ChatEngine:
                 "v2_engine_step step=%d turn_tools=%s history=%s",
                 step, sorted(turn_tools), [sorted(s) for s in recent_tool_sets[-4:]],
             )
+            # Per-tool persistence check. A tool is "persistent" when it
+            # appears in every turn of its OWN threshold window (default 3,
+            # search tools get 4). Stricter than the previous global window
+            # because the per-tool window adapts to tool semantics.
             persistent_tools: set[str] = set()
-            if len(recent_tool_sets) > DUPLICATE_THRESHOLD:
-                window = recent_tool_sets[-(DUPLICATE_THRESHOLD + 1):]
-                # tools present in every turn of the window AND not yet banned
-                persistent_tools = frozenset.intersection(*window) - banned_tools
+            for candidate in (set().union(*recent_tool_sets) if recent_tool_sets else set()):
+                if candidate in banned_tools:
+                    continue
+                threshold = PER_TOOL_DUPLICATE_THRESHOLD.get(
+                    candidate, DEFAULT_DUPLICATE_THRESHOLD,
+                )
+                if len(recent_tool_sets) <= threshold:
+                    continue
+                window = recent_tool_sets[-(threshold + 1):]
+                if all(candidate in turn_set for turn_set in window):
+                    persistent_tools.add(candidate)
             if persistent_tools:
                 # Dispatch this set so traces stay consistent, then BAN the
                 # tools from future turns. Removing them from the schema is a
@@ -454,8 +488,8 @@ class V2ChatEngine:
                 messages.append({
                     "role": "user",
                     "parts": [{"text": (
-                        f"You called {offending} {DUPLICATE_THRESHOLD + 1} times "
-                        "in a row without making progress. Those tools are now "
+                        f"You called {offending} multiple times in a row "
+                        "without making progress. Those tools are now "
                         "disabled for the rest of this turn."
                         + inline_sql_hint
                         + (
@@ -663,8 +697,13 @@ class V2ChatEngine:
             "after execute_sql, ALSO call `render_visualization` with a "
             "Vega-Lite spec (mark='bar' for ranking, 'geoshape' or 'circle' "
             "for maps with longitude/latitude encodings, 'line' for time).\n"
-            "- For greetings or scope/identity questions only, you may "
-            "answer directly without tools.\n\n"
+            "- ONLY for explicit greetings (\"hi\", \"hello\", \"chào\", "
+            "\"hey\") or self-identity questions (\"who are you\", \"what "
+            "can you do\", \"bạn là ai\", \"bạn làm được gì\") may you answer "
+            "directly without tools. Phrases like \"tổng quan\" / "
+            "\"overview\" / \"summary\" / \"system status\" / \"tình hình "
+            "hệ thống\" are DATA questions — you MUST call recall_metric "
+            "with query='system overview' first, then execute_sql.\n\n"
             "Match the user's language exactly. Never expose tool names "
             "in your answer.\n\n"
         )
@@ -1594,9 +1633,21 @@ _OFF_TOPIC_PATTERNS = (
     "recipe", "cooking", "movie", "film",
     "capital of", "population of",
     "translate ", "convert currency",
+    # Code-help / general programming
+    "write a function", "write a python", "write python code",
+    "viết function", "viet function", "viết hàm", "viet ham",
+    "viết code", "viet code", "code python", "code java",
+    "sort an array", "sort mảng", "sort mang", "sort the array",
+    # Sport / culture / entertainment
+    "world cup", "olympics", "football", "premier league",
+    "tesla stock", "apple stock",
+    # Generic math expressions outside lakehouse domain
+    "1 + 1", "1+1", "2 + 2", "2+2", "căn bậc", "can bac",
     # Vietnamese
     "thời tiết ở", "thoi tiet o", "tỷ giá", "ty gia",
     "công thức nấu", "cong thuc nau",
+    "phở bò", "pho bo", "công thức nấu", "cong thuc nau",
+    "bằng mấy", "bang may",
 )
 _IN_DOMAIN_KEYWORDS = (
     # Domain-distinctive only — avoid generic words like "weather" or
@@ -1631,7 +1682,6 @@ _CONCEPTUAL_PATTERNS = (
     r"\bhow\s+to\s+(?:compute|calculate|measure)\b",
     r"\bformula\s+for\b",
     r"\bmeaning\s+of\b",
-    r"\bdifference\s+between\b",
     # Vietnamese definitional triggers
     r"\blà\s+gì\b",
     r"\bla\s+gi\b",
@@ -1647,8 +1697,16 @@ _CONCEPTUAL_PATTERNS = (
     r"\by\s+nghia\b",
     r"\bcách\s+(?:tính|đo)\b",
     r"\bcach\s+(?:tinh|do)\b",
-    r"\bkhác\s+(?:nhau|biệt)\s+(?:giữa|gì)\b",
-    r"\bso\s+sánh\s+(?:giữa)?\b",
+    # "đo cái gì" / "đo gì" / "đại lượng đo" — measurement-definition queries
+    r"\bđo\s+(?:cái\s+)?gì\b",
+    r"\bdo\s+(?:cai\s+)?gi\b",
+    r"\bđại\s+lượng\b",
+    r"\bdai\s+luong\b",
+    # NOTE: "so sánh" / "difference between" / "khác nhau" patterns were
+    # REMOVED — they fire on data-driven comparison queries
+    # ("so sánh DARLSF và AVLSF về sản lượng") and force the conceptual
+    # path which never runs SQL. Definitional comparisons still get caught
+    # by the trailing "là gì" / "is" / "what is" patterns above.
 )
 _CONCEPTUAL_RE = re.compile("|".join(_CONCEPTUAL_PATTERNS), re.IGNORECASE)
 
@@ -1730,9 +1788,16 @@ _CHART_INTENT_KEYWORDS = (
     "chart", "graph", "plot", "visualize", "visualise", "visualization",
     "visualisation", "bar chart", "line chart", "map", "scatter",
     "histogram", "trend chart", "show me a chart", "draw",
+    # Time-series intent — these queries shape implies line/area chart
+    # even when the user doesn't say "chart" explicitly.
+    "trend", "forecast", "over time", "by hour", "by day", "by month",
+    "correlation", "vs.", " vs ",
     # Vietnamese (with/without diacritics)
     "biểu đồ", "bieu do", "đồ thị", "do thi", "trực quan", "truc quan",
     "vẽ", "ve ", "bản đồ", "ban do", "biểu diễn", "bieu dien",
+    "dự báo", "du bao", "xu hướng", "xu huong",
+    "theo giờ", "theo gio", "theo ngày", "theo ngay",
+    "tương quan", "tuong quan", "mối quan hệ", "moi quan he",
 )
 
 
