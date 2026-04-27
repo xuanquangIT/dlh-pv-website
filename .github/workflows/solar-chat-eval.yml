@@ -1,11 +1,11 @@
-name: Solar Chat v2 — semantic + safety gate
+name: Solar Chat — semantic + safety gate
 
 on:
   pull_request:
     paths:
-      - "main/backend/app/services/solar_ai_chat/v2/**"
-      - "main/backend/app/services/solar_ai_chat/v2/semantic/**"
-      - "main/backend/tests/unit/v2/**"
+      - "main/backend/app/services/solar_ai_chat/**"
+      - "main/backend/app/services/solar_ai_chat/semantic/**"
+      - "main/backend/tests/unit/**"
       - "main/backend/tests/eval/question_sets/**"
       - "main/backend/scripts/solar_chat_eval_cli.py"
       - ".github/workflows/solar-chat-eval.yml"
@@ -13,7 +13,7 @@ on:
     branches: ["main", "feat/solar-chat-engine-v2"]
 
 jobs:
-  v2-unit-and-eval-smoke:
+  unit-and-eval-smoke:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,34 +25,44 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        working-directory: dlh-pv-website
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Validate semantic layer YAML
-        working-directory: dlh-pv-website
+        env:
+          PYTHONPATH: main/backend
         run: |
-          python -c "from app.services.solar_ai_chat.v2.semantic_loader import load_semantic_layer; \
+          python -c "from app.services.solar_ai_chat.semantic_loader import load_semantic_layer; \
                      layer = load_semantic_layer(); \
                      assert layer.tables, 'no tables loaded'; \
                      assert layer.metrics, 'no metrics loaded'; \
                      assert layer.role_policies, 'no role policies loaded'; \
                      print(f'OK: {len(layer.tables)} tables, {len(layer.metrics)} metrics, {len(layer.role_policies)} roles')"
+
+      - name: Static metrics.yaml validation
         env:
           PYTHONPATH: main/backend
-
-      - name: Run v2 primitives + semantic unit tests (47 tests)
-        working-directory: dlh-pv-website
         run: |
-          python -m pytest main/backend/tests/unit/v2/ \
+          python main/backend/scripts/validate_metrics_yaml.py --static
+
+      - name: Run engine + LLM client + semantic + SQL safety unit tests
+        env:
+          PYTHONPATH: main/backend
+        run: |
+          python -m pytest \
+            main/backend/tests/unit/test_engine.py \
+            main/backend/tests/unit/test_llm_client.py \
+            main/backend/tests/unit/test_llm_client_extended.py \
+            main/backend/tests/unit/test_llm_client_parsers.py \
+            main/backend/tests/unit/test_llm_function_calling.py \
+            main/backend/tests/unit/test_semantic_layer.py \
+            main/backend/tests/unit/test_sql_safety.py \
+            main/backend/tests/unit/test_chart_payload_contract.py \
             --override-ini="addopts=" \
             -q
-        env:
-          PYTHONPATH: main/backend
 
       - name: Validate eval question sets parseable
-        working-directory: dlh-pv-website
         run: |
           python -c "import yaml, pathlib; \
                      for p in pathlib.Path('main/backend/tests/eval/question_sets').glob('*.yaml'): \
