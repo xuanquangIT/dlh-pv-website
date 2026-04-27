@@ -8,9 +8,14 @@
         <h1 class="page-title">Model Performance Monitoring</h1>
         <div class="page-subtitle">Historical evaluation of production champion models</div>
     </div>
-    <div>
-        <span class="badge badge-info" id="active-model-run">Run: Loading...</span>
-        <button class="btn btn-sec" type="button">Import Config</button>
+    <div style="display:flex; align-items:center; gap:8px;">
+        <span class="badge badge-info" id="active-model-run">Version: Loading...</span>
+        <select id="horizon-select" class="btn btn-sec" style="padding:6px 12px; font-size:13px; cursor:pointer;">
+            <option value="1" selected>D+1</option>
+            <option value="3">D+3</option>
+            <option value="5">D+5</option>
+            <option value="7">D+7</option>
+        </select>
         <button class="btn btn-danger" type="button">PDF</button>
     </div>
 </section>
@@ -48,7 +53,7 @@
     </article>
 </section>
 
-<script src="/static/js/platform_portal/training.js?v=3"></script>
+<script src="/static/js/platform_portal/training.js?v=4"></script>
 {% endblock %}
 
 {% block scripts %}

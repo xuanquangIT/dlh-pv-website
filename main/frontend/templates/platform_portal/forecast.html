@@ -6,10 +6,16 @@
 <section class="section-header">
     <div>
         <h1 class="page-title">Energy Forecast</h1>
-        <div class="page-subtitle">Model <span id="kpi-version">Loading...</span> · Horizon 7d · Confidence interval enabled</div>
+        <div class="page-subtitle">Model <span id="kpi-version">Loading...</span> · Horizon <span id="kpi-horizon">1</span>d · Confidence interval enabled</div>
     </div>
-    <div>
-        <button class="btn btn-pri" type="button">Refresh</button>
+    <div style="display:flex; align-items:center; gap:8px;">
+        <select id="horizon-select" class="btn btn-sec" style="padding:6px 12px; font-size:13px; cursor:pointer;">
+            <option value="1" selected>D+1</option>
+            <option value="3">D+3</option>
+            <option value="5">D+5</option>
+            <option value="7">D+7</option>
+        </select>
+        <button id="btn-refresh" class="btn btn-pri" type="button">Refresh</button>
         <button class="btn btn-danger" type="button">PDF</button>
     </div>
 </section>
@@ -28,7 +34,18 @@
 </section>
 
 <section class="card">
-    <h2 class="card-title">Daily Forecast (Next 7 Days)</h2>
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+        <div>
+            <h2 class="card-title" style="margin:0 0 4px;">Daily Forecast (Recent &amp; Upcoming)</h2>
+            <div id="week-label" class="page-subtitle"></div>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <button id="btn-prev-week" class="btn btn-sec" type="button">&#8592; Prev Week</button>
+            <span id="week-range-display" style="font-family:'DM Mono',monospace; font-size:12px; color:var(--txt2); padding:0 4px; white-space:nowrap;"></span>
+            <button id="btn-next-week" class="btn btn-sec" type="button">Next Week &#8594;</button>
+            <button id="btn-reset-range" class="btn btn-pri" type="button">This Week</button>
+        </div>
+    </div>
     <div class="table-wrap">
         <table>
             <thead>
@@ -41,7 +58,5 @@
     </div>
 </section>
 
-<script src="/static/js/platform_portal/forecast.js?v=3"></script>
+<script src="/static/js/platform_portal/forecast.js?v=6"></script>
 {% endblock %}
-
-

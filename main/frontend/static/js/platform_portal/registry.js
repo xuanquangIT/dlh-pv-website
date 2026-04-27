@@ -8,6 +8,17 @@
 
   let allModels = [];
 
+  const MODEL_HORIZON = {
+    'pv.gold.daily_forecast_d1': 'D+1',
+    'pv.gold.daily_forecast_d3': 'D+3',
+    'pv.gold.daily_forecast_d5': 'D+5',
+    'pv.gold.daily_forecast_d7': 'D+7',
+  };
+
+  function horizonLabel(modelName) {
+    return MODEL_HORIZON[modelName] || modelName || 'Unknown';
+  }
+
   function parseMetricValue(value) {
     const parsed = Number.parseFloat(value);
     return Number.isFinite(parsed) ? parsed : null;
@@ -37,17 +48,15 @@
       }
 
       tbody.innerHTML = data.map(function(model, idx) {
-        const badgeClass = model.status === "Production" ? "badge-success" : "badge-info";
         return `
           <tr class="registry-row" data-model-idx="${idx}" style="cursor:pointer;">
-            <td>${model.version}</td>
-            <td>${model.algorithm || 'Unknown'}</td>
-            <td>${formatMetricValue(model.rmse, 3, '-', '')}</td>
-            <td>${formatMetricValue(model.mae, 3, '-', '')}</td>
+            <td>${horizonLabel(model.model_name)}</td>
+            <td>v${model.version}</td>
+            <td>${formatMetricValue(model.rmse, 2, '-', '')}</td>
+            <td>${formatMetricValue(model.mae, 2, '-', '')}</td>
             <td>${formatMetricValue(model.r2, 4, '-', '')}</td>
             <td>${formatMetricValue(model.mape, 2, '-', '%')}</td>
-            <td>${model.created}</td>
-            <td><span class="badge ${badgeClass}">${model.status}</span></td>
+            <td>${model.created || '-'}</td>
           </tr>
         `;
       }).join('');
@@ -69,26 +78,23 @@
     const existingChart = Chart.getChart(canvas);
     if (existingChart) existingChart.destroy();
 
+    // Normalize for radar: RMSE (MWh ~100-500), MAE (~50-300), R2 (0-1), MAPE (%)
     const datasets = modelsToCompare.map((m, idx) => {
         const c = colors[idx % colors.length];
-        
-        // Normalize metrics for Radar (higher the better vs lower the better)
-        // Here we just plot raw values, though they have different scales.
-        // Usually, in a radar chart, they should be normalized to 0-100.
-        // For demonstration logic based on typical scaled PV metrics:
         const pRmse = parseMetricValue(m.rmse) || 0;
-        const pMae = parseMetricValue(m.mae) || 0;
-        const pR2 = parseMetricValue(m.r2) || 0;
+        const pMae  = parseMetricValue(m.mae)  || 0;
+        const pR2   = parseMetricValue(m.r2)   || 0;
         const pMape = parseMetricValue(m.mape) || 0;
 
-        const nRMSE = Math.max(0, 100 - (pRmse * 1000)); // lower rmse = higher score
-        const nMAE = Math.max(0, 100 - (pMae * 1500));
-        const nR2 = pR2 * 100;
-        const nMAPE = Math.max(0, 100 - (pMape * 10)); // pseudo scoring
-        
+        // Scale: 0=worst, 100=best for each metric
+        const nRMSE = Math.max(0, Math.min(100, (500 - pRmse) / 5));
+        const nMAE  = Math.max(0, Math.min(100, (400 - pMae)  / 4));
+        const nR2   = Math.max(0, Math.min(100, pR2 * 100));
+        const nMAPE = Math.max(0, Math.min(100, 100 - pMape * 2));
+
         return {
-            label: m.version,
-            data: [nRMSE, nMAE, nR2, nMAPE, 80, 75], // adding speed and mem pseudo-stats
+            label: `${horizonLabel(m.model_name)} v${m.version}`,
+            data: [nRMSE, nMAE, nR2, nMAPE],
             borderColor: c.border,
             backgroundColor: c.bg,
             pointBackgroundColor: c.border
@@ -98,19 +104,15 @@
     new Chart(canvas, {
       type: "radar",
       data: {
-        labels: ["Norm RMSE", "Norm MAE", "R2 (%)", "Norm MAPE", "Inference Speed", "Mem Effic"],
+        labels: ["RMSE Score", "MAE Score", "R² (%)", "MAPE Score"],
         datasets: datasets
       },
-      options: { 
-          responsive: true, 
-          maintainAspectRatio: false,
-          scales: {
-              r: {
-                  angleLines: { display: false },
-                  suggestedMin: 50,
-                  suggestedMax: 100
-              }
-          }
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          r: { angleLines: { display: true }, min: 0, max: 100 }
+        }
       }
     });
   }
@@ -131,7 +133,7 @@
       return new Date(a.created).getTime() - new Date(b.created).getTime();
     });
 
-    const labels = sorted.map(function (m) { return m.version || "Unknown"; });
+    const labels = sorted.map(function (m) { return `${horizonLabel(m.model_name)} v${m.version}`; });
     const rmse = sorted.map(function (m) {
       return parseMetricValue(m.rmse);
     });
@@ -213,27 +215,27 @@
     const body = document.getElementById('model-detail-body');
     if (!modal || !title || !body || !model) return;
 
-    title.textContent = `Model Details · ${model.version || 'Unknown'}`;
+    const horizon = horizonLabel(model.model_name);
+    title.textContent = `Model Details · ${horizon} v${model.version || '?'}`;
 
-    const badgeClass = model.status === 'Production' ? 'badge-success' : 'badge-info';
-  const rmse = formatMetricValue(model.rmse, 3, 'N/A', '');
-  const mae = formatMetricValue(model.mae, 3, 'N/A', '');
-  const r2 = formatMetricValue(model.r2, 4, 'N/A', '');
-  const mape = formatMetricValue(model.mape, 2, 'N/A', '%');
+    const rmse = formatMetricValue(model.rmse, 2, 'N/A', ' MWh');
+    const mae  = formatMetricValue(model.mae,  2, 'N/A', ' MWh');
+    const r2   = formatMetricValue(model.r2,   4, 'N/A', '');
+    const mape = formatMetricValue(model.mape, 2, 'N/A', '%');
 
     body.innerHTML = `
       <div class="detail-section">
         <h3 class="detail-section-title">Model Info</h3>
-        <div class="detail-row"><span class="detail-label">Version</span><span class="detail-value">${model.version || 'Unknown'}</span></div>
-        <div class="detail-row"><span class="detail-label">Algorithm</span><span class="detail-value">${model.algorithm || 'Unknown'}</span></div>
-        <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value"><span class="badge ${badgeClass}">${model.status || 'Unknown'}</span></span></div>
+        <div class="detail-row"><span class="detail-label">Horizon</span><span class="detail-value">${horizon}</span></div>
+        <div class="detail-row"><span class="detail-label">Model Name</span><span class="detail-value">${model.model_name || 'Unknown'}</span></div>
+        <div class="detail-row"><span class="detail-label">Version</span><span class="detail-value">v${model.version || 'Unknown'}</span></div>
         <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value">${model.created || 'Unknown'}</span></div>
       </div>
       <div class="detail-section">
-        <h3 class="detail-section-title">Metrics</h3>
+        <h3 class="detail-section-title">Metrics (ALL facilities avg)</h3>
+        <div class="detail-row"><span class="detail-label">R²</span><span class="detail-value">${r2}</span></div>
         <div class="detail-row"><span class="detail-label">RMSE</span><span class="detail-value">${rmse}</span></div>
         <div class="detail-row"><span class="detail-label">MAE</span><span class="detail-value">${mae}</span></div>
-        <div class="detail-row"><span class="detail-label">R2</span><span class="detail-value">${r2}</span></div>
         <div class="detail-row"><span class="detail-label">MAPE</span><span class="detail-value">${mape}</span></div>
       </div>
     `;

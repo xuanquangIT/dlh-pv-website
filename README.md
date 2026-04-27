@@ -210,6 +210,8 @@ Creates: `auth_roles`, `auth_users`, `chat_sessions`, `chat_messages`, `chat_too
 
 ```powershell
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
+
+.\.venv\Scripts\Activate.ps1 ; python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend --reload
 ```
 
 ### 5. Open the app

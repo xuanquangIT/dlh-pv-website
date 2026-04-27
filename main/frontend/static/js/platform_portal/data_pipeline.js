@@ -1,30 +1,94 @@
-async function fetchPipelineData() {
+// ─── Active job state ─────────────────────────────────────────────────────────
+const DEFAULT_JOB_ID = 28718564084384; // matches backend DEFAULT_JOB_ID
+let currentJobId = DEFAULT_JOB_ID;
+
+async function loadJobList() {
+    const sel = document.getElementById('job-selector');
+    if (!sel) return;
     try {
-        const [jobInfo, jobRuns] = await Promise.all([
-            fetch('/data-pipeline/jobs').then(r => r.json()),
-            fetch('/data-pipeline/jobs/runs').then(r => r.json())
-        ]);
-        
-        renderJobInfo(jobInfo);
-        renderRecentRuns(jobRuns);
-        
-        if (jobRuns.length > 0) {
-            const latestRun = jobRuns[0];
-            let tasks = latestRun.tasks || [];
-            if(tasks.length === 0 && latestRun.run_id) {
-                try {
-                    const runDetails = await fetch(`/data-pipeline/jobs/runs/${latestRun.run_id}`).then(r => r.json());
-                    tasks = runDetails.tasks || [];
-                } catch(e) {
-                    console.error("Could not fetch detailed run tasks", e);
-                }
-            }
-            renderDAG(jobInfo.settings.tasks, tasks);
+        const res = await fetch('/data-pipeline/jobs/list');
+        if (!res.ok) {
+            const err = await res.text();
+            console.error(`[jobs/list] HTTP ${res.status}:`, err);
+            sel.innerHTML = `<option value="${DEFAULT_JOB_ID}">pv-lakehouse-incremental</option>`;
+            currentJobId = DEFAULT_JOB_ID;
+            return;
         }
+        const jobs = await res.json();
+        if (!Array.isArray(jobs) || jobs.length === 0) {
+            sel.innerHTML = `<option value="${DEFAULT_JOB_ID}">pv-lakehouse-incremental</option>`;
+            currentJobId = DEFAULT_JOB_ID;
+            return;
+        }
+        sel.innerHTML = jobs.map(j => {
+            const paused = j.pause_status === 'PAUSED' ? ' [Paused]' : '';
+            const selected = j.job_id === currentJobId ? ' selected' : '';
+            return `<option value="${j.job_id}"${selected}>${j.name}${paused}</option>`;
+        }).join('');
+        // Sync currentJobId with what's actually selected
+        currentJobId = parseInt(sel.value, 10) || DEFAULT_JOB_ID;
     } catch (err) {
-        console.error("Failed to load pipeline data", err);
+        console.error('[jobs/list] Network error:', err);
+        sel.innerHTML = `<option value="${DEFAULT_JOB_ID}">pv-lakehouse-incremental</option>`;
+        currentJobId = DEFAULT_JOB_ID;
     }
 }
+
+async function fetchPipelineData() {
+    const tbody = document.getElementById('recent-runs-body');
+    const scheduleEl = document.getElementById('schedule-display');
+
+    // 1. Fetch job info
+    let jobInfo = null;
+    try {
+        const res = await fetch(`/data-pipeline/jobs?job_id=${currentJobId}`);
+        if (!res.ok) {
+            const detail = await res.text();
+            console.error(`[jobs] HTTP ${res.status}:`, detail);
+            if (scheduleEl) scheduleEl.textContent = `Error ${res.status} loading job info`;
+        } else {
+            jobInfo = await res.json();
+            renderJobInfo(jobInfo);
+        }
+    } catch (err) {
+        console.error('[jobs] Network error:', err);
+        if (scheduleEl) scheduleEl.textContent = 'Network error loading job info';
+    }
+
+    // 2. Fetch runs
+    let jobRuns = [];
+    try {
+        const res = await fetch(`/data-pipeline/jobs/runs?job_id=${currentJobId}&limit=15`);
+        if (!res.ok) {
+            const detail = await res.text();
+            console.error(`[jobs/runs] HTTP ${res.status}:`, detail);
+            if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--txt3);">Error ${res.status} loading runs</td></tr>`;
+        } else {
+            jobRuns = await res.json();
+            renderRecentRuns(jobRuns);
+        }
+    } catch (err) {
+        console.error('[jobs/runs] Network error:', err);
+        if (tbody) tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--txt3);">Network error loading runs</td></tr>`;
+    }
+
+    // 3. Render DAG from latest run tasks
+    if (jobInfo && jobRuns.length > 0) {
+        const latestRun = jobRuns[0];
+        let tasks = latestRun.tasks || [];
+        if (tasks.length === 0 && latestRun.run_id) {
+            try {
+                const runDetails = await fetch(`/data-pipeline/jobs/runs/${latestRun.run_id}`).then(r => r.json());
+                tasks = runDetails.tasks || [];
+            } catch(e) {
+                console.error('Could not fetch detailed run tasks', e);
+            }
+        }
+        const configTasks = (jobInfo.settings && jobInfo.settings.tasks) || [];
+        if (configTasks.length > 0) renderDAG(configTasks, tasks);
+    }
+}
+
 
 const QUARTZ_DAY_LABEL_BY_NUMBER = {
     '1': 'Sunday',
@@ -177,7 +241,12 @@ function updateScheduleUIVisibility() {
 function renderRecentRuns(runs) {
     const tbody = document.getElementById('recent-runs-body');
     tbody.innerHTML = '';
-    
+
+    if (!runs || runs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--txt3);padding:20px;">No runs found for this job</td></tr>';
+        return;
+    }
+
     runs.forEach(run => {
         const tr = document.createElement('tr');
         
@@ -280,107 +349,162 @@ function getBadgeClass(state) {
     }
 }
 
+/**
+ * Render the pipeline DAG dynamically.
+ *
+ * Strategy:
+ *  1. Compute topological "depth" for every task (0 = no deps, 1 = deps on 0, etc.)
+ *  2. Group tasks by depth → each depth becomes one horizontal layer.
+ *  3. Assign a human-readable label from the task_key prefix if possible
+ *     (bronze/silver/gold/ml), otherwise "Stage N".
+ *  4. Inject layers into #dag-dynamic, clearing previous content first.
+ */
 function renderDAG(configuredTasks, runTasks) {
-    // Map run tasks by task_key for quick status lookup
+    const dagEl = document.getElementById('dag-dynamic');
+    if (!dagEl) return;
+    dagEl.innerHTML = '';
+
+    if (!configuredTasks || configuredTasks.length === 0) {
+        dagEl.innerHTML = '<div style="text-align:center;color:var(--txt3);padding:24px;">No task configuration available for this job.</div>';
+        return;
+    }
+
+    // ── Build status map from latest run ──────────────────────────────────
     const taskStatusMap = {};
-    if(runTasks) {
+    if (runTasks) {
         runTasks.forEach(t => {
             taskStatusMap[t.task_key] = t.state.result_state || t.state.life_cycle_state;
         });
     }
 
-    const bronzeContainer = document.getElementById('layer-bronze');
-    const silverContainer = document.getElementById('layer-silver');
-    const goldContainer = document.getElementById('layer-gold');
-    const mlContainer = document.getElementById('layer-ml');
-    
-    [bronzeContainer, silverContainer, goldContainer, mlContainer].forEach(el => el.innerHTML = '');
-
-    // Build dependency map
-    const taskMap = {};
-    configuredTasks.forEach((task, index) => {
-        taskMap[task.task_key] = { task, index, order: index + 1 };
+    // ── Compute topological depth (BFS) ──────────────────────────────────
+    const depMap = {};  // task_key → Set of dependency task_keys
+    configuredTasks.forEach(t => {
+        depMap[t.task_key] = new Set((t.depends_on || []).map(d => d.task_key));
     });
 
-    // Calculate execution order
-    let executionOrder = 1;
-    const executionOrderMap = {};
-    const visited = new Set();
-    
-    function calculateOrder(taskKey, order = 1) {
-        if (visited.has(taskKey)) return executionOrderMap[taskKey] || order;
-        visited.add(taskKey);
-        
-        const entry = taskMap[taskKey];
-        if (!entry) return order;
-        
-        const task = entry.task;
-        if (task.depends_on && task.depends_on.length > 0) {
-            let maxDepOrder = 0;
-            task.depends_on.forEach(dep => {
-                const depOrder = calculateOrder(dep.task_key, order);
-                maxDepOrder = Math.max(maxDepOrder, depOrder);
-            });
-            executionOrderMap[taskKey] = maxDepOrder + 1;
-        } else {
-            if (!executionOrderMap[taskKey]) {
-                executionOrderMap[taskKey] = executionOrder++;
-            }
+    const depth = {};
+    const queue = [];
+    configuredTasks.forEach(t => {
+        if (depMap[t.task_key].size === 0) {
+            depth[t.task_key] = 0;
+            queue.push(t.task_key);
         }
-        
-        return executionOrderMap[taskKey];
-    }
-    
-    configuredTasks.forEach(task => calculateOrder(task.task_key));
+    });
 
-    // Render tasks
-    configuredTasks.forEach(task => {
-        const status = taskStatusMap[task.task_key] || 'PENDING';
-        const order = executionOrderMap[task.task_key] || 0;
-        const deps = task.depends_on && task.depends_on.length > 0 
-            ? task.depends_on.map(d => d.task_key).join(', ')
-            : 'none';
-        
-        const taskEl = document.createElement('div');
-        taskEl.className = 'task-node';
-        taskEl.setAttribute('data-task-key', task.task_key);
-        taskEl.setAttribute('data-task-order', order);
-        
-        const depText = deps === 'none' ? '(starts first)' : `← ${deps}`;
-        
-        taskEl.innerHTML = `
-            <div class="task-status status-${status}" title="${status}"></div>
-            <div class="task-name">${task.task_key}</div>
-            <div class="task-order">#${order}</div>
-            <div class="task-deps" title="Dependencies: ${depText}">${depText}</div>
-            <div class="task-duration">${status}</div>
-        `;
-        
-        // Categorize based on prefix
-        if (task.task_key.startsWith('bronze')) {
-            bronzeContainer.appendChild(taskEl);
-        } else if (task.task_key.startsWith('silver')) {
-            silverContainer.appendChild(taskEl);
-        } else if (task.task_key.startsWith('gold') || task.task_key.startsWith('forecast')) {
-            if (task.task_key.includes('forecast_serving') || task.task_key.includes('diagnostics')) {
-                mlContainer.appendChild(taskEl);
-            } else {
-                goldContainer.appendChild(taskEl);
+    // Iterative BFS — safe even with deep DAGs
+    while (queue.length > 0) {
+        const current = queue.shift();
+        configuredTasks.forEach(t => {
+            if (depMap[t.task_key].has(current)) {
+                const newDepth = (depth[current] ?? 0) + 1;
+                if (depth[t.task_key] === undefined || depth[t.task_key] < newDepth) {
+                    depth[t.task_key] = newDepth;
+                }
+                // Check if all deps resolved
+                const allDepsResolved = [...depMap[t.task_key]].every(d => depth[d] !== undefined);
+                if (allDepsResolved && !queue.includes(t.task_key)) {
+                    queue.push(t.task_key);
+                }
             }
-        } else {
-            // default fallback to bronze or silver if setup
-            if(task.task_key.includes('setup')) {
-                if(task.task_key.includes('silver')) silverContainer.appendChild(taskEl);
-                else if(task.task_key.includes('gold')) goldContainer.appendChild(taskEl);
-                else bronzeContainer.appendChild(taskEl);
+        });
+    }
+
+    // ── Group tasks by depth ──────────────────────────────────────────────
+    const byDepth = {};
+    configuredTasks.forEach(t => {
+        const d = depth[t.task_key] ?? 0;
+        if (!byDepth[d]) byDepth[d] = [];
+        byDepth[d].push(t);
+    });
+
+    const LAYER_COLORS = {
+        bronze: { cls: 'layer-bronze', label: 'BRONZE' },
+        silver: { cls: 'layer-silver', label: 'SILVER' },
+        gold:   { cls: 'layer-gold',   label: 'GOLD'   },
+        ml:     { cls: 'layer-ml',     label: 'ML & SERVING' },
+        forecast: { cls: 'layer-gold', label: 'GOLD'   },
+    };
+
+    function getLayerMeta(tasks, depthIdx) {
+        // Take the majority prefix from this layer's tasks
+        const prefixCounts = {};
+        tasks.forEach(t => {
+            const key = t.task_key.toLowerCase();
+            for (const prefix of Object.keys(LAYER_COLORS)) {
+                if (key.startsWith(prefix)) {
+                    prefixCounts[prefix] = (prefixCounts[prefix] || 0) + 1;
+                    break;
+                }
             }
-        }
+        });
+        const dominant = Object.entries(prefixCounts).sort((a,b) => b[1]-a[1])[0]?.[0];
+        return LAYER_COLORS[dominant] || { cls: `layer-stage`, label: `Stage ${depthIdx + 1}` };
+    }
+
+    // ── Render layers ─────────────────────────────────────────────────────
+    const sortedDepths = Object.keys(byDepth).map(Number).sort((a,b) => a-b);
+    sortedDepths.forEach(d => {
+        const tasks = byDepth[d];
+        const meta  = getLayerMeta(tasks, d);
+
+        const layerEl = document.createElement('div');
+        layerEl.className = `dag-layer ${meta.cls}`;
+
+        const labelEl = document.createElement('div');
+        labelEl.style.cssText = 'font-weight:600; min-width:120px;';
+        labelEl.textContent = meta.label;
+        layerEl.appendChild(labelEl);
+
+        const nodesEl = document.createElement('div');
+        nodesEl.style.cssText = 'display:flex; gap:16px; flex-wrap:wrap;';
+
+        tasks.forEach(task => {
+            const status  = taskStatusMap[task.task_key] || 'PENDING';
+            const deps    = (task.depends_on || []).map(dep => dep.task_key);
+            const depText = deps.length === 0 ? '(starts first)' : `← ${deps.join(', ')}`;
+
+            const taskEl = document.createElement('div');
+            taskEl.className = 'task-node';
+            taskEl.setAttribute('data-task-key', task.task_key);
+            taskEl.innerHTML = `
+                <div class="task-status status-${status}" title="${status}"></div>
+                <div class="task-name">${task.task_key}</div>
+                <div class="task-order">#${d + 1}</div>
+                <div class="task-deps" title="Dependencies: ${depText}">${depText}</div>
+                <div class="task-duration">${status}</div>
+            `;
+            nodesEl.appendChild(taskEl);
+        });
+
+        layerEl.appendChild(nodesEl);
+        dagEl.appendChild(layerEl);
     });
 }
 
+
 document.addEventListener('DOMContentLoaded', () => {
-    fetchPipelineData();
+    // Load job list first, then fetch data for the selected job
+    loadJobList().then(() => {
+        fetchPipelineData();
+    });
     setInterval(fetchPipelineData, 30000); // Polling every 30s
+
+    // Job selector change
+    const jobSel = document.getElementById('job-selector');
+    if (jobSel) {
+        jobSel.addEventListener('change', () => {
+            currentJobId = parseInt(jobSel.value, 10);
+            // Clear stale content immediately
+            const dagEl = document.getElementById('dag-dynamic');
+            if (dagEl) dagEl.innerHTML = '<div style="text-align:center;color:var(--txt3);padding:24px;">Loading...</div>';
+            const tbody = document.getElementById('recent-runs-body');
+            if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Loading...</td></tr>';
+            const scheduleEl = document.getElementById('schedule-display');
+            if (scheduleEl) scheduleEl.textContent = 'Loading...';
+            fetchPipelineData();
+        });
+    }
     
     // Tab Switcher Logic
     const tabBtns = document.querySelectorAll('.tab-btn');
@@ -404,7 +528,7 @@ document.addEventListener('DOMContentLoaded', () => {
             runBtn.disabled = true;
             runBtn.textContent = 'Triggering...';
             try {
-                const response = await fetch('/data-pipeline/jobs/run', { method: 'POST' });
+                const response = await fetch(`/data-pipeline/jobs/run?job_id=${currentJobId}`, { method: 'POST' });
                 if(response.ok) {
                     alert('Pipeline triggered successfully!');
                     fetchPipelineData(); // Refresh immediately
@@ -489,7 +613,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const response = await fetch('/data-pipeline/jobs/schedule', {
+                const response = await fetch(`/data-pipeline/jobs/schedule?job_id=${currentJobId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
