@@ -228,6 +228,12 @@ def cmd_capture(args: argparse.Namespace) -> int:
                 if not isinstance(q, dict) or "id" not in q or "query" not in q:
                     print(f"  ! skip malformed question: {q!r}", file=sys.stderr)
                     continue
+                # CLI flags override per-question values (lets the same yaml
+                # be replayed against different LLM profiles).
+                if args.model_profile_id:
+                    q = {**q, "model_profile_id": args.model_profile_id}
+                if args.model_name:
+                    q = {**q, "model_name": args.model_name}
                 # Per-question session unless shared
                 qsid = session_id
                 if not qsid:
@@ -657,6 +663,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cap.add_argument("--engine", default="auto", help="Tag for engine_version field (e.g. v1, v2).")
     p_cap.add_argument("--role", default="admin", help="Default role when question doesn't specify.")
     p_cap.add_argument("--output", required=True, help="JSONL output path.")
+    p_cap.add_argument(
+        "--model-profile-id", default="",
+        help="Force this LLM profile id for every question (overrides per-question yaml).",
+    )
+    p_cap.add_argument(
+        "--model-name", default="",
+        help="Force this model name within the profile (overrides per-question yaml).",
+    )
     p_cap.add_argument("--shared-session", action="store_true",
                        help="Reuse one chat session across all questions (default: per-question session).")
     p_cap.add_argument("--timeout-seconds", type=float, default=180.0)

@@ -388,5 +388,58 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(out["first_x"], 1)
 
 
+class StripReasoningTests(unittest.TestCase):
+    """Reasoning-model CoT (`<think>...</think>` and friends) must NEVER
+    leak into user-facing answers — the engine wraps every LLM-text exit
+    site in `_strip_reasoning`."""
+
+    def setUp(self):
+        from app.services.solar_ai_chat.engine import _strip_reasoning
+        self._strip = _strip_reasoning
+
+    def test_passthrough_when_no_cot(self):
+        s = "Top facility: Avonlie at 32,334 MWh."
+        self.assertEqual(self._strip(s), s)
+
+    def test_strips_closed_think_block(self):
+        s = "<think>Let me analyze...</think>The answer is 42."
+        self.assertEqual(self._strip(s), "The answer is 42.")
+
+    def test_strips_closed_thinking_block_multiline(self):
+        s = "<thinking>\nUser asked X.\nI should reply Y.\n</thinking>\n\nFinal: Y."
+        self.assertEqual(self._strip(s), "Final: Y.")
+
+    def test_strips_unclosed_think_prefix_terminated_by_blank_line(self):
+        # Some Minimax responses leak reasoning before the answer with no closer.
+        s = "<think>\nThe user wants X.\nI'll structure...\n\nDữ liệu: 5 trạm."
+        self.assertEqual(self._strip(s), "Dữ liệu: 5 trạm.")
+
+    def test_strips_lone_close_tag(self):
+        s = "Answer body</think>"
+        self.assertEqual(self._strip(s), "Answer body")
+
+    def test_strips_multiple_blocks(self):
+        s = "<think>first</think>middle<think>second</think>tail"
+        self.assertEqual(self._strip(s), "middletail")
+
+    def test_handles_empty_input(self):
+        self.assertEqual(self._strip(""), "")
+        self.assertEqual(self._strip(None), None)
+
+    def test_minimax_real_world_leak_pattern(self):
+        # Pattern observed in production with Minimax M2.7 — CoT bleeds into
+        # answer with both English reasoning and a final Vietnamese reply.
+        s = (
+            "<think>\nThe user wants me to analyze humidity influence. "
+            "Looking at the data, avg_humidity_pct is null... "
+            "I'll structure a 2-3 sentence response.\n</think>\n\n"
+            "Dữ liệu không chứa cột độ ẩm; cloud cover làm proxy."
+        )
+        self.assertEqual(
+            self._strip(s),
+            "Dữ liệu không chứa cột độ ẩm; cloud cover làm proxy.",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

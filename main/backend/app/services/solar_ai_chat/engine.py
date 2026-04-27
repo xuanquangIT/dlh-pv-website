@@ -259,7 +259,7 @@ class ChatEngine:
 
             if not calls:
                 # LLM produced final text — done
-                final_text = (turn.text or "").strip()
+                final_text = _strip_reasoning(turn.text or "")
                 break
 
             # Cap parallel-call fan-out. Some models (grok-4-fast) emit 5-6
@@ -758,7 +758,7 @@ class ChatEngine:
 
         try:
             resp = self._router.generate_with_tools(messages=msgs, tools=[])
-            answer = (resp.text or "").strip()
+            answer = _strip_reasoning(resp.text or "")
             return ChatEngineResult(
                 answer=answer or (
                     "Xin lỗi, tôi chưa thể trả lời câu hỏi đó."
@@ -965,7 +965,7 @@ class ChatEngine:
             synth = self._router.generate_with_tools(
                 messages=clean_messages, tools=[],
             )
-            text = (synth.text or "").strip()
+            text = _strip_reasoning(synth.text or "")
             model_used = synth.model_used
             fb_used = synth.fallback_used or fallback_used
         except Exception as exc:  # noqa: BLE001
@@ -1281,6 +1281,44 @@ _DRAFT_INSTRUCTION_SUFFIXES = (
     "(Full table is shown below — DO NOT enumerate each row in the reply.)",
     "(Bảng chi tiết hiển thị bên dưới — KHÔNG cần liệt kê từng dòng trong câu trả lời.)",
 )
+
+
+# Reasoning-model chain-of-thought wrappers. Minimax M2.7, DeepSeek-R1,
+# Qwen-QwQ, gpt-oss-thinking and friends emit a `<think>...</think>` block
+# (or sometimes `<thinking>...`) with the model's internal monologue ahead
+# of the actual answer. We strip them everywhere LLM text becomes
+# user-facing — leaving them in leaks 5+ paragraphs of "The user wants me
+# to..." into the chat UI and also breaks the hedge detector (which
+# scans for cited row numbers and won't find them inside <think>).
+_REASONING_BLOCK_RE = re.compile(
+    r"<\s*(think|thinking|reasoning|analysis|scratchpad)\s*>.*?<\s*/\s*\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+# Unclosed <think> at the START of the response — common when the model
+# truncates or forgets the closing tag. Drop everything from the open
+# tag through the next blank-line boundary or end of string.
+_UNCLOSED_THINK_PREFIX_RE = re.compile(
+    r"^\s*<\s*(think|thinking|reasoning|analysis|scratchpad)\s*>.*?(?:\n\s*\n|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Remove `<think>...</think>` (and friends) plus any leftover
+    standalone open/close tags. Safe on text that has no CoT — just returns
+    the input trimmed."""
+    if not text:
+        return text
+    cleaned = _REASONING_BLOCK_RE.sub("", text)
+    cleaned = _UNCLOSED_THINK_PREFIX_RE.sub("", cleaned)
+    # Stragglers: lone open/close tags after a malformed wrapper.
+    cleaned = re.sub(
+        r"</?\s*(think|thinking|reasoning|analysis|scratchpad)\s*>",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
 
 
 def _strip_draft_instruction_suffix(text: str) -> str:
