@@ -1012,7 +1012,16 @@ class ChatEngine:
         # Gemini-style function_call turn: one entry per call
         parts = []
         for c in calls:
-            parts.append({"function_call": {"name": c.name, "args": dict(c.arguments or {})}})
+            part: dict[str, object] = {
+                "function_call": {"name": c.name, "args": dict(c.arguments or {})},
+            }
+            # Round-trip Gemini 3's `thoughtSignature` (captured during parse)
+            # back onto the part — required or Gemini rejects with HTTP 400.
+            metadata = getattr(c, "provider_metadata", None) or {}
+            sig = metadata.get("thoughtSignature")
+            if sig:
+                part["thought_signature"] = sig
+            parts.append(part)
         return {"role": "model", "parts": parts}
 
     @staticmethod

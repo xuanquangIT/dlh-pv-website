@@ -41,6 +41,12 @@ class LLMGenerationResult:
 class ToolCallRequest:
     name: str
     arguments: dict[str, object]
+    # Opaque per-provider metadata that must round-trip back to the model
+    # on the next turn. Currently used only for Gemini's `thoughtSignature`
+    # which Gemini 3 requires to be echoed verbatim or it returns HTTP 400
+    # ("Function call is missing a thought_signature in functionCall parts").
+    # Other providers leave this empty.
+    provider_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -559,10 +565,18 @@ class LLMModelRouter:
                 arguments = function_call.get("args", {})
                 if not isinstance(arguments, dict):
                     arguments = {}
+                # Gemini 3 attaches `thoughtSignature` either on the Part
+                # itself or inside `functionCall`. We must echo it back on
+                # the next turn or the API returns HTTP 400.
+                metadata: dict[str, object] = {}
+                sig = part.get("thoughtSignature") or function_call.get("thoughtSignature")
+                if sig:
+                    metadata["thoughtSignature"] = sig
                 calls.append(
                     ToolCallRequest(
                         name=str(function_call.get("name", "")),
                         arguments=arguments,
+                        provider_metadata=metadata or None,
                     )
                 )
         if calls:

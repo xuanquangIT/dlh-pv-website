@@ -349,10 +349,29 @@ def validate_sql(sql: str, *, max_rows: int = DEFAULT_MAX_ROWS) -> SqlValidation
     violations: list[str] = []
     s = sql.strip().rstrip(";").strip()
 
+    # Strip leading SQL comments (-- line comments and /* ... */ block comments)
+    # before the prefix check. The LLM frequently copies metric templates that
+    # begin with explanatory comments — those are valid SQL and shouldn't be
+    # rejected as "doesn't start with SELECT/WITH".
+    def _strip_leading_sql_comments(text: str) -> str:
+        while True:
+            text = text.lstrip()
+            if text.startswith("--"):
+                nl = text.find("\n")
+                text = text[nl + 1:] if nl != -1 else ""
+                continue
+            if text.startswith("/*"):
+                end = text.find("*/")
+                text = text[end + 2:] if end != -1 else ""
+                continue
+            return text
+
+    s_for_check = _strip_leading_sql_comments(s)
+
     if ";" in s:
         violations.append("Stacked queries (multiple statements via ';') not allowed.")
 
-    head = s.split(None, 1)[0].upper() if s else ""
+    head = s_for_check.split(None, 1)[0].upper() if s_for_check else ""
     if head not in _ALLOWED_SQL_PREFIXES:
         violations.append(
             f"Query must start with SELECT or WITH; got {head!r}."

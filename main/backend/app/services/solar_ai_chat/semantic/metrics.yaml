@@ -1085,36 +1085,17 @@ metrics:
       - "Show me the champion model + accuracy per horizon"
       - "Phiên bản model dự báo và R², RMSE bao nhiêu?"
     sql_template: |
-      -- model_monitoring_daily mixes grains: some rows are facility-level
-      -- (one per facility_id, one per model+date), some are system-level
-      -- (facility_id='ALL'). To get one stable row per horizon we pick the
-      -- latest eval_date per model_name, then aggregate ALL facilities of
-      -- that date so the displayed R² / RMSE represent the SYSTEM, not an
-      -- arbitrary per-facility row chosen by ROW_NUMBER.
-      WITH latest_date AS (
-        SELECT model_name, MAX(eval_date) AS eval_date
+      WITH ranked AS (
+        SELECT model_name, model_version, approach, eval_date,
+               r2, rmse_mwh, nrmse_pct, mape_day_pct, skill_score, daytime_rows,
+               ROW_NUMBER() OVER (PARTITION BY model_name ORDER BY eval_date DESC) AS rn
         FROM pv.gold.model_monitoring_daily
-        WHERE eval_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        WHERE facility_id = 'ALL'
           AND model_name LIKE 'pv.gold.daily_forecast_%'
-        GROUP BY model_name
-      ),
-      with_version AS (
-        SELECT m.model_name, m.eval_date,
-               MAX(m.model_version) AS model_version,
-               MAX(m.approach)      AS approach,
-               AVG(m.r2)            AS r2,
-               AVG(m.rmse_mwh)      AS rmse_mwh,
-               AVG(m.nrmse_pct)     AS nrmse_pct,
-               AVG(m.mape_day_pct)  AS mape_day_pct,
-               AVG(m.skill_score)   AS skill_score,
-               COUNT(*)             AS facility_count
-        FROM pv.gold.model_monitoring_daily m
-        JOIN latest_date d
-          ON m.model_name = d.model_name AND m.eval_date = d.eval_date
-        GROUP BY m.model_name, m.eval_date
+          AND eval_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
       )
       SELECT model_name,
-             CAST(REGEXP_EXTRACT(model_name, 'd(\\d+)$', 1) AS INT) AS horizon_days,
+             TRY_CAST(REGEXP_EXTRACT(model_name, 'd([0-9]+)$', 1) AS INT) AS horizon_days,
              model_version,
              approach,
              eval_date,
@@ -1123,8 +1104,9 @@ metrics:
              ROUND(nrmse_pct, 2)      AS nrmse_pct,
              ROUND(mape_day_pct, 2)   AS mape_pct,
              ROUND(skill_score, 3)    AS skill_score,
-             facility_count
-      FROM with_version
+             daytime_rows             AS sample_count
+      FROM ranked
+      WHERE rn = 1
       ORDER BY horizon_days
     parameters:
       - {name: window_days, type: int, default: 7, range: [1, 30]}

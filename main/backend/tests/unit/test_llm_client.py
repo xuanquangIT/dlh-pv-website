@@ -48,5 +48,51 @@ class LLMModelRouterTests(unittest.TestCase):
             router.generate("Test prompt")
 
 
+class GeminiThoughtSignatureRoundTripTests(unittest.TestCase):
+    """Gemini 3 returns HTTP 400 when a function_call part is echoed back
+    without its `thoughtSignature`. The router must capture it during parse
+    so the engine can restore it on the next turn."""
+
+    def test_thought_signature_captured_from_part(self) -> None:
+        from app.services.solar_ai_chat.engine import ChatEngine
+
+        raw = {
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"functionCall": {"name": "recall_metric",
+                                          "args": {"query": "energy"},
+                                          "thoughtSignature": "sig-on-fc"}},
+                    ]
+                }
+            }]
+        }
+        result = LLMModelRouter._parse_gemini_tool_response(raw, "gemini-3-test", False)
+        fc = result.function_call
+        assert fc is not None
+        self.assertEqual(fc.provider_metadata, {"thoughtSignature": "sig-on-fc"})
+
+        echoed = ChatEngine._format_assistant_tool_calls([fc])
+        self.assertEqual(echoed["parts"][0]["thought_signature"], "sig-on-fc")
+
+    def test_no_signature_when_provider_did_not_supply(self) -> None:
+        from app.services.solar_ai_chat.engine import ChatEngine
+
+        raw = {
+            "candidates": [{
+                "content": {
+                    "parts": [{"functionCall": {"name": "f", "args": {}}}]
+                }
+            }]
+        }
+        result = LLMModelRouter._parse_gemini_tool_response(raw, "gemini-2.5", False)
+        fc = result.function_call
+        assert fc is not None
+        self.assertIsNone(fc.provider_metadata)
+
+        echoed = ChatEngine._format_assistant_tool_calls([fc])
+        self.assertNotIn("thought_signature", echoed["parts"][0])
+
+
 if __name__ == "__main__":
     unittest.main()
