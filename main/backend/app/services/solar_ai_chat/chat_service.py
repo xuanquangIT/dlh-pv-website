@@ -42,6 +42,11 @@ from app.schemas.solar_ai_chat import (
     resolve_ui_features,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS
+from app.services.solar_ai_chat.cancellation import (
+    EngineCancelled,
+    register as _register_cancel,
+    unregister as _unregister_cancel,
+)
 from app.services.solar_ai_chat.llm_client import LLMModelRouter
 
 logger = logging.getLogger(__name__)
@@ -154,9 +159,25 @@ class SolarAIChatService:
             trace_id, len(history_messages),
         )
 
+        cancel_event = _register_cancel(trace_id)
         try:
             return self._handle_with_engine(
                 request, started, history_messages, trace_id,
+                cancel_event=cancel_event,
+            )
+        except EngineCancelled:
+            from app.services.solar_ai_chat.engine import _detect_language
+            language = _detect_language(request.message)
+            return self._build_refusal_response(
+                request, started, trace_id,
+                warning="Stopped by user.",
+                model_used="engine-cancelled",
+                answer=(
+                    "Đã dừng theo yêu cầu."
+                    if language == "vi"
+                    else "Stopped by user."
+                ),
+                fallback_used=False,
             )
         except DatabricksDataUnavailableError:
             raise
@@ -179,6 +200,8 @@ class SolarAIChatService:
                 fallback_used=True,
                 steps=[ThinkingStep(step="engine failure", detail=str(err), status="warning")],
             )
+        finally:
+            _unregister_cancel(trace_id)
 
     # ------------------------------------------------------------------
     # Public — SSE streaming
@@ -187,8 +210,10 @@ class SolarAIChatService:
     def handle_query_stream(self, request: SolarChatRequest):
         """Yield SSE-ready ``data: <json>\\n\\n`` strings."""
         from app.schemas.solar_ai_chat.stream import (
+            CancelledEvent,
             DoneEvent,
             ErrorEvent,
+            StartEvent,
             StatusUpdateEvent,
         )
 
@@ -197,8 +222,10 @@ class SolarAIChatService:
 
         started = time.perf_counter()
         trace_id = uuid.uuid4().hex[:8]
+        cancel_event = _register_cancel(trace_id)
 
         try:
+            yield _sse(StartEvent(trace_id=trace_id))
             yield _sse(StatusUpdateEvent(text="Analyzing your request…"))
 
             if self._model_router is None:
@@ -231,7 +258,12 @@ class SolarAIChatService:
             try:
                 yield from self._stream_with_engine(
                     request, started, history_messages, trace_id, language,
+                    cancel_event=cancel_event,
                 )
+                return
+            except EngineCancelled:
+                logger.info("solar_chat_stream_cancelled trace_id=%s", trace_id)
+                yield _sse(CancelledEvent(trace_id=trace_id))
                 return
             except DatabricksDataUnavailableError:
                 raise
@@ -256,6 +288,8 @@ class SolarAIChatService:
                 message=f"Streaming failed: {err}",
                 code="stream_error",
             ))
+        finally:
+            _unregister_cancel(trace_id)
 
     # ------------------------------------------------------------------
     # Engine bridge — non-streaming
@@ -267,6 +301,7 @@ class SolarAIChatService:
         started: float,
         history_messages: list[ChatMessage],
         trace_id: str,
+        cancel_event: Any | None = None,
     ) -> SolarChatResponse:
         from app.core.settings import SolarChatSettings
         from app.services.solar_ai_chat.dispatcher import Dispatcher
@@ -290,7 +325,15 @@ class SolarAIChatService:
             history=history_messages,
             language=language,
             force_chart=force_chart,
+            cancel_event=cancel_event,
         )
+
+        # Fast-paths inside the engine (e.g. `_answer_conceptual`) make a
+        # single blocking LLM call without checking cancel_event. If the user
+        # hit Stop while that call was in flight, drop the result on the
+        # floor so it isn't persisted or returned to the now-cancelled UI.
+        if cancel_event is not None and cancel_event.is_set():
+            raise EngineCancelled("user requested stop after engine.run returned")
 
         chart_payload, data_table_payload, kpi_payload, viz_snapshot = (
             self._build_viz_payloads(result)
@@ -350,6 +393,7 @@ class SolarAIChatService:
         history_messages: list[ChatMessage],
         trace_id: str,
         language: str,
+        cancel_event: Any | None = None,
     ):
         """Run the engine in a worker thread and stream progress events."""
         import queue as _queue
@@ -399,6 +443,7 @@ class SolarAIChatService:
                     language=language or "en",
                     force_chart=force_chart,
                     progress_callback=_on_progress,
+                    cancel_event=cancel_event,
                 )
                 result_holder["result"] = r
             except Exception as run_err:  # noqa: BLE001
@@ -412,7 +457,12 @@ class SolarAIChatService:
         global_step = -1
         step_index_for_call: dict[tuple[int, str], int] = {}
         while True:
-            ev = events_q.get()
+            try:
+                ev = events_q.get(timeout=0.5)
+            except _queue.Empty:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise EngineCancelled("user requested stop mid-stream")
+                continue
             if ev is SENTINEL:
                 break
             if not isinstance(ev, dict):
@@ -440,6 +490,11 @@ class SolarAIChatService:
         thread.join(timeout=1.0)
         if "error" in result_holder:
             raise result_holder["error"]
+        # If the user hit Stop while a blocking fast-path LLM call was in
+        # flight, the runner thread completes normally with a `result`. Drop
+        # it before persistence so the cancelled exchange is not stored.
+        if cancel_event is not None and cancel_event.is_set():
+            raise EngineCancelled("user requested stop after engine returned")
         result = result_holder.get("result")
         if result is None:
             raise RuntimeError("ChatEngine returned no result")

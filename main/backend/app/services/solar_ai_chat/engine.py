@@ -23,6 +23,7 @@ from datetime import date
 from typing import Any, Callable
 
 from app.schemas.solar_ai_chat import ChatMessage, SourceMetadata
+from app.services.solar_ai_chat.cancellation import EngineCancelled
 from app.services.solar_ai_chat.llm_client import (
     LLMModelRouter,
     LLMToolResult,
@@ -94,6 +95,7 @@ class ChatEngine:
         today_str: str | None = None,
         force_chart: bool = False,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        cancel_event: Any | None = None,
     ) -> ChatEngineResult:
         """Run the agentic loop.
 
@@ -198,6 +200,8 @@ class ChatEngine:
         last_sql_metric: str | None = None
 
         for step in range(1, self._max_steps + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise EngineCancelled("user requested stop before LLM turn")
             # If loop-breaker has flagged a tool, remove it from the schema so
             # the model literally cannot call it again.
             active_tools = [
@@ -1835,20 +1839,42 @@ _CONCEPTUAL_PATTERNS = (
 )
 _CONCEPTUAL_RE = re.compile("|".join(_CONCEPTUAL_PATTERNS), re.IGNORECASE)
 
+# Live-data signals that override the conceptual fast-path. A question like
+# "What is the current ML model performance?" lexically matches `\bwhat is\b`
+# but is a DATA request (read from `model_monitoring_daily`), not a textbook
+# definition. Same with "what's the latest forecast" / "what is today's
+# energy" / "hiện tại model nào đang chạy". When ANY of these tokens appears
+# in the question, force the agentic SQL path.
+_LIVE_DATA_OVERRIDE = re.compile(
+    r"\b(?:current|currently|latest|newest|live|now|today|yesterday|"
+    r"this\s+(?:week|month|year)|past\s+\d+|last\s+\d+|"
+    r"hiện\s+tại|hien\s+tai|hiện\s+nay|hien\s+nay|đang\s+(?:chạy|dùng)|"
+    r"dang\s+(?:chay|dung)|mới\s+nhất|moi\s+nhat|gần\s+đây|gan\s+day|"
+    r"hôm\s+nay|hom\s+nay|hôm\s+qua|hom\s+qua|tuần\s+này|tuan\s+nay|"
+    r"thực\s+tế|thuc\s+te)\b",
+    re.IGNORECASE,
+)
+
 
 def _is_conceptual_question(message: str) -> bool:
     """True for definitional / explainer questions that don't need data.
 
-    Triggers ONLY when the question uses a textbook-style trigger phrase.
+    Triggers ONLY when the question uses a textbook-style trigger phrase
+    AND lacks a live-data signal ("current", "latest", "today", "hiện tại"…).
     A query like "show me the capacity factor of AVLSF" is NOT conceptual
-    even though it mentions a metric name; "What is capacity factor" IS.
+    even though it mentions a metric name; "What is capacity factor" IS;
+    "What is the current model performance" is NOT (asks for live metrics).
 
     Conservative on purpose — false positives here cost more (no data
     shown) than false negatives (model still answers via SQL path).
     """
     if not message:
         return False
-    return bool(_CONCEPTUAL_RE.search(message))
+    if not _CONCEPTUAL_RE.search(message):
+        return False
+    if _LIVE_DATA_OVERRIDE.search(message):
+        return False
+    return True
 
 
 def _is_off_topic(message: str) -> bool:

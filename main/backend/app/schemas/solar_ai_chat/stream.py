@@ -15,6 +15,20 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class StartEvent(BaseModel):
+    """First SSE event in every stream — carries trace_id so the client
+    can call POST /solar-ai-chat/stop with this id to cancel the run."""
+    event: Literal["start"] = "start"
+    trace_id: str
+
+
+class CancelledEvent(BaseModel):
+    """Final event when the user issued POST /solar-ai-chat/stop."""
+    event: Literal["cancelled"] = "cancelled"
+    trace_id: str = ""
+    message: str = "Stopped by user."
+
+
 class ThinkingStepEvent(BaseModel):
     event: Literal["thinking_step"] = "thinking_step"
     step: int
@@ -72,7 +86,9 @@ class ErrorEvent(BaseModel):
 
 # Union type for type hints
 UiEvent = (
-    ThinkingStepEvent
+    StartEvent
+    | CancelledEvent
+    | ThinkingStepEvent
     | ToolResultEvent
     | StatusUpdateEvent
     | TextDeltaEvent

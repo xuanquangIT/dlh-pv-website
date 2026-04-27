@@ -27,10 +27,6 @@
         {% block content %}{% endblock %}
     </main>
 
-    {% if current_page | default('') != 'solar_chat' %}
-    {% include "platform_portal/components/chatbot_panel.html" %}
-    {% endif %}
-
     {% include "platform_portal/components/logout_modal.html" %}
 
     <script>
@@ -56,7 +52,7 @@
     <script src="{{ url_for('static', path='js/components/tool_picker.js') }}?v=2" defer></script>
     <script src="{{ url_for('static', path='js/components/model_picker.js') }}?v=3" defer></script>
     <script src="{{ url_for('static', path='js/platform_portal/solar_chat_page.js') }}?v=15" defer></script>
-    <script src="{{ url_for('static', path='js/platform_portal/chatbot_widget.js') }}" defer></script>
+
     <script src="{{ url_for('static', path='js/platform_portal/common.js') }}?v=20260416-sidebar" defer></script>
     {% block scripts %}{% endblock %}
 </body>

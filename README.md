@@ -91,8 +91,7 @@ dlh-pv-website/
             ├── css/
             └── js/
                 ├── platform_portal/
-                │   ├── solar_chat_page.js
-                │   └── chatbot_widget.js
+                │   └── solar_chat_page.js
                 └── components/
                     ├── chart_renderer.js  # Vega-Lite + Leaflet dispatcher
                     ├── model_picker.js    # Provider/model selector (admin/ml_eng)
