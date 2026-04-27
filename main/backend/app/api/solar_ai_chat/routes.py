@@ -11,28 +11,22 @@ from app.repositories.solar_ai_chat.postgres_history_repository import PostgresC
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
 from app.repositories.solar_ai_chat.tool_usage_repository import ToolUsageRepository
-from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
     ChatRole,
     ChatSessionDetail,
     ChatSessionSummary,
     CreateSessionRequest,
     ForkSessionRequest,
-    IngestDocumentRequest,
-    IngestDocumentResponse,
     LLMProfileList,
     LLMProfileSummary,
-    RagStatsResponse,
     SolarChatRequest,
     SolarChatResponse,
     UpdateSessionTitleRequest,
 )
-from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailableError
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
-# intent_service was removed in Phase 4 — v2 engine has its own off-topic
-# guard. The constructor still accepts an `intent_service` kwarg for ABI
-# compat but ignores it.
+# RAG / embedding stack was removed in Phase 4.5 — never wired into the
+# v2 chat path; the manual ingest endpoints had no live consumers.
 from app.services.solar_ai_chat.model_profile_service import (
     PICKER_AUTH_ROLES,
     get_default_profile_id,
@@ -40,7 +34,6 @@ from app.services.solar_ai_chat.model_profile_service import (
     resolve_profile,
     settings_with_profile_override,
 )
-from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
 
 router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
 
@@ -67,34 +60,6 @@ def _get_history_repository() -> PostgresChatHistoryRepository:
 
 
 @lru_cache(maxsize=1)
-def _get_vector_repository() -> VectorRepository | None:
-    settings = get_solar_chat_settings()
-    if not settings.pg_host:
-        return None
-    # RAG (search_documents) is opt-in: exposing it changes the agent's tool
-    # palette and can drift synthesis on queries that have nothing to do with
-    # documents. Set SOLAR_CHAT_RAG_ENABLED=1 when docs are actually ingested.
-    import os
-    if os.environ.get("SOLAR_CHAT_RAG_ENABLED", "").strip().lower() not in {"1", "true", "yes"}:
-        return None
-    return VectorRepository(settings=settings)
-
-
-@lru_cache(maxsize=1)
-def _get_embedding_client() -> GeminiEmbeddingClient | None:
-    settings = get_solar_chat_settings()
-    keys = settings.embedding_api_keys
-    if not keys:
-        return None
-    return GeminiEmbeddingClient(
-        api_keys=keys,
-        base_url=settings.embedding_base_url,
-        model=settings.embedding_model,
-        dimensions=settings.embedding_dimensions,
-    )
-
-
-@lru_cache(maxsize=1)
 def _get_tool_usage_repository() -> ToolUsageRepository:
     """Singleton telemetry repository. Safe to construct even when the DB is
     offline; each call is internally try/except-guarded."""
@@ -112,8 +77,6 @@ def _build_chat_service(settings, model_router: LLMModelRouter | None) -> SolarA
         repository=SolarChatRepository(settings=settings),
         model_router=model_router,
         history_repository=_get_history_repository(),
-        vector_repo=_get_vector_repository(),
-        embedding_client=_get_embedding_client(),
         tool_usage_logger=_get_tool_usage_repository(),
     )
 
@@ -490,100 +453,6 @@ def fork_session(
     if result is None:
         raise HTTPException(status_code=404, detail="Source session not found.")
     return result
-
-
-# ------------------------------------------------------------------
-# RAG document ingestion (Admin only)
-# ------------------------------------------------------------------
-
-@router.post(
-    "/documents/ingest",
-    response_model=IngestDocumentResponse,
-    status_code=201,
-)
-def ingest_document(
-    request: IngestDocumentRequest,
-    _: AuthUser = Depends(require_role(["admin"])),
-) -> IngestDocumentResponse:
-    settings = get_solar_chat_settings()
-    if not settings.embedding_api_keys:
-        raise HTTPException(
-            status_code=503,
-            detail="Embedding API key is not configured.",
-        )
-
-    vector_repo = _get_vector_repository()
-    embedding_client = _get_embedding_client()
-    if not vector_repo or not embedding_client:
-        raise HTTPException(
-            status_code=503,
-            detail="RAG infrastructure is not available.",
-        )
-
-    # M3: Restrict ingestion path to within the configured data root
-    data_root = settings.resolved_data_root.parent
-    file_path = Path(request.file_path).resolve()
-    if not file_path.is_file():
-        raise HTTPException(
-            status_code=400,
-            detail=f"File not found: {request.file_path}",
-        )
-    try:
-        file_path.relative_to(data_root)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="File path must be within the configured data directory.",
-        )
-
-    ingestion_service = RagIngestionService(
-        vector_repo=vector_repo,
-        embedding_client=embedding_client,
-        chunk_size=settings.rag_chunk_size,
-        chunk_overlap=settings.rag_chunk_overlap,
-    )
-    chunks_count = ingestion_service.ingest_document(
-        file_path=file_path,
-        doc_type=request.doc_type,
-    )
-    return IngestDocumentResponse(
-        source_file=file_path.name,
-        doc_type=request.doc_type,
-        chunks_ingested=chunks_count,
-    )
-
-
-@router.get("/documents/stats", response_model=RagStatsResponse)
-def get_document_stats(
-    _: AuthUser = Depends(require_role(["admin"])),
-    vector_repo: VectorRepository | None = Depends(_get_vector_repository),
-) -> RagStatsResponse:
-    if not vector_repo:
-        return RagStatsResponse(total_chunks=0, by_doc_type={})
-    stats = vector_repo.count_chunks()
-    return RagStatsResponse(
-        total_chunks=stats["total_chunks"],
-        by_doc_type=stats["by_doc_type"],
-    )
-
-
-@router.delete("/documents/{source_file}", status_code=204)
-def delete_document(
-    source_file: str,
-    _: AuthUser = Depends(require_role(["admin"])),
-    vector_repo: VectorRepository | None = Depends(_get_vector_repository),
-) -> None:
-    if not vector_repo:
-        raise HTTPException(
-            status_code=503,
-            detail="RAG infrastructure is not available.",
-        )
-    deleted = vector_repo.delete_by_source(source_file)
-    if deleted == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No chunks found for '{source_file}'.",
-        )
 
 
 # ------------------------------------------------------------------

@@ -103,7 +103,6 @@ TOOL_DISPLAY_LABELS: dict[str, str] = {
     "recall_metric":             "Looking up canonical metric",
     "execute_sql":               "Running SQL query",
     "render_visualization":      "Rendering chart",
-    "search_documents":          "Searching documents",
 }
 
 

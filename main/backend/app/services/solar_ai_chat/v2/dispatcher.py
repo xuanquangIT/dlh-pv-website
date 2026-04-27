@@ -51,7 +51,6 @@ class V2Dispatcher:
         "recall_metric",
         "execute_sql",
         "render_visualization",
-        "search_documents",
     )
 
     def __init__(
@@ -62,15 +61,12 @@ class V2Dispatcher:
         semantic_layer: SemanticLayer | None = None,
         sql_executor: Callable[[str], list[dict[str, Any]]] | None = None,
         sample_executor: Callable[[str], list[dict[str, Any]]] | None = None,
-        search_documents_callable: Callable[[str, int], dict[str, Any]] | None = None,
     ) -> None:
         self._settings = settings
         self._role_id = role_id
         self._semantic_layer = semantic_layer or load_semantic_layer()
         self._sql_executor = sql_executor or make_sql_executor(settings)
         self._sample_executor = sample_executor or make_sample_executor(settings)
-        # search_documents is optional — only wired when RAG is enabled
-        self._search_docs = search_documents_callable
 
     def execute(
         self,
@@ -147,13 +143,6 @@ class V2Dispatcher:
                 data=args.get("data") or [],
                 title=args.get("title"),
             )
-        if fn == "search_documents":
-            if self._search_docs is None:
-                return {
-                    "error": "search_documents not available (RAG disabled).",
-                    "guidance": "Set SOLAR_CHAT_RAG_ENABLED=1 to enable.",
-                }
-            return self._search_docs(args["query"], int(args.get("top_k", 5)))
 
         return {
             "error": f"Unknown function: {fn!r}",

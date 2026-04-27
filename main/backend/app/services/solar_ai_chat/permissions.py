@@ -69,8 +69,6 @@ def _build_tool_permissions(
             if topic_val in topic_values
         }
         allowed_tools |= extra_grants.get(role, set())
-        if allowed_tools:
-            allowed_tools.add("search_documents")
         result[role] = allowed_tools
     return result
 

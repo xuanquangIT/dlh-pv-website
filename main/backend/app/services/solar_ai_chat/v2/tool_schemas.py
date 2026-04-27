@@ -130,22 +130,6 @@ V2_TOOL_SCHEMAS: list[dict] = [
             "required": ["spec", "data"],
         },
     },
-    {
-        "name": "search_documents",
-        "description": (
-            "Search internal documents (manuals, incident reports, model "
-            "changelogs) via RAG. Use ONLY for definitional questions or "
-            "context lookups — NOT for numeric/ranking data (use SQL for that)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "top_k": {"type": "integer"},
-            },
-            "required": ["query"],
-        },
-    },
 ]
 
 
@@ -153,13 +137,12 @@ V2_TOOL_SCHEMAS: list[dict] = [
 V2_SYSTEM_PROMPT = """You are Solar AI for the PV Lakehouse — a solar energy
 analytics assistant grounded in real data from a Databricks lakehouse.
 
-You have 6 primitives:
+You have 5 primitives:
 1. discover_schema(domain?) — list available tables, optionally filtered
 2. inspect_table(table_fqn) — see columns, types, sample rows
 3. recall_metric(query) — find pre-defined SQL templates for common questions
 4. execute_sql(sql, max_rows?) — run a read-only SELECT
 5. render_visualization(spec, data, title?) — emit a Vega-Lite chart spec
-6. search_documents(query) — RAG over manuals/incidents
 
 WORKFLOW for data questions:
 A. Try recall_metric FIRST — most common questions match a canonical metric.

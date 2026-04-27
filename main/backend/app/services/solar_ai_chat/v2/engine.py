@@ -554,14 +554,6 @@ class V2ChatEngine:
                     matches = (dispatch.result or {}).get("matches") or []
                     if matches:
                         last_recall_top = matches[0]
-                if call.name == "search_documents" and dispatch.ok:
-                    for doc in dispatch.result.get("matches", []) or []:
-                        sources.append(SourceMetadata(
-                            layer="RAG",
-                            dataset=str(doc.get("doc_id") or doc.get("title") or "doc"),
-                            data_source="pgvector",
-                        ))
-
                 messages.append(self._format_tool_result(call.name, dispatch.result))
         else:
             # Loop exited via max_steps without final text — fresh synthesis

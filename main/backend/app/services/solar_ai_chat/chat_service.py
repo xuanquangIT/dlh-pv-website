@@ -23,7 +23,7 @@ import json as _json
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unicodedata import normalize
 
 from app.repositories.solar_ai_chat.base_repository import (
@@ -43,10 +43,6 @@ from app.schemas.solar_ai_chat import (
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS
 from app.services.solar_ai_chat.llm_client import LLMModelRouter
-
-if TYPE_CHECKING:
-    from app.repositories.solar_ai_chat.vector_repository import VectorRepository
-    from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -115,41 +111,19 @@ class SolarAIChatService:
     def __init__(
         self,
         repository: SolarChatRepository,
-        intent_service: Any | None = None,         # accepted, unused — v2 has its own off-topic guard
         model_router: LLMModelRouter | None = None,
         history_repository: Any | None = None,
-        vector_repo: "VectorRepository | None" = None,
-        embedding_client: "GeminiEmbeddingClient | None" = None,
-        # Accept-and-ignore for callers that still pass legacy v1 args.
-        web_search_client: Any | None = None,
         tool_usage_logger: Any | None = None,
-        *,
-        # All `*_enabled` flags + token caps are v1-only; accepted for
-        # backward-compat with the routes factory then discarded.
-        planner_enabled: bool = True,
-        orchestrator_enabled: bool = True,
-        verifier_enabled: bool = True,
-        hybrid_retrieval_enabled: bool = True,
-        max_tool_steps: int = 6,
-        planner_max_output_tokens: int | None = None,
-        synthesis_max_output_tokens: int | None = None,
-        verifier_max_output_tokens: int | None = None,
-        deep_planner_enabled: bool = False,
+        # Accept-and-ignore for any external caller still passing the
+        # pre-Phase-4 kwarg surface (intent_service, vector_repo,
+        # embedding_client, web_search_client, planner_enabled, etc).
+        **legacy_kwargs: Any,
     ) -> None:
         self._repository = repository
         self._model_router = model_router
         self._history_repository = history_repository
-        self._vector_repo = vector_repo
-        self._embedding_client = embedding_client
         self._tool_usage_logger = tool_usage_logger
-        # Silence linter — these args are kept for ABI compat only.
-        _ = (
-            intent_service, web_search_client,
-            planner_enabled, orchestrator_enabled, verifier_enabled,
-            hybrid_retrieval_enabled, max_tool_steps,
-            planner_max_output_tokens, synthesis_max_output_tokens,
-            verifier_max_output_tokens, deep_planner_enabled,
-        )
+        _ = legacy_kwargs  # silently swallow ABI-compat args
 
     # ------------------------------------------------------------------
     # Public — non-streaming
