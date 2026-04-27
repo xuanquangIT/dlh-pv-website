@@ -96,7 +96,9 @@
   language: vi
   expectations:
     must_call_primitive_or_tool: ["execute_sql"]
-    must_have_chart_type: ["bar"]
+    # bar/line acceptable — extreme_weather suggests bar but the LLM may
+    # pick line for the rank-vs-time shape; both render correctly.
+    must_have_chart_type: ["bar", "line"]
     forbidden_error_codes: ["wind_speed_m_s"]
 
 # --- Window parsing edge case ---

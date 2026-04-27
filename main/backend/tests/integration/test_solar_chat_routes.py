@@ -194,14 +194,20 @@ class QueryEndpointTests(_BaseChatTest):
         cls.app = cls._build_app("admin")
         cls.mock_history = cls._build_history_mock()
         cls.mock_service = cls._build_service_mock()
-        # Patch lru_cache singletons
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        # `get_solar_ai_chat_service` is called directly inside
+        # `_resolve_chat_service_for_request`, NOT via FastAPI Depends, so
+        # `dependency_overrides` doesn't intercept it. Monkey-patch the
+        # module-level reference instead so the mock is hit on every call.
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def test_query_success(self) -> None:
@@ -331,11 +337,14 @@ class BenchmarkEndpointTests(_BaseChatTest):
         cls.mock_service = cls._build_service_mock()
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def test_benchmark_full_pipeline_success(self) -> None:
@@ -747,11 +756,14 @@ class RagDocumentEndpointTests(_BaseChatTest):
     # --- Ingest ---
 
     def test_ingest_document_no_embedding_key_returns_503(self) -> None:
+        # Endpoint reads `embedding_api_keys` (plural) — the singular field
+        # was renamed to a list/tuple. Patch the plural attr to empty so the
+        # 503 branch fires before the lru_cache'd embedding client is touched.
         with patch(
             "app.api.solar_ai_chat.routes.get_solar_chat_settings"
         ) as mock_settings_fn:
             mock_settings = MagicMock()
-            mock_settings.embedding_api_key = None
+            mock_settings.embedding_api_keys = ()
             mock_settings_fn.return_value = mock_settings
             response = self.client.post(
                 "/solar-ai-chat/documents/ingest",
@@ -843,11 +855,14 @@ class StreamEndpointTests(_BaseChatTest):
         cls.mock_service = cls._build_service_mock()
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def _make_sse_events(self) -> list[str]:
@@ -956,11 +971,14 @@ class RoleMappingTests(_BaseChatTest):
         cls.mock_service = cls._build_dynamic_service_mock()
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def test_admin_role_mapped_correctly(self) -> None:

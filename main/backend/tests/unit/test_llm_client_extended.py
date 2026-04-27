@@ -319,7 +319,14 @@ class TestGenerateWithToolsOpenAI:
             return {"choices": [{"message": {"content": "ok"}}]}
 
         router = LLMModelRouter(settings=_openai_settings(), request_executor=executor)
-        router.generate_with_tools([], [], require_function_call=True)
+        # tools must be non-empty: OpenAI rejects tool_choice without tools, so
+        # the v2 forced-synthesis path deliberately omits tool_choice when
+        # tools=[]. Pass a real tool to exercise the require-required branch.
+        router.generate_with_tools(
+            [],
+            [{"name": "noop", "parameters": {"type": "object", "properties": {}}}],
+            require_function_call=True,
+        )
         assert captured[0]["tool_choice"] == "required"
 
     def test_invalid_json_arguments_defaults_to_empty_dict(self) -> None:
@@ -377,7 +384,11 @@ class TestGenerateWithToolsAnthropic:
             return {"content": [{"type": "text", "text": "ok"}]}
 
         router = LLMModelRouter(settings=_anthropic_settings(), request_executor=executor)
-        router.generate_with_tools([], [], require_function_call=True)
+        router.generate_with_tools(
+            [],
+            [{"name": "noop", "parameters": {"type": "object", "properties": {}}}],
+            require_function_call=True,
+        )
         assert captured[0].get("tool_choice") == {"type": "any"}
 
     def test_multiple_tool_use_blocks_all_parsed(self) -> None:
@@ -441,7 +452,11 @@ class TestGenerateWithToolsGemini:
             return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
 
         router = LLMModelRouter(settings=_make_settings(), request_executor=executor)
-        router.generate_with_tools([], [], require_function_call=True)
+        router.generate_with_tools(
+            [],
+            [{"name": "noop", "parameters": {"type": "object", "properties": {}}}],
+            require_function_call=True,
+        )
         tool_config = captured[0]["tool_config"]
         assert tool_config["function_calling_config"]["mode"] == "ANY"
 

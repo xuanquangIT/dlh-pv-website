@@ -30,7 +30,9 @@ from app.schemas.solar_ai_chat import (
 from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailableError
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
-from app.services.solar_ai_chat.intent_service import VietnameseIntentService
+# intent_service was removed in Phase 4 — v2 engine has its own off-topic
+# guard. The constructor still accepts an `intent_service` kwarg for ABI
+# compat but ignores it.
 from app.services.solar_ai_chat.model_profile_service import (
     PICKER_AUTH_ROLES,
     get_default_profile_id,
@@ -99,44 +101,20 @@ def _get_tool_usage_repository() -> ToolUsageRepository:
     return ToolUsageRepository()
 
 
-@lru_cache(maxsize=1)
-def _get_shared_intent_service() -> VietnameseIntentService:
-    """Intent service is expensive to bootstrap (embedding API calls for the
-    semantic router). Share one instance across default + per-profile services."""
-    settings = get_solar_chat_settings()
-    intent_svc = VietnameseIntentService(
-        embedding_client=_get_embedding_client(),
-        semantic_enabled=settings.intent_semantic_enabled,
-        semantic_min_confidence=settings.intent_semantic_min_confidence,
-        semantic_keyword_score_threshold=settings.intent_keyword_fastpath_score,
-    )
-    intent_svc.initialize_semantic_router()
-    return intent_svc
-
-
 def _build_chat_service(settings, model_router: LLMModelRouter | None) -> SolarAIChatService:
     """Construct a SolarAIChatService with a specific router + settings copy.
 
     Used both for the cached default service and for per-request profile
-    overrides. All other dependencies (intent, repositories, embeddings) are
-    shared singletons so the override path stays cheap."""
+    overrides. Repositories, embeddings, and tool-usage logger are shared
+    singletons so the override path stays cheap.
+    """
     return SolarAIChatService(
         repository=SolarChatRepository(settings=settings),
-        intent_service=_get_shared_intent_service(),
         model_router=model_router,
         history_repository=_get_history_repository(),
         vector_repo=_get_vector_repository(),
         embedding_client=_get_embedding_client(),
         tool_usage_logger=_get_tool_usage_repository(),
-        planner_enabled=settings.planner_enabled,
-        orchestrator_enabled=settings.orchestrator_enabled,
-        verifier_enabled=settings.verifier_enabled,
-        hybrid_retrieval_enabled=settings.hybrid_retrieval_enabled,
-        max_tool_steps=settings.max_tool_steps,
-        planner_max_output_tokens=settings.llm_planner_max_output_tokens,
-        synthesis_max_output_tokens=settings.llm_synthesis_max_output_tokens,
-        verifier_max_output_tokens=settings.llm_verifier_max_output_tokens,
-        deep_planner_enabled=settings.planner_enabled,
     )
 
 

@@ -1,42 +1,45 @@
+"""Solar AI Chat — public re-exports.
+
+Phase 4 cleanup: dropped v1-only exports (VietnameseIntentService, ToolExecutor,
+DeepPlanner, ExtremeMetricQuery, normalize_vietnamese_text). The v2 engine
+in `solar_ai_chat/v2/` is the only runtime path.
+"""
+from app.services.solar_ai_chat.chat_service import SolarAIChatService
+from app.services.solar_ai_chat.embedding_client import (
+    EmbeddingUnavailableError,
+    GeminiEmbeddingClient,
+)
 from app.services.solar_ai_chat.llm_client import (
     FunctionCallRequest,
     GeminiGenerationResult,
     GeminiModelRouter,
+    GeminiToolResult,
     LLMGenerationResult,
     LLMModelRouter,
     LLMToolResult,
     ModelUnavailableError,
     ToolCallRequest,
-    GeminiToolResult,
 )
-from app.services.solar_ai_chat.intent_service import VietnameseIntentService, normalize_vietnamese_text, IntentDetectionResult
-from app.services.solar_ai_chat.chat_service import SolarAIChatService, ExtremeMetricQuery
-from app.services.solar_ai_chat.tool_executor import ToolExecutor
-from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient, EmbeddingUnavailableError
+from app.services.solar_ai_chat.permissions import (
+    ROLE_TOOL_PERMISSIONS,
+    ROLE_TOPIC_PERMISSIONS,
+)
 from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
-from app.services.solar_ai_chat.permissions import ROLE_TOPIC_PERMISSIONS, ROLE_TOOL_PERMISSIONS
-from app.services.solar_ai_chat.deep_planner import DeepPlanner
 
 __all__ = [
-    "GeminiModelRouter",
-    "GeminiGenerationResult",
-    "LLMModelRouter",
-    "LLMGenerationResult",
-    "ModelUnavailableError",
-    "FunctionCallRequest",
-    "ToolCallRequest",
-    "GeminiToolResult",
-    "LLMToolResult",
-    "VietnameseIntentService",
-    "normalize_vietnamese_text",
-    "IntentDetectionResult",
-    "SolarAIChatService",
-    "ExtremeMetricQuery",
-    "ToolExecutor",
-    "GeminiEmbeddingClient",
     "EmbeddingUnavailableError",
+    "FunctionCallRequest",
+    "GeminiEmbeddingClient",
+    "GeminiGenerationResult",
+    "GeminiModelRouter",
+    "GeminiToolResult",
+    "LLMGenerationResult",
+    "LLMModelRouter",
+    "LLMToolResult",
+    "ModelUnavailableError",
     "RagIngestionService",
-    "ROLE_TOPIC_PERMISSIONS",
     "ROLE_TOOL_PERMISSIONS",
-    "DeepPlanner",
+    "ROLE_TOPIC_PERMISSIONS",
+    "SolarAIChatService",
+    "ToolCallRequest",
 ]
