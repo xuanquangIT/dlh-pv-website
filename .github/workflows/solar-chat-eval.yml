@@ -1,0 +1,65 @@
+name: Solar Chat v2 — semantic + safety gate
+
+on:
+  pull_request:
+    paths:
+      - "main/backend/app/services/solar_ai_chat/v2/**"
+      - "main/backend/app/services/solar_ai_chat/v2/semantic/**"
+      - "main/backend/tests/unit/v2/**"
+      - "main/backend/tests/eval/question_sets/**"
+      - "main/backend/scripts/solar_chat_eval_cli.py"
+      - ".github/workflows/solar-chat-eval.yml"
+  push:
+    branches: ["main", "feat/solar-chat-engine-v2"]
+
+jobs:
+  v2-unit-and-eval-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        working-directory: dlh-pv-website
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate semantic layer YAML
+        working-directory: dlh-pv-website
+        run: |
+          python -c "from app.services.solar_ai_chat.v2.semantic_loader import load_semantic_layer; \
+                     layer = load_semantic_layer(); \
+                     assert layer.tables, 'no tables loaded'; \
+                     assert layer.metrics, 'no metrics loaded'; \
+                     assert layer.role_policies, 'no role policies loaded'; \
+                     print(f'OK: {len(layer.tables)} tables, {len(layer.metrics)} metrics, {len(layer.role_policies)} roles')"
+        env:
+          PYTHONPATH: main/backend
+
+      - name: Run v2 primitives + semantic unit tests (47 tests)
+        working-directory: dlh-pv-website
+        run: |
+          python -m pytest main/backend/tests/unit/v2/ \
+            --override-ini="addopts=" \
+            -q
+        env:
+          PYTHONPATH: main/backend
+
+      - name: Validate eval question sets parseable
+        working-directory: dlh-pv-website
+        run: |
+          python -c "import yaml, pathlib; \
+                     for p in pathlib.Path('main/backend/tests/eval/question_sets').glob('*.yaml'): \
+                         qs = yaml.safe_load(p.read_text(encoding='utf-8')) or []; \
+                         assert isinstance(qs, list) and qs, f'{p} empty or invalid'; \
+                         for q in qs: assert 'id' in q and 'query' in q, f'{p}:{q.get(\"id\")} missing required field'; \
+                         print(f'OK {p.name}: {len(qs)} questions')"
+
+  # Optional: a full live capture+judge job runs against staging when SOLAR_CHAT_EVAL_BASE_URL is set.
+  # Wire this in once a long-lived staging environment is provisioned.

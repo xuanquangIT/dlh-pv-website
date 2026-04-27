@@ -23,14 +23,14 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.GENERAL,
         ChatTopic.SYSTEM_OVERVIEW,
         ChatTopic.ML_MODEL,
-        ChatTopic.FORECAST_72H,
+        ChatTopic.FORECAST_7D,
         ChatTopic.FACILITY_INFO,
     },
     ChatRole.DATA_ANALYST: {
         ChatTopic.GENERAL,
         ChatTopic.SYSTEM_OVERVIEW,
         ChatTopic.ENERGY_PERFORMANCE,
-        ChatTopic.FORECAST_72H,
+        ChatTopic.FORECAST_7D,
         ChatTopic.FACILITY_INFO,
     },
     ChatRole.ADMIN: {
@@ -39,7 +39,7 @@ ROLE_TOPIC_PERMISSIONS: dict[ChatRole, set[ChatTopic]] = {
         ChatTopic.ENERGY_PERFORMANCE,
         ChatTopic.ML_MODEL,
         ChatTopic.PIPELINE_STATUS,
-        ChatTopic.FORECAST_72H,
+        ChatTopic.FORECAST_7D,
         ChatTopic.DATA_QUALITY_ISSUES,
         ChatTopic.FACILITY_INFO,
     },
@@ -69,8 +69,6 @@ def _build_tool_permissions(
             if topic_val in topic_values
         }
         allowed_tools |= extra_grants.get(role, set())
-        if allowed_tools:
-            allowed_tools.add("search_documents")
         result[role] = allowed_tools
     return result
 

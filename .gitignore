@@ -65,3 +65,6 @@ coverage.xml
 **/test_reports/
 
 viz_summary.json
+# Battery / eval CLI run reports — write-only telemetry, safe to delete
+main/outputs/
+main/backend/reports/

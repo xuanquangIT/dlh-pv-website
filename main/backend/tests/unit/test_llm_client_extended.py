@@ -283,7 +283,7 @@ class TestGenerateWithToolsOpenAI:
                 "message": {
                     "tool_calls": [{
                         "function": {
-                            "name": "get_forecast_72h",
+                            "name": "get_forecast_7d",
                             "arguments": '{"timeframe_days": 3}',
                         }
                     }]
@@ -293,10 +293,10 @@ class TestGenerateWithToolsOpenAI:
         router = LLMModelRouter(settings=_openai_settings(), request_executor=executor)
         result = router.generate_with_tools(
             messages=[{"role": "user", "parts": [{"text": "forecast"}]}],
-            tools=[{"name": "get_forecast_72h", "parameters": {}}],
+            tools=[{"name": "get_forecast_7d", "parameters": {}}],
         )
         assert result.function_call is not None
-        assert result.function_call.name == "get_forecast_72h"
+        assert result.function_call.name == "get_forecast_7d"
         assert result.function_call.arguments == {"timeframe_days": 3}
 
     def test_text_fallback_when_no_tool_calls(self) -> None:
@@ -319,7 +319,14 @@ class TestGenerateWithToolsOpenAI:
             return {"choices": [{"message": {"content": "ok"}}]}
 
         router = LLMModelRouter(settings=_openai_settings(), request_executor=executor)
-        router.generate_with_tools([], [], require_function_call=True)
+        # tools must be non-empty: OpenAI rejects tool_choice without tools, so
+        # the v2 forced-synthesis path deliberately omits tool_choice when
+        # tools=[]. Pass a real tool to exercise the require-required branch.
+        router.generate_with_tools(
+            [],
+            [{"name": "noop", "parameters": {"type": "object", "properties": {}}}],
+            require_function_call=True,
+        )
         assert captured[0]["tool_choice"] == "required"
 
     def test_invalid_json_arguments_defaults_to_empty_dict(self) -> None:
@@ -377,13 +384,17 @@ class TestGenerateWithToolsAnthropic:
             return {"content": [{"type": "text", "text": "ok"}]}
 
         router = LLMModelRouter(settings=_anthropic_settings(), request_executor=executor)
-        router.generate_with_tools([], [], require_function_call=True)
+        router.generate_with_tools(
+            [],
+            [{"name": "noop", "parameters": {"type": "object", "properties": {}}}],
+            require_function_call=True,
+        )
         assert captured[0].get("tool_choice") == {"type": "any"}
 
     def test_multiple_tool_use_blocks_all_parsed(self) -> None:
         executor = MagicMock(return_value={
             "content": [
-                {"type": "tool_use", "name": "get_forecast_72h", "input": {}},
+                {"type": "tool_use", "name": "get_forecast_7d", "input": {}},
                 {"type": "tool_use", "name": "get_ml_model_info", "input": {"v": 1}},
             ]
         })
@@ -393,7 +404,7 @@ class TestGenerateWithToolsAnthropic:
             tools=[],
         )
         assert len(result.function_calls) == 2
-        assert result.function_calls[0].name == "get_forecast_72h"
+        assert result.function_calls[0].name == "get_forecast_7d"
         assert result.function_calls[1].name == "get_ml_model_info"
 
 
@@ -441,7 +452,11 @@ class TestGenerateWithToolsGemini:
             return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]}
 
         router = LLMModelRouter(settings=_make_settings(), request_executor=executor)
-        router.generate_with_tools([], [], require_function_call=True)
+        router.generate_with_tools(
+            [],
+            [{"name": "noop", "parameters": {"type": "object", "properties": {}}}],
+            require_function_call=True,
+        )
         tool_config = captured[0]["tool_config"]
         assert tool_config["function_calling_config"]["mode"] == "ANY"
 

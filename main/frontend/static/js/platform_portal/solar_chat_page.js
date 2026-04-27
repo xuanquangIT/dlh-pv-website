@@ -87,11 +87,13 @@
     queryStream(payload, handlers) {
       const controller = new AbortController();
       const {
+        onStart = () => {},
         onStatus = () => {},
         onThinkingStep = () => {},
         onToolResult = () => {},
         onTextDelta = () => {},
         onDone = () => {},
+        onCancelled = () => {},
         onError = () => {}
       } = handlers || {};
 
@@ -105,7 +107,9 @@
             signal: controller.signal
           });
         } catch (fetchErr) {
-          if (fetchErr.name !== "AbortError") {
+          if (fetchErr.name === "AbortError") {
+            onCancelled({ event: "cancelled", trace_id: "", message: "Stopped by user." });
+          } else {
             onError({ message: fetchErr.message || "Network error" });
           }
           return;
@@ -135,24 +139,40 @@
               let evt;
               try { evt = JSON.parse(line.slice(6)); } catch (e) { continue; }
               switch (evt.event) {
-                case "status_update":  onStatus(evt); break;
+                case "start":         onStart(evt); break;
+                case "status_update": onStatus(evt); break;
                 case "thinking_step": onThinkingStep(evt); break;
                 case "tool_result":   onToolResult(evt); break;
                 case "text_delta":    onTextDelta(evt); break;
                 case "done":          onDone(evt); break;
+                case "cancelled":     onCancelled(evt); break;
                 case "error":         onError(evt); break;
                 default: break;
               }
             }
           }
         } catch (readErr) {
-          if (readErr.name !== "AbortError") {
+          if (readErr.name === "AbortError") {
+            onCancelled({ event: "cancelled", trace_id: "", message: "Stopped by user." });
+          } else {
             onError({ message: readErr.message || "Stream read error" });
           }
         }
       })();
 
       return controller;
+    },
+
+    async stop(traceId) {
+      if (!traceId) return { cancelled: false };
+      try {
+        return await requestJson("/solar-ai-chat/stop", {
+          method: "POST",
+          body: JSON.stringify({ trace_id: traceId })
+        });
+      } catch (err) {
+        return { cancelled: false };
+      }
     },
 
     async getSession(sessionId) {
@@ -731,6 +751,7 @@
     const messagesElement = document.getElementById("page-chat-messages");
     const inputElement = document.getElementById("page-chat-input");
     const sendButton = document.getElementById("page-chat-send");
+    const stopButton = document.getElementById("page-chat-stop");
     const statusElement = document.getElementById("solar-chat-status-text");
     const errorElement = document.getElementById("page-chat-error");
     const feedbackContainer = document.getElementById("page-chat-feedback");
@@ -834,7 +855,9 @@
       pendingDeleteProject: "",
       pendingDeleteSessionId: "",
       renameTarget: null,
-      contextSessionId: ""
+      contextSessionId: "",
+      activeTraceId: "",
+      activeStreamController: null
     };
 
     const messageList = new MessageList(messagesElement);
@@ -850,6 +873,25 @@
     messageInput.init();
     messageList.render(state.messages);
 
+    if (stopButton) {
+      stopButton.addEventListener("click", function () {
+        if (!state.loading) return;
+        stopButton.disabled = true;
+        setStatus("Stopping…");
+        var traceId = state.activeTraceId;
+        var ctrl = state.activeStreamController;
+        // Server-side soft stop: engine checks the cancel event between LLM
+        // turns and exits with a CancelledEvent. Also abort the fetch so the
+        // browser stops reading the stream immediately.
+        SolarChatApi.stop(traceId).finally(function () {
+          if (ctrl) {
+            try { ctrl.abort(); } catch (e) { /* ignore */ }
+          }
+          stopButton.disabled = false;
+        });
+      });
+    }
+
     function getProjectLabel(projectKey) {
       return projectKey === NO_PROJECT_KEY ? NO_PROJECT_LABEL : projectKey;
     }
@@ -861,6 +903,16 @@
     function setLoading(loading, messageText) {
       state.loading = loading;
       messageInput.setDisabled(loading);
+      if (stopButton) {
+        stopButton.hidden = !loading;
+      }
+      if (sendButton) {
+        sendButton.hidden = !!loading;
+      }
+      if (!loading) {
+        state.activeTraceId = "";
+        state.activeStreamController = null;
+      }
     }
 
     function setStatus(text) {
@@ -1546,6 +1598,23 @@
               model_name: modelSelection.model_name || null,
             },
             {
+              onStart: function (evt) {
+                state.activeTraceId = evt.trace_id || "";
+              },
+              onCancelled: function (evt) {
+                if (taskTracker) taskTracker.setOpen(false);
+                var pendingIndex = state.messages.findIndex(function (item) {
+                  return item.id === pendingMessageId && item.isPending;
+                });
+                if (pendingIndex >= 0) {
+                  state.messages.splice(pendingIndex, 1);
+                  if (!messageList.removeById(pendingMessageId)) {
+                    messageList.render(state.messages);
+                  }
+                }
+                setStatus("Stopped");
+                resolve();
+              },
               onStatus: function (evt) {
                 setStatus(evt.text || "Processing");
                 if (taskTracker) taskTracker.setStatus(evt.text || "Processing");
@@ -1644,9 +1713,12 @@
               }
             }
           );
+          state.activeStreamController = streamController;
         });
 
       } catch (error) {
+        const wasStopped = (error && (error.name === "AbortError"
+            || /aborted/i.test(error.message || "")));
         const pendingIndex = state.messages.findIndex(function (item) {
           return item.id === pendingMessageId && item.isPending;
         });
@@ -1656,8 +1728,12 @@
             messageList.render(state.messages);
           }
         }
-        setStatus("Error");
-        setError(error instanceof Error ? error.message : "Unexpected error occurred.");
+        if (wasStopped) {
+          setStatus("Stopped");
+        } else {
+          setStatus("Error");
+          setError(error instanceof Error ? error.message : "Unexpected error occurred.");
+        }
       } finally {
         setLoading(false);
       }

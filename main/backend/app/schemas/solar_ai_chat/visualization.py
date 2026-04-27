@@ -38,15 +38,51 @@ class DataTablePayload(BaseModel):
 
 
 class ChartPayload(BaseModel):
-    """Plotly chart specification built on the backend; rendered by Plotly.js."""
+    """Chart specification built on the backend.
+
+    The engine emits Vega-Lite (`format='vega-lite'`, `spec` populated)
+    or Leaflet maps (`format='leaflet-map'`, `points` populated). Frontend
+    `chart_renderer.js` dispatches on `format`. Plotly fields stay on the
+    model so old persisted snapshots keep deserialising.
+    """
 
     model_config = ConfigDict(protected_namespaces=())
 
-    chart_type: Literal["line", "bar", "pie", "scatter", "histogram", "area", "scatter_geo"]
+    chart_type: str = Field(
+        description=(
+            "Chart kind: bar|line|scatter|point|circle|area|geoshape|map|"
+            "histogram|pie|scatter_geo. Vega-Lite renders any built-in mark."
+        ),
+    )
     title: str
     description: str | None = None
-    plotly_spec: dict[str, Any] = Field(
-        description="Dict with `data` (list of traces) and `layout` compatible with Plotly.newPlot."
+    format: Literal["plotly", "vega-lite", "leaflet-map"] = Field(
+        default="vega-lite",
+        description="Renderer: 'vega-lite' (default), 'leaflet-map' (geo maps with native pan/zoom), 'plotly' (legacy snapshots only).",
+    )
+    plotly_spec: dict[str, Any] | None = Field(
+        default=None,
+        description="Legacy Plotly.newPlot dict; populated only on stored snapshots from before the Vega-Lite cutover.",
+    )
+    spec: dict[str, Any] | None = Field(
+        default=None,
+        description="Vega-Lite spec with `mark` + `encoding` + `data.values`.",
+    )
+    points: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="leaflet-map only: list of {lat, lng, label, size_value, attrs} points.",
+    )
+    size_field: str | None = Field(
+        default=None,
+        description="leaflet-map only: column name used to size circle markers (legend label).",
+    )
+    label_field: str | None = Field(
+        default=None,
+        description="leaflet-map only: column name used as the marker label / popup title.",
+    )
+    row_count: int | None = Field(
+        default=None,
+        description="Number of rows backing the chart.",
     )
     source_metric_key: str | None = Field(
         default=None,

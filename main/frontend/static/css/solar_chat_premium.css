@@ -1033,6 +1033,20 @@ html[data-theme="dark"] .solar-chart-desc { color: #8ea0b8; }
 .solar-chart-plot .main-svg {
   width: 100% !important;
 }
+/* Vega-Lite chart container (v2 engine) — vega-embed needs explicit width
+ * for `width: "container"` autosizing to work. */
+.solar-chart-vega {
+  width: 100% !important;
+}
+.solar-chart-vega .vega-embed {
+  width: 100%;
+  display: block;
+}
+.solar-chart-vega .vega-embed canvas,
+.solar-chart-vega .vega-embed svg {
+  max-width: 100%;
+  height: auto;
+}
 
 /* =====================================================================
  * Solar AI Chat — ChatGPT/Claude-style redesign
@@ -1249,6 +1263,59 @@ html[data-theme="dark"] .solar-chat-input-wrap > .solar-chat-input {
   font-size: 13.5px !important;
   height: 48px !important;
   min-width: 84px !important;
+}
+
+/* Stop button — distinct from Send (slate-grey, not green), same footprint
+   so the layout doesn't shift when toggling between Send/Stop states. */
+.solar-chat-input-wrap > .solar-chat-stop {
+  flex: 0 0 auto !important;
+  border-radius: 16px !important;
+  padding: 0 20px !important;
+  font-size: 13.5px !important;
+  height: 48px !important;
+  min-width: 84px !important;
+  background: linear-gradient(135deg, #2c3a4f 0%, #1a2435 100%) !important;
+  color: #ffffff !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 4px 12px rgba(20, 30, 45, 0.25) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  cursor: pointer !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s ease !important;
+}
+
+.solar-chat-input-wrap > .solar-chat-stop:not(:disabled):hover {
+  background: linear-gradient(135deg, #38485f 0%, #243047 100%) !important;
+  box-shadow: 0 6px 16px rgba(20, 30, 45, 0.35) !important;
+  transform: translateY(-1px) !important;
+}
+
+.solar-chat-input-wrap > .solar-chat-stop:not(:disabled):active {
+  transform: translateY(0) scale(0.97) !important;
+}
+
+.solar-chat-input-wrap > .solar-chat-stop:disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+}
+
+/* HTML `hidden` attribute must win over the display:inline-flex above. */
+.solar-chat-input-wrap > .solar-chat-stop[hidden],
+.solar-chat-input-wrap > .solar-chat-send[hidden] {
+  display: none !important;
+}
+
+.solar-chat-input-wrap > .solar-chat-stop svg {
+  width: 11px !important;
+  height: 11px !important;
+  margin: 0 !important;
+}
+
+html[data-theme="dark"] .solar-chat-input-wrap > .solar-chat-stop {
+  background: linear-gradient(135deg, #1f2a3d 0%, #11192a 100%) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
 }
 
 /* Thinking trace accordion — tighter for the unbubbled layout */

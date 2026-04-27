@@ -11,26 +11,22 @@ from app.repositories.solar_ai_chat.postgres_history_repository import PostgresC
 from app.repositories.solar_ai_chat.chat_repository import SolarChatRepository
 from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
 from app.repositories.solar_ai_chat.tool_usage_repository import ToolUsageRepository
-from app.repositories.solar_ai_chat.vector_repository import VectorRepository
 from app.schemas.solar_ai_chat import (
     ChatRole,
     ChatSessionDetail,
     ChatSessionSummary,
     CreateSessionRequest,
     ForkSessionRequest,
-    IngestDocumentRequest,
-    IngestDocumentResponse,
     LLMProfileList,
     LLMProfileSummary,
-    RagStatsResponse,
     SolarChatRequest,
     SolarChatResponse,
     UpdateSessionTitleRequest,
 )
-from app.services.solar_ai_chat.embedding_client import GeminiEmbeddingClient
 from app.services.solar_ai_chat.llm_client import LLMModelRouter, ModelUnavailableError
 from app.services.solar_ai_chat.chat_service import SolarAIChatService
-from app.services.solar_ai_chat.intent_service import VietnameseIntentService
+# RAG / embedding stack was removed in Phase 4.5 — never wired into the
+# chat path; the manual ingest endpoints had no live consumers.
 from app.services.solar_ai_chat.model_profile_service import (
     PICKER_AUTH_ROLES,
     get_default_profile_id,
@@ -38,7 +34,6 @@ from app.services.solar_ai_chat.model_profile_service import (
     resolve_profile,
     settings_with_profile_override,
 )
-from app.services.solar_ai_chat.rag_ingestion_service import RagIngestionService
 
 router = APIRouter(prefix="/solar-ai-chat", tags=["Solar AI Chat"])
 
@@ -65,88 +60,58 @@ def _get_history_repository() -> PostgresChatHistoryRepository:
 
 
 @lru_cache(maxsize=1)
-def _get_vector_repository() -> VectorRepository | None:
-    settings = get_solar_chat_settings()
-    if not settings.pg_host:
-        return None
-    # RAG (search_documents) is opt-in: exposing it changes the agent's tool
-    # palette and can drift synthesis on queries that have nothing to do with
-    # documents. Set SOLAR_CHAT_RAG_ENABLED=1 when docs are actually ingested.
-    import os
-    if os.environ.get("SOLAR_CHAT_RAG_ENABLED", "").strip().lower() not in {"1", "true", "yes"}:
-        return None
-    return VectorRepository(settings=settings)
-
-
-@lru_cache(maxsize=1)
-def _get_embedding_client() -> GeminiEmbeddingClient | None:
-    settings = get_solar_chat_settings()
-    keys = settings.embedding_api_keys
-    if not keys:
-        return None
-    return GeminiEmbeddingClient(
-        api_keys=keys,
-        base_url=settings.embedding_base_url,
-        model=settings.embedding_model,
-        dimensions=settings.embedding_dimensions,
-    )
-
-
-@lru_cache(maxsize=1)
 def _get_tool_usage_repository() -> ToolUsageRepository:
     """Singleton telemetry repository. Safe to construct even when the DB is
     offline; each call is internally try/except-guarded."""
     return ToolUsageRepository()
 
 
-@lru_cache(maxsize=1)
-def _get_shared_intent_service() -> VietnameseIntentService:
-    """Intent service is expensive to bootstrap (embedding API calls for the
-    semantic router). Share one instance across default + per-profile services."""
-    settings = get_solar_chat_settings()
-    intent_svc = VietnameseIntentService(
-        embedding_client=_get_embedding_client(),
-        semantic_enabled=settings.intent_semantic_enabled,
-        semantic_min_confidence=settings.intent_semantic_min_confidence,
-        semantic_keyword_score_threshold=settings.intent_keyword_fastpath_score,
-    )
-    intent_svc.initialize_semantic_router()
-    return intent_svc
-
-
 def _build_chat_service(settings, model_router: LLMModelRouter | None) -> SolarAIChatService:
     """Construct a SolarAIChatService with a specific router + settings copy.
 
     Used both for the cached default service and for per-request profile
-    overrides. All other dependencies (intent, repositories, embeddings) are
-    shared singletons so the override path stays cheap."""
+    overrides. Repositories, embeddings, and tool-usage logger are shared
+    singletons so the override path stays cheap.
+    """
     return SolarAIChatService(
         repository=SolarChatRepository(settings=settings),
-        intent_service=_get_shared_intent_service(),
         model_router=model_router,
         history_repository=_get_history_repository(),
-        vector_repo=_get_vector_repository(),
-        embedding_client=_get_embedding_client(),
         tool_usage_logger=_get_tool_usage_repository(),
-        planner_enabled=settings.planner_enabled,
-        orchestrator_enabled=settings.orchestrator_enabled,
-        verifier_enabled=settings.verifier_enabled,
-        hybrid_retrieval_enabled=settings.hybrid_retrieval_enabled,
-        max_tool_steps=settings.max_tool_steps,
-        planner_max_output_tokens=settings.llm_planner_max_output_tokens,
-        synthesis_max_output_tokens=settings.llm_synthesis_max_output_tokens,
-        verifier_max_output_tokens=settings.llm_verifier_max_output_tokens,
-        deep_planner_enabled=settings.planner_enabled,
     )
 
 
 @lru_cache(maxsize=1)
 def get_solar_ai_chat_service() -> SolarAIChatService:
-    settings = get_solar_chat_settings()
+    """Build the cached server-default chat service.
+
+    Priority order for the default LLM connection:
+      1. Profile flagged ``SOLAR_CHAT_PROFILE_<N>_DEFAULT=true`` —
+         lets operators pick any provider as default without duplicating
+         credentials in the legacy ``SOLAR_CHAT_LLM_*`` keys.
+      2. Legacy ``SOLAR_CHAT_LLM_*`` env vars (still honoured for
+         backwards compatibility).
+      3. No router (chat falls back to scope-guard / direct synthesis).
+    """
+    base_settings = get_solar_chat_settings()
+    default_profile_id = get_default_profile_id()
+    default_profile = (
+        resolve_profile(default_profile_id, "admin")
+        if default_profile_id else None
+    )
+    if default_profile is not None:
+        # Use the default profile's connection (provider, base_url, key,
+        # primary/fallback model) — this becomes the server-wide default
+        # for every request that doesn't carry a per-request override.
+        effective_settings = settings_with_profile_override(
+            base_settings, default_profile, model_name=None,
+        )
+    else:
+        effective_settings = base_settings
     model_router: LLMModelRouter | None = None
-    if settings.llm_api_key or settings.llm_base_url:
-        model_router = LLMModelRouter(settings=settings)
-    return _build_chat_service(settings, model_router)
+    if effective_settings.llm_api_key or effective_settings.llm_base_url:
+        model_router = LLMModelRouter(settings=effective_settings)
+    return _build_chat_service(effective_settings, model_router)
 
 
 def _resolve_chat_service_for_request(
@@ -488,100 +453,6 @@ def fork_session(
     if result is None:
         raise HTTPException(status_code=404, detail="Source session not found.")
     return result
-
-
-# ------------------------------------------------------------------
-# RAG document ingestion (Admin only)
-# ------------------------------------------------------------------
-
-@router.post(
-    "/documents/ingest",
-    response_model=IngestDocumentResponse,
-    status_code=201,
-)
-def ingest_document(
-    request: IngestDocumentRequest,
-    _: AuthUser = Depends(require_role(["admin"])),
-) -> IngestDocumentResponse:
-    settings = get_solar_chat_settings()
-    if not settings.embedding_api_keys:
-        raise HTTPException(
-            status_code=503,
-            detail="Embedding API key is not configured.",
-        )
-
-    vector_repo = _get_vector_repository()
-    embedding_client = _get_embedding_client()
-    if not vector_repo or not embedding_client:
-        raise HTTPException(
-            status_code=503,
-            detail="RAG infrastructure is not available.",
-        )
-
-    # M3: Restrict ingestion path to within the configured data root
-    data_root = settings.resolved_data_root.parent
-    file_path = Path(request.file_path).resolve()
-    if not file_path.is_file():
-        raise HTTPException(
-            status_code=400,
-            detail=f"File not found: {request.file_path}",
-        )
-    try:
-        file_path.relative_to(data_root)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="File path must be within the configured data directory.",
-        )
-
-    ingestion_service = RagIngestionService(
-        vector_repo=vector_repo,
-        embedding_client=embedding_client,
-        chunk_size=settings.rag_chunk_size,
-        chunk_overlap=settings.rag_chunk_overlap,
-    )
-    chunks_count = ingestion_service.ingest_document(
-        file_path=file_path,
-        doc_type=request.doc_type,
-    )
-    return IngestDocumentResponse(
-        source_file=file_path.name,
-        doc_type=request.doc_type,
-        chunks_ingested=chunks_count,
-    )
-
-
-@router.get("/documents/stats", response_model=RagStatsResponse)
-def get_document_stats(
-    _: AuthUser = Depends(require_role(["admin"])),
-    vector_repo: VectorRepository | None = Depends(_get_vector_repository),
-) -> RagStatsResponse:
-    if not vector_repo:
-        return RagStatsResponse(total_chunks=0, by_doc_type={})
-    stats = vector_repo.count_chunks()
-    return RagStatsResponse(
-        total_chunks=stats["total_chunks"],
-        by_doc_type=stats["by_doc_type"],
-    )
-
-
-@router.delete("/documents/{source_file}", status_code=204)
-def delete_document(
-    source_file: str,
-    _: AuthUser = Depends(require_role(["admin"])),
-    vector_repo: VectorRepository | None = Depends(_get_vector_repository),
-) -> None:
-    if not vector_repo:
-        raise HTTPException(
-            status_code=503,
-            detail="RAG infrastructure is not available.",
-        )
-    deleted = vector_repo.delete_by_source(source_file)
-    if deleted == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No chunks found for '{source_file}'.",
-        )
 
 
 # ------------------------------------------------------------------

@@ -1,0 +1,120 @@
+# Phase-3 verification smoke set — 12 high-signal questions across the
+# v2 surface. Picks one representative from each category in regression_v1.yaml
+# but skips comparison/conceptual cases that depend on the (just-pushed)
+# engine.py guard tweak — those will only pass after server restart.
+#
+# Target latency: ~6-8 minutes for the full set with gpt-5-mini.
+
+# --- Map / geo ---
+- id: smoke_facility_map_vi
+  query: "Cho tôi xem map vị trí các trạm điện mặt trời"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    must_have_chart_type: ["scatter_geo", "geo", "circle", "point", "map"]
+    must_have_dataset_columns: ["latitude", "longitude"]
+    min_dataset_rows: 1
+
+# --- Top-N ranking ---
+- id: smoke_top5_energy_vi
+  query: "Top 5 trạm sản lượng cao nhất 30 ngày qua, vẽ biểu đồ cột"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql", "render_visualization"]
+    must_have_chart_type: ["bar"]
+    min_dataset_rows: 1
+
+# --- System overview / KPI ---
+- id: smoke_system_overview_en
+  query: "Give me a system overview for the last 7 days"
+  role: admin
+  language: en
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    forbidden_in_answer: ["I only support"]
+
+# --- Forecast ---
+- id: smoke_forecast_7d_vi
+  query: "Dự báo sản lượng 7 ngày tới"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    must_have_chart_type: ["line", "bar"]
+
+# --- Hourly trend ---
+- id: smoke_hourly_trend_en
+  query: "Hourly energy generation trend for the last 7 days"
+  role: admin
+  language: en
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    must_have_chart_type: ["line", "bar"]
+
+# --- ML model info ---
+- id: smoke_ml_metrics_vi
+  query: "Mô hình dự báo hiện tại có R2, RMSE, NRMSE bao nhiêu?"
+  role: ml_engineer
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    must_mention: ["R", "RMSE"]
+
+# --- Off-topic refusal ---
+- id: smoke_offtopic_recipe_vi
+  query: "Cách nấu phở bò chuẩn vị Hà Nội"
+  role: admin
+  language: vi
+  expectations:
+    must_mention: ["solar", "PV", "trạm", "không thuộc", "scope", "năng lượng"]
+
+# --- Greeting (must NOT refuse) ---
+- id: smoke_greeting_vi
+  query: "Chào bạn, bạn làm được gì?"
+  role: admin
+  language: vi
+  expectations:
+    forbidden_in_answer: ["Tôi chỉ hỗ trợ"]
+    must_mention: ["solar", "PV", "trạm", "hỗ trợ"]
+
+# --- Schema-drift regression (uses fixed extreme_aqi metric) ---
+- id: smoke_extreme_aqi_after_fix_vi
+  query: "5 lần đo AQI cao nhất 30 ngày qua"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    forbidden_error_codes: ["Column 'aqi' cannot be resolved", "aqi cannot be resolved"]
+    min_dataset_rows: 1
+
+# --- Schema-drift regression (uses fixed extreme_weather metric) ---
+- id: smoke_top_wind_after_fix_vi
+  query: "Trạm nào tốc độ gió trung bình cao nhất 30 ngày qua, vẽ biểu đồ"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    # bar/line acceptable — extreme_weather suggests bar but the LLM may
+    # pick line for the rank-vs-time shape; both render correctly.
+    must_have_chart_type: ["bar", "line"]
+    forbidden_error_codes: ["wind_speed_m_s"]
+
+# --- Window parsing edge case ---
+- id: smoke_yesterday_vi
+  query: "Trạm nào sản lượng cao nhất hôm qua?"
+  role: admin
+  language: vi
+  expectations:
+    must_call_primitive_or_tool: ["execute_sql"]
+    min_dataset_rows: 1
+
+# --- Conceptual question (should answer without SQL) ---
+- id: smoke_conceptual_pr_vi
+  query: "Performance Ratio là gì?"
+  role: admin
+  language: vi
+  expectations:
+    must_mention: ["thực tế", "lý thuyết", "tỷ lệ"]
+    forbidden_in_answer: ["Tôi chỉ hỗ trợ"]

@@ -54,7 +54,7 @@
                 <button class="solar-chat-chip" type="button"
                     data-chat-prompt="What is the current ML model performance?">ML model performance</button>
                 <button class="solar-chat-chip" type="button"
-                    data-chat-prompt="Show the 72-hour energy forecast">72h forecast</button>
+                    data-chat-prompt="Show the 7-day energy forecast (D+1 to D+7)">7-day forecast</button>
                 <button class="solar-chat-chip" type="button"
                     data-chat-prompt="Which facility had the highest energy output yesterday?">Highest output yesterday</button>
                 <button class="solar-chat-chip" type="button"
@@ -80,6 +80,11 @@
                 <textarea id="page-chat-input" class="solar-chat-input"
                     placeholder="Ask about energy, pipeline, ML models, forecasts"></textarea>
                 <button class="btn btn-pri solar-chat-send" type="button" id="page-chat-send">Send</button>
+                <button class="solar-chat-stop" type="button" id="page-chat-stop" hidden
+                    aria-label="Stop generating">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="6" y="6" width="12" height="12" rx="1.5" fill="currentColor"/>
+                    </svg><span>Stop</span></button>
             </div>
         </div>
 
