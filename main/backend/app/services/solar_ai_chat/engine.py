@@ -259,7 +259,9 @@ class ChatEngine:
 
             if not calls:
                 # LLM produced final text — done
-                final_text = _strip_reasoning(turn.text or "")
+                final_text = _strip_inline_cot(
+                    _strip_reasoning(turn.text or ""), language,
+                )
                 break
 
             # Cap parallel-call fan-out. Some models (grok-4-fast) emit 5-6
@@ -626,6 +628,20 @@ class ChatEngine:
                 final_text = _strip_draft_instruction_suffix(draft)
                 fallback_used = True
 
+        # MISSING-DATA SUPPRESSION. When the answer explicitly says the
+        # asked-about column isn't in the dataset, suppress the chart +
+        # data_table + key_metrics so we don't ship irrelevant numbers
+        # underneath the refusal. Without this, asking "humidity impact"
+        # would render a wind_speed scatter and table beside the
+        # "no humidity data" answer.
+        if _answer_signals_missing_column(final_text):
+            logger.info(
+                "engine_missing_column_refusal — suppressing chart + data_table",
+            )
+            chart_payload = None
+            data_table_payload = None
+            key_metrics = {}
+
         return ChatEngineResult(
             answer=final_text,
             model_used=model_used,
@@ -758,7 +774,9 @@ class ChatEngine:
 
         try:
             resp = self._router.generate_with_tools(messages=msgs, tools=[])
-            answer = _strip_reasoning(resp.text or "")
+            answer = _strip_inline_cot(
+                _strip_reasoning(resp.text or ""), language,
+            )
             return ChatEngineResult(
                 answer=answer or (
                     "Xin lỗi, tôi chưa thể trả lời câu hỏi đó."
@@ -965,7 +983,9 @@ class ChatEngine:
             synth = self._router.generate_with_tools(
                 messages=clean_messages, tools=[],
             )
-            text = _strip_reasoning(synth.text or "")
+            text = _strip_inline_cot(
+                _strip_reasoning(synth.text or ""), language,
+            )
             model_used = synth.model_used
             fb_used = synth.fallback_used or fallback_used
         except Exception as exc:  # noqa: BLE001
@@ -1319,6 +1339,85 @@ def _strip_reasoning(text: str) -> str:
         flags=re.IGNORECASE,
     )
     return cleaned.strip()
+
+
+# Inline-CoT prose detector. Minimax M2.7 (and other reasoning models)
+# sometimes emit chain-of-thought as plain English paragraphs ahead of
+# the actual answer — no <think> wrapper at all. Telltale openers:
+_INLINE_COT_OPENERS = (
+    "the user is",       "the user wants",     "the user asked",
+    "the user provided", "the user requests",  "the user says",
+    "let me",            "let's ",
+    "i need to",         "i should",           "i'll ",          "i will ",
+    "i'm noticing",      "i notice",           "i can see",
+    "looking at",        "looking again",
+    "analyzing the",     "to answer",          "first, ",
+    "i can analyze",     "we have ",           "based on the data",
+    "the data ",         "from the data",      "given the data",
+)
+# Vietnamese diacritics range — used to detect when a paragraph belongs to
+# the user's language vs. inline English meta-prose.
+_VIETNAMESE_CHARS = re.compile(r"[ăâđêôơưàáảãạằắẳẵặầấẩẫậèéẻẽẹềếểễệìíỉĩịòóỏõọồốổỗộờớởỡợùúủũụừứửữựỳýỷỹỵĂÂĐÊÔƠƯ]")
+
+
+def _strip_inline_cot(text: str, language: str) -> str:
+    """Drop leading meta-prose paragraphs that look like English chain-of-
+    thought when the user asked in Vietnamese (Minimax pattern). Only
+    triggers when text leads with English meta phrases AND a later
+    paragraph contains Vietnamese diacritics — guarantees we keep at least
+    one user-facing paragraph."""
+    if not text or language != "vi":
+        return text
+    paragraphs = re.split(r"\n\s*\n", text)
+    if len(paragraphs) < 2:
+        return text
+    has_vi_paragraph = any(_VIETNAMESE_CHARS.search(p) for p in paragraphs)
+    if not has_vi_paragraph:
+        return text  # answer is genuinely English — leave alone
+    keep_from = 0
+    for i, p in enumerate(paragraphs):
+        stripped_low = p.strip().lower()
+        if not stripped_low:
+            continue
+        # If this paragraph looks like English CoT meta-prose AND has no
+        # Vietnamese chars, mark for removal.
+        looks_meta = any(stripped_low.startswith(op) for op in _INLINE_COT_OPENERS)
+        no_vi = not _VIETNAMESE_CHARS.search(p)
+        if looks_meta and no_vi:
+            keep_from = i + 1
+        else:
+            break
+    if keep_from == 0:
+        return text
+    cleaned = "\n\n".join(paragraphs[keep_from:]).strip()
+    return cleaned or text  # never strip everything — fall back to original
+
+
+# Pattern for "no data for X" refusals. When the answer matches this AND
+# the dataset doesn't actually contain the asked-about column, we must
+# suppress the (irrelevant) chart + data_table so the user doesn't see
+# wind_speed numbers when they asked about humidity.
+_NO_DATA_PHRASES = (
+    "không có dữ liệu", "khong co du lieu",
+    "không chứa", "khong chua",
+    "không có chỉ số", "khong co chi so",
+    "không có cột", "khong co cot",
+    "không có trường", "khong co truong",
+    "không thể phân tích", "khong the phan tich",
+    "doesn't contain", "does not contain",
+    "no data for", "no humidity data", "no humidity field",
+    "data doesn't include", "data does not include",
+    "missing humidity", "humidity is null",
+    "no data is available",
+)
+
+
+def _answer_signals_missing_column(answer: str) -> bool:
+    """True iff the model answer explicitly says 'no data / not in dataset'."""
+    if not answer:
+        return False
+    low = answer.lower()
+    return any(p in low for p in _NO_DATA_PHRASES)
 
 
 def _strip_draft_instruction_suffix(text: str) -> str:

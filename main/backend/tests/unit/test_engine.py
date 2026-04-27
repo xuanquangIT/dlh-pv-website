@@ -441,5 +441,80 @@ class StripReasoningTests(unittest.TestCase):
         )
 
 
+class StripInlineCotTests(unittest.TestCase):
+    """Some reasoning models (Minimax M2.7) emit CoT as plain English
+    paragraphs WITHOUT <think> wrappers when answering a Vietnamese query.
+    `_strip_inline_cot` must drop the leading English meta-prose while
+    keeping the Vietnamese answer."""
+
+    def setUp(self):
+        from app.services.solar_ai_chat.engine import _strip_inline_cot
+        self._strip = _strip_inline_cot
+
+    def test_passthrough_when_lang_en(self):
+        # Don't touch English answers — too risky for valid English content.
+        s = "The user wants stats. Avonlie 32k MWh, Emerald 14k MWh."
+        self.assertEqual(self._strip(s, "en"), s)
+
+    def test_passthrough_when_no_meta_prefix(self):
+        s = "Avonlie 32,334 MWh, Emerald 14,404 MWh."
+        self.assertEqual(self._strip(s, "vi"), s)
+
+    def test_drops_minimax_inline_cot_pattern(self):
+        s = (
+            "The user is asking about humidity. The data has wind_speed.\n\n"
+            "I need to clarify with the user.\n\n"
+            "Looking at the data again, I notice it's wind speed.\n\n"
+            "Dữ liệu chứa wind_speed, không có humidity. Wind cao nhất WRSF1."
+        )
+        out = self._strip(s, "vi")
+        self.assertNotIn("The user is asking", out)
+        self.assertNotIn("I need to clarify", out)
+        self.assertIn("Dữ liệu chứa wind_speed", out)
+
+    def test_does_not_strip_everything_when_no_vi_paragraph(self):
+        # If we'd end up dropping all paragraphs, return original unchanged.
+        s = "The user wants X. Let me think."
+        out = self._strip(s, "vi")
+        self.assertEqual(out, s)  # no Vi paragraph → leave alone
+
+    def test_keeps_vi_paragraph_with_meta_word_inside(self):
+        # Vietnamese paragraph containing the word "user" should not be
+        # treated as English meta-prose.
+        s = "Looking at data...\n\nNgười dùng có thể xem the user input ở đây."
+        out = self._strip(s, "vi")
+        self.assertIn("Người dùng", out)
+        self.assertNotIn("Looking at data", out)
+
+
+class AnswerSignalsMissingColumnTests(unittest.TestCase):
+    """When the model's answer admits a requested column is missing from
+    the dataset, the engine must suppress chart + data_table so the user
+    doesn't see irrelevant numbers underneath the refusal."""
+
+    def setUp(self):
+        from app.services.solar_ai_chat.engine import _answer_signals_missing_column
+        self._sig = _answer_signals_missing_column
+
+    def test_vietnamese_refusal(self):
+        self.assertTrue(self._sig(
+            "Không thể phân tích ảnh hưởng của độ ẩm vì dữ liệu không chứa chỉ số độ ẩm."
+        ))
+
+    def test_english_refusal(self):
+        self.assertTrue(self._sig(
+            "I can't analyze humidity impact because the data doesn't contain humidity."
+        ))
+
+    def test_genuine_data_answer_not_flagged(self):
+        self.assertFalse(self._sig(
+            "Top 5 facilities by energy: Avonlie 32k MWh, Darlington 24k MWh."
+        ))
+
+    def test_empty_answer(self):
+        self.assertFalse(self._sig(""))
+        self.assertFalse(self._sig(None))
+
+
 if __name__ == "__main__":
     unittest.main()
