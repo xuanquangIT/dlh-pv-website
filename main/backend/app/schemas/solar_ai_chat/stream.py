@@ -87,7 +87,7 @@ TOOL_DISPLAY_LABELS: dict[str, str] = {
     "get_energy_performance":    "Fetching energy performance",
     "get_facility_info":         "Fetching facility information",
     "get_pipeline_status":       "Checking pipeline status",
-    "get_forecast_72h":          "Fetching 72-hour forecast",
+    "get_forecast_7d":           "Fetching 7-day forecast",
     "get_data_quality_issues":   "Checking data quality",
     "get_ml_model_info":         "Fetching ML model info",
     "get_station_daily_report":  "Fetching daily station report",

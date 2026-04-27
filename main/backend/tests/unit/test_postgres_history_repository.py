@@ -573,7 +573,7 @@ class TestAddMessage:
         fake_sess = _fake_session()
         fake_msg_model = _fake_message(
             content="What is the forecast?",
-            topic="forecast_72h",
+            topic="forecast_7d",
             sources=[{"layer": "Gold", "dataset": "gold.forecast_daily", "data_source": "databricks"}],
         )
         db_mock.query.return_value.filter.return_value.first.return_value = fake_sess

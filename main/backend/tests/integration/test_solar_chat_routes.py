@@ -841,7 +841,7 @@ class AdminToolStatsTests(_BaseChatTest):
             "by_tool": [
                 {"tool_name": "get_system_overview", "count": 20,
                  "avg_latency_ms": 123.4, "success_rate": 1.0},
-                {"tool_name": "get_forecast_72h", "count": 10,
+                {"tool_name": "get_forecast_7d", "count": 10,
                  "avg_latency_ms": 200.0, "success_rate": 0.9},
             ],
             "by_role": [{"role": "admin", "count": 30}],

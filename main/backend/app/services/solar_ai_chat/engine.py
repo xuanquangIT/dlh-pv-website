@@ -689,7 +689,7 @@ class ChatEngine:
             "You are **Solar AI**, the analytics assistant for the PV "
             "Lakehouse — a Databricks-based platform with 8 PV facilities, "
             "hourly energy readings, weather (cloud/wind/temp), AQI, "
-            "72h ML forecasts, model monitoring, and pipeline diagnostics.\n\n"
+            "7-day ML forecasts (D+1, D+3, D+5, D+7), model monitoring, and pipeline diagnostics.\n\n"
             "MANDATORY workflow:\n"
             "- If the user asks anything about facilities, energy, "
             "production, capacity factor, weather, AQI, forecasts, ML "
@@ -1873,14 +1873,14 @@ def _build_scope_redirect(language: str) -> str:
             "thời tiết tại các trạm, AQI, dự báo, mô hình ML và "
             "trạng thái pipeline. Bạn thử hỏi mình về một trong các "
             "chủ đề trên nhé. Ví dụ: \"Tổng quan hệ thống 7 ngày qua\", "
-            "\"Top 5 trạm sản lượng cao nhất\", \"Dự báo 3 ngày tới\"."
+            "\"Top 5 trạm sản lượng cao nhất\", \"Dự báo sản lượng 7 ngày tới\"."
         )
     return (
         "I only answer questions about the PV Lakehouse — solar energy "
         "production, facility performance, weather at facilities, AQI, "
         "forecasts, ML models, and pipeline status. Try one of those "
         "instead, e.g. \"system overview last 7 days\", \"top 5 facilities "
-        "by energy\", or \"forecast next 3 days\"."
+        "by energy\", or \"forecast next 7 days\"."
     )
 
 

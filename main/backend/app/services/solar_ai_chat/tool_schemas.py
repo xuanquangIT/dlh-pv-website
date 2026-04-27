@@ -183,4 +183,21 @@ FACILITY COMPARISON:
 - After the comparison SQL, synthesize a direct side-by-side narrative:
   which facility has higher capacity, higher energy output, better CF/PR,
   different weather conditions — do NOT ask the user what fields to show.
+
+FORECAST (7-day, horizon-specific models):
+- Production ML pipeline registers FOUR horizon-specific models in MLflow:
+  pv.gold.daily_forecast_d1 (D+1), _d3 (D+3), _d5 (D+5), _d7 (D+7).
+  pv.gold.forecast_daily holds rows for each (facility_id, forecast_date,
+  forecast_horizon) tuple. Always FILTER `forecast_horizon IN (1,3,5,7)`
+  to exclude legacy null-horizon backfill rows.
+- Default user intent for "dự báo" / "forecast" is the next 7 days
+  (canonical metric `forecast_7d`, default horizon_days=7). The system-KPI
+  mart (`mart_system_kpi_daily`) only carries forecast_next_day_mwh /
+  forecast_day2_mwh / forecast_day3_mwh — so for D+5 / D+7 questions go
+  to `pv.gold.forecast_daily` directly.
+- For "thông tin model" / "current model" / "phiên bản model" questions,
+  use the `model_metadata` metric to surface horizon, model_name,
+  model_version, and accuracy metrics (R², RMSE, NRMSE, skill_score)
+  from `pv.gold.model_monitoring_daily`. Do NOT propose
+  accuracy/precision/recall — these are regression models, not classifiers.
 """

@@ -124,13 +124,13 @@
   expectations:
     must_call_primitive_or_tool: ["get_data_quality_issues", "execute_sql"]
 
-- id: q_forecast_72h_vi
-  query: "Dự báo sản lượng 3 ngày tới của hệ thống"
+- id: q_forecast_7d_vi
+  query: "Dự báo sản lượng 7 ngày tới của hệ thống"
   role: admin
   language: vi
   expectations:
     must_call_primitive_or_tool: ["execute_sql"]
-    # Real cols from forecast_72h metric: forecast_date / predicted_energy_mwh
+    # Real cols from forecast_7d metric: forecast_date / predicted_energy_mwh
     min_dataset_rows: 1
 
 - id: q_ml_model_info_vi
@@ -338,7 +338,7 @@
     min_dataset_rows: 1
 
 - id: q_compound_overview_quality_forecast_vi
-  query: "Tổng quan hệ thống hiện tại, các trạm có data quality kém, và dự báo 3 ngày tới"
+  query: "Tổng quan hệ thống hiện tại, các trạm có data quality kém, và dự báo 7 ngày tới"
   role: admin
   language: vi
   expectations:

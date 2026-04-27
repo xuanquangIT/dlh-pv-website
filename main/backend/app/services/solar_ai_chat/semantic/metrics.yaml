@@ -285,9 +285,9 @@ catalogs:
               - {name: champion_skill_score, type: double}
               - {name: champion_nrmse_pct, type: double}
               - {name: champion_mape_day_pct, type: double}
-              - {name: forecast_next_day_mwh, type: double, description: "Predicted total energy for next day."}
-              - {name: forecast_day2_mwh, type: double}
-              - {name: forecast_day3_mwh, type: double}
+              - {name: forecast_next_day_mwh, type: double, description: "Predicted total energy for D+1 (next day). The mart only carries D+1, D+2, D+3 — for D+5 / D+7 use pv.gold.forecast_daily directly."}
+              - {name: forecast_day2_mwh, type: double, description: "Predicted total energy for D+2."}
+              - {name: forecast_day3_mwh, type: double, description: "Predicted total energy for D+3."}
               - {name: batch_id, type: string}
               - {name: created_at, type: timestamp}
               - {name: updated_at, type: timestamp}
@@ -391,24 +391,25 @@ catalogs:
               - {name: batch_id, type: string}
 
           forecast_daily:
-            description: "Daily energy forecast (72h+ horizon) per facility — predicted vs actual, model version, horizon."
-            grain: [facility_id, forecast_date]
+            description: "Daily energy forecast per facility — predicted vs actual, with 4 horizon-specific models (D+1, D+3, D+5, D+7). For ad-hoc 'next 7 days' rollups use forecast_horizon=7 (gives the day-7 prediction); to get the timeline use forecast_horizon IN (1,3,5,7) and ORDER BY forecast_date."
+            grain: [facility_id, forecast_date, forecast_horizon]
             columns:
               - {name: forecast_daily_id, type: string}
               - {name: facility_id, type: string}
-              - {name: forecast_date, type: date}
+              - {name: forecast_date, type: date, description: "Calendar date the forecast targets."}
               - {name: predicted_energy_mwh_daily, type: double}
               - {name: actual_energy_mwh_daily, type: double, description: "Backfilled once the day passes; NULL for future dates."}
               - {name: predicted_capacity_factor_daily, type: double}
-              - {name: model_name, type: string}
+              - {name: model_name, type: string, description: "One of: pv.gold.daily_forecast_d1 / _d3 / _d5 / _d7 (horizon-specific) or pv.gold.energy_forecast_champion (legacy backfill)."}
               - {name: model_version, type: string}
               - {name: generated_at_utc, type: timestamp}
               - {name: batch_id, type: string}
-              - {name: forecast_horizon, type: int, description: "Days ahead at generation time (1, 2, 3...)."}
+              - {name: forecast_horizon, type: int, description: "Days ahead at generation time. Discrete values 1, 3, 5, 7 (each backed by its own registered model). NULL on legacy pre-2026-04 rows."}
             sample_questions:
-              - "Forecast next 3 days"
+              - "Dự báo sản lượng 7 ngày tới"
               - "Tomorrow's predicted production"
               - "Forecast accuracy yesterday"
+              - "Forecast for D+5 by facility"
 
           model_monitoring_daily:
             description: "Champion model regression metrics over time — R², RMSE, MAE, NRMSE, skill score per facility per eval_date."
@@ -969,50 +970,153 @@ metrics:
       x: facility_name
       y: total_energy_mwh
 
-  # === Forecast ===
-  forecast_72h:
-    description: "Dự báo 3 ngày tới cho toàn hệ thống. Use for 'dự báo', 'forecast', 'predicted next days'."
-    synonyms: ["dự báo", "du bao", "forecast", "predict", "dự đoán", "du doan", "next days", "ngày tới", "ngay toi", "tomorrow", "ngày mai", "ngay mai", "72h", "3 ngày", "3 ngay"]
+  # === Forecast (D+1, D+3, D+5, D+7 horizon-specific models) ===
+  forecast_7d:
+    description: "Dự báo sản lượng tới 7 ngày (D+1, D+3, D+5, D+7) cho toàn hệ thống — ML pipeline registers một model riêng cho mỗi horizon. Use for 'dự báo 7 ngày', 'forecast next week', 'D+5/D+7', 'predicted next days'."
+    synonyms: [
+      "dự báo", "du bao", "forecast", "predict", "predicted",
+      "dự đoán", "du doan", "tomorrow", "ngày mai", "ngay mai",
+      "7 ngày tới", "7 ngay toi", "next 7 days", "next week",
+      "tuần tới", "tuan toi", "tuần này", "tuan nay",
+      "D+1", "D+3", "D+5", "D+7", "horizon",
+      "5 ngày", "5 ngay", "5 days",
+    ]
     sample_questions:
-      - "Dự báo sản lượng 3 ngày tới"
-      - "Forecast next 3 days production"
-      - "Sản lượng dự kiến tuần này"
+      - "Dự báo sản lượng 7 ngày tới"
+      - "Forecast next 7 days production"
+      - "Sản lượng dự kiến tuần tới"
+      - "Predicted energy for D+5"
     sql_template: |
       SELECT forecast_date,
-             SUM(predicted_energy_mwh_daily) AS predicted_energy_mwh
+             SUM(predicted_energy_mwh_daily) AS predicted_energy_mwh,
+             MAX(forecast_horizon) AS horizon
       FROM pv.gold.forecast_daily
       WHERE forecast_date >= CURRENT_DATE
         AND forecast_date <= CURRENT_DATE + INTERVAL '{horizon_days}' DAY
+        AND forecast_horizon IS NOT NULL
       GROUP BY forecast_date
       ORDER BY forecast_date
     parameters:
-      - {name: horizon_days, type: int, default: 3, range: [1, 14]}
+      - {name: horizon_days, type: int, default: 7, range: [1, 7]}
     suggested_chart:
       chart_type: line
       x: forecast_date
       y: predicted_energy_mwh
 
-  forecast_per_facility_72h:
-    description: "Dự báo per-facility cho N ngày tới. Use when user wants per-station forecast breakdown."
-    synonyms: ["dự báo per trạm", "dự báo theo trạm", "forecast per facility", "per station forecast", "breakdown forecast", "từng trạm dự báo"]
+  forecast_per_facility_7d:
+    description: "Dự báo per-facility cho 7 ngày tới (D+1..D+7). Use when user wants per-station forecast breakdown."
+    synonyms: [
+      "dự báo per trạm", "dự báo theo trạm", "dự báo từng trạm",
+      "forecast per facility", "per station forecast",
+      "breakdown forecast", "từng trạm dự báo",
+      "facility forecast", "per-facility 7 day",
+    ]
     sample_questions:
-      - "Dự báo từng trạm 3 ngày tới"
-      - "Per-facility forecast breakdown"
+      - "Dự báo từng trạm 7 ngày tới"
+      - "Per-facility forecast breakdown D+1 to D+7"
+      - "Dự báo theo trạm tuần tới"
     sql_template: |
-      SELECT facility_name,
-             forecast_date,
-             predicted_energy_mwh_daily AS predicted_mwh
-      FROM pv.gold.forecast_daily
-      WHERE forecast_date >= CURRENT_DATE
-        AND forecast_date <= CURRENT_DATE + INTERVAL '{horizon_days}' DAY
-      ORDER BY facility_name, forecast_date
+      SELECT f.facility_name,
+             f.facility_id,
+             d.forecast_date,
+             d.forecast_horizon,
+             d.predicted_energy_mwh_daily AS predicted_mwh
+      FROM pv.gold.forecast_daily d
+      JOIN pv.gold.dim_facility f
+        ON f.facility_id = d.facility_id
+       AND f.is_current = TRUE
+      WHERE d.forecast_date >= CURRENT_DATE
+        AND d.forecast_date <= CURRENT_DATE + INTERVAL '{horizon_days}' DAY
+        AND d.forecast_horizon IS NOT NULL
+      ORDER BY f.facility_name, d.forecast_date
     parameters:
-      - {name: horizon_days, type: int, default: 3}
+      - {name: horizon_days, type: int, default: 7, range: [1, 7]}
     suggested_chart:
       chart_type: line
       x: forecast_date
       y: predicted_mwh
       color: facility_name
+
+  forecast_by_horizon:
+    description: "So sánh dự báo theo từng horizon (D+1 vs D+3 vs D+5 vs D+7) cho 1 ngày target. Use when user asks 'how does the D+7 prediction compare to D+1' for the same date — measures forecast stability."
+    synonyms: [
+      "so sánh horizon", "so sanh horizon",
+      "compare horizon", "horizon comparison",
+      "D+1 vs D+7", "stability forecast",
+      "forecast drift", "độ ổn định dự báo",
+    ]
+    sample_questions:
+      - "So sánh dự báo D+1, D+3, D+5, D+7 cho ngày mai"
+      - "Compare forecast at different horizons for next week"
+      - "Forecast drift between D+1 and D+7"
+    sql_template: |
+      SELECT forecast_date,
+             forecast_horizon,
+             SUM(predicted_energy_mwh_daily) AS predicted_energy_mwh
+      FROM pv.gold.forecast_daily
+      WHERE forecast_date >= CURRENT_DATE
+        AND forecast_date <= CURRENT_DATE + INTERVAL '7' DAY
+        AND forecast_horizon IN (1, 3, 5, 7)
+      GROUP BY forecast_date, forecast_horizon
+      ORDER BY forecast_date, forecast_horizon
+    parameters: []
+    suggested_chart:
+      chart_type: line
+      x: forecast_date
+      y: predicted_energy_mwh
+      color: forecast_horizon
+
+  model_metadata:
+    description: "Thông tin model ML hiện tại: tên, version, approach, accuracy metrics (R², RMSE, NRMSE, skill_score) cho mỗi horizon (D+1, D+3, D+5, D+7). Use when user asks about 'model nào đang dùng', 'phiên bản model', 'độ chính xác model', 'thông tin model', 'current model', 'model info'."
+    synonyms: [
+      "thông tin model", "thong tin model",
+      "model nào", "model nao", "phiên bản model", "phien ban model",
+      "độ chính xác model", "do chinh xac model",
+      "model info", "current model", "champion model",
+      "model version", "which model", "what model",
+      "model performance", "model metadata",
+      "metadata model", "ml model info",
+      "horizon model", "model horizon",
+    ]
+    sample_questions:
+      - "Mô hình ML hiện tại đang dùng là gì?"
+      - "Thông tin model dự báo D+1, D+3, D+5, D+7"
+      - "What ML model is currently in production?"
+      - "Show me the champion model + accuracy per horizon"
+      - "Phiên bản model dự báo và R², RMSE bao nhiêu?"
+    sql_template: |
+      WITH latest AS (
+        SELECT model_name,
+               model_version,
+               approach,
+               eval_date,
+               r2,
+               rmse_mwh,
+               nrmse_pct,
+               mape_day_pct,
+               skill_score,
+               ROW_NUMBER() OVER (PARTITION BY model_name ORDER BY eval_date DESC) AS rn
+        FROM pv.gold.model_monitoring_daily
+        WHERE eval_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+          AND model_name LIKE 'pv.gold.daily_forecast_%'
+      )
+      SELECT model_name,
+             REGEXP_EXTRACT(model_name, 'd(\\d+)$', 1) AS horizon_days,
+             model_version,
+             approach,
+             eval_date,
+             ROUND(r2, 3)             AS r2,
+             ROUND(rmse_mwh, 2)       AS rmse_mwh,
+             ROUND(nrmse_pct, 2)      AS nrmse_pct,
+             ROUND(mape_day_pct, 2)   AS mape_pct,
+             ROUND(skill_score, 3)    AS skill_score
+      FROM latest
+      WHERE rn = 1
+      ORDER BY horizon_days
+    parameters:
+      - {name: window_days, type: int, default: 7, range: [1, 30]}
+    suggested_chart: null
+    suggested_kpi_cards: ["model_name", "model_version", "r2", "rmse_mwh", "nrmse_pct", "skill_score"]
 
   # === Per-station reports ===
   station_daily_report:
@@ -1299,7 +1403,10 @@ roles:
       - facility_locations_map
       - facility_metadata_list
       - facility_comparison
-      - forecast_72h
+      - forecast_7d
+      - forecast_per_facility_7d
+      - forecast_by_horizon
+      - model_metadata
       - weather_energy_correlation
       - station_daily_report
       - station_hourly_report

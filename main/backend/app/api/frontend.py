@@ -57,8 +57,8 @@ MODULE_CARDS = [
     },
     {
         "name": "Forecast",
-        "description": "72-hour forecast outputs and confidence.",
-        "endpoint": "/forecast/next-72h",
+        "description": "7-day forecast outputs (D+1 / D+3 / D+5 / D+7) and confidence.",
+        "endpoint": "/forecast/next-7d",
         "ui_path": "/forecast",
     },
     {

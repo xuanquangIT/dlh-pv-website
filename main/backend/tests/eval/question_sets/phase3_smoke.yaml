@@ -36,8 +36,8 @@
     forbidden_in_answer: ["I only support"]
 
 # --- Forecast ---
-- id: smoke_forecast_3d_vi
-  query: "Dự báo sản lượng 3 ngày tới"
+- id: smoke_forecast_7d_vi
+  query: "Dự báo sản lượng 7 ngày tới"
   role: admin
   language: vi
   expectations:
