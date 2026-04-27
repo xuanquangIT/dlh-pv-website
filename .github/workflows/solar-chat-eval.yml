@@ -33,12 +33,14 @@ jobs:
         env:
           PYTHONPATH: main/backend
         run: |
-          python -c "from app.services.solar_ai_chat.semantic_loader import load_semantic_layer; \
-                     layer = load_semantic_layer(); \
-                     assert layer.tables, 'no tables loaded'; \
-                     assert layer.metrics, 'no metrics loaded'; \
-                     assert layer.role_policies, 'no role policies loaded'; \
-                     print(f'OK: {len(layer.tables)} tables, {len(layer.metrics)} metrics, {len(layer.role_policies)} roles')"
+          python <<'PY'
+          from app.services.solar_ai_chat.semantic_loader import load_semantic_layer
+          layer = load_semantic_layer()
+          assert layer.tables, 'no tables loaded'
+          assert layer.metrics, 'no metrics loaded'
+          assert layer.role_policies, 'no role policies loaded'
+          print(f'OK: {len(layer.tables)} tables, {len(layer.metrics)} metrics, {len(layer.role_policies)} roles')
+          PY
 
       - name: Static metrics.yaml validation
         env:
@@ -64,12 +66,17 @@ jobs:
 
       - name: Validate eval question sets parseable
         run: |
-          python -c "import yaml, pathlib; \
-                     for p in pathlib.Path('main/backend/tests/eval/question_sets').glob('*.yaml'): \
-                         qs = yaml.safe_load(p.read_text(encoding='utf-8')) or []; \
-                         assert isinstance(qs, list) and qs, f'{p} empty or invalid'; \
-                         for q in qs: assert 'id' in q and 'query' in q, f'{p}:{q.get(\"id\")} missing required field'; \
-                         print(f'OK {p.name}: {len(qs)} questions')"
+          python <<'PY'
+          import yaml, pathlib
+          for p in pathlib.Path('main/backend/tests/eval/question_sets').glob('*.yaml'):
+              data = yaml.safe_load(p.read_text(encoding='utf-8')) or []
+              # Question sets may be a bare list OR a dict like {questions: [...]}.
+              qs = data.get('questions', data) if isinstance(data, dict) else data
+              assert isinstance(qs, list) and qs, f'{p} empty or invalid'
+              for q in qs:
+                  assert 'id' in q and 'query' in q, f"{p}:{q.get('id')} missing required field"
+              print(f'OK {p.name}: {len(qs)} questions')
+          PY
 
   # Optional: a full live capture+judge job runs against staging when SOLAR_CHAT_EVAL_BASE_URL is set.
   # Wire this in once a long-lived staging environment is provisioned.
