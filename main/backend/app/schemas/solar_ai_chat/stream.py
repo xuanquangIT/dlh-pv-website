@@ -15,6 +15,20 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class StartEvent(BaseModel):
+    """First SSE event in every stream — carries trace_id so the client
+    can call POST /solar-ai-chat/stop with this id to cancel the run."""
+    event: Literal["start"] = "start"
+    trace_id: str
+
+
+class CancelledEvent(BaseModel):
+    """Final event when the user issued POST /solar-ai-chat/stop."""
+    event: Literal["cancelled"] = "cancelled"
+    trace_id: str = ""
+    message: str = "Stopped by user."
+
+
 class ThinkingStepEvent(BaseModel):
     event: Literal["thinking_step"] = "thinking_step"
     step: int
@@ -72,7 +86,9 @@ class ErrorEvent(BaseModel):
 
 # Union type for type hints
 UiEvent = (
-    ThinkingStepEvent
+    StartEvent
+    | CancelledEvent
+    | ThinkingStepEvent
     | ToolResultEvent
     | StatusUpdateEvent
     | TextDeltaEvent
@@ -87,7 +103,7 @@ TOOL_DISPLAY_LABELS: dict[str, str] = {
     "get_energy_performance":    "Fetching energy performance",
     "get_facility_info":         "Fetching facility information",
     "get_pipeline_status":       "Checking pipeline status",
-    "get_forecast_72h":          "Fetching 72-hour forecast",
+    "get_forecast_7d":           "Fetching 7-day forecast",
     "get_data_quality_issues":   "Checking data quality",
     "get_ml_model_info":         "Fetching ML model info",
     "get_station_daily_report":  "Fetching daily station report",
@@ -96,6 +112,12 @@ TOOL_DISPLAY_LABELS: dict[str, str] = {
     "web_lookup_direct":         "Searching the web",
     "answer_directly":           "Preparing direct answer",
     "synthesize":                "Synthesizing answer",
+    # Engine primitives
+    "discover_schema":           "Discovering tables",
+    "inspect_table":             "Inspecting table schema",
+    "recall_metric":             "Looking up canonical metric",
+    "execute_sql":               "Running SQL query",
+    "render_visualization":      "Rendering chart",
 }
 
 

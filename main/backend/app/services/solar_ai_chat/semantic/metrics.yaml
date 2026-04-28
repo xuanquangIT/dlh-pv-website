@@ -1,0 +1,1395 @@
+# =============================================================================
+# Solar Chat v2 — Semantic Layer
+# =============================================================================
+# Single source of truth for: tables (with descriptions LLM can RAG over),
+# canonical metrics (SQL templates LLM uses via recall_metric).
+#
+# Edit this YAML to add/remove metrics. No Python change required.
+# Loaded by: services/solar_ai_chat/v2/semantic_loader.py
+# Used by:   recall_metric primitive + discover_schema primitive
+# =============================================================================
+
+version: 1
+generated_from: "extracted from solar_ai_chat 14-tool repository as of 2026-04-26"
+
+# -----------------------------------------------------------------------------
+# Catalogs / schemas / tables — the LLM's view of the lakehouse
+# -----------------------------------------------------------------------------
+
+catalogs:
+  pv:
+    description: "PV Lakehouse main catalog — Silver (validated raw) + Gold (star schema + KPI marts)."
+    schemas:
+
+      silver:
+        description: "Validated, deduplicated time-series readings. Use for raw hourly lookups."
+        tables:
+          energy_readings:
+            description: "Hourly energy generation per facility. CAUTION: column is energy_kwh (NOT energy_mwh) — convert to MWh by dividing 1000 if needed. Use for hourly trends, peak hour analysis, capacity factor + performance ratio at hour grain."
+            grain: [facility_id, date_hour_local]
+            primary_key: [facility_id, date_hour_local]
+            partition_columns: [reading_date_local]
+            columns:
+              - {name: facility_id, type: string, description: "Facility code (WRSF1, AVLSF, ...)"}
+              - {name: facility_name, type: string}
+              - {name: network_id, type: string}
+              - {name: region, type: string}
+              - {name: date_hour, type: timestamp, description: "UTC hour timestamp."}
+              - {name: date_hour_local, type: timestamp, description: "Local-timezone hour. PREFER this for date filtering."}
+              - {name: reading_date, type: date, description: "UTC date."}
+              - {name: reading_date_local, type: date, description: "Local date — use in WHERE for fast partitioned filtering."}
+              - {name: energy_kwh, type: float, description: "Hourly energy generation in kWh. To get MWh: energy_kwh / 1000."}
+              - {name: intervals_count, type: int, description: "How many sub-hourly intervals contributed to this row."}
+              - {name: completeness_pct, type: float, description: "Data completeness % within this hour."}
+              - {name: capacity_factor_pct, type: float, description: "Capacity factor 0-100%."}
+              - {name: performance_ratio_pct, type: float, description: "Performance Ratio % at hour grain."}
+              - {name: is_daytime, type: int, description: "1 if hour is daytime (energy expected non-zero), else 0."}
+              - {name: quality_flag, type: string, description: "GOOD / WARN / BAD."}
+              - {name: quality_issues, type: string}
+              - {name: created_at, type: timestamp}
+              - {name: updated_at, type: timestamp}
+              - {name: batch_id, type: string}
+            sample_questions:
+              - "Hourly energy trend for AVLSF last week"
+              - "Peak production hour today"
+              - "Per-facility energy yesterday (sum energy_kwh / 1000)"
+
+          weather:
+            description: "Hourly weather observations per facility location — irradiance, cloud, temperature, wind, precipitation."
+            grain: [location_id, weather_timestamp_local]
+            columns:
+              - {name: location_id, type: string, description: "Weather station ID (matches facility_id)."}
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: latitude, type: float}
+              - {name: longitude, type: float}
+              - {name: weather_timestamp, type: timestamp, description: "UTC observation time."}
+              - {name: weather_timestamp_local, type: timestamp, description: "Local-timezone observation time."}
+              - {name: weather_date, type: date}
+              - {name: weather_date_local, type: date}
+              - {name: shortwave_radiation, type: float, description: "Solar shortwave radiation W/m² — primary irradiance metric."}
+              - {name: direct_radiation, type: float}
+              - {name: diffuse_radiation, type: float}
+              - {name: direct_normal_irradiance, type: float, description: "DNI W/m²."}
+              - {name: terrestrial_radiation, type: float}
+              - {name: solar_irradiance, type: float}
+              - {name: temperature_c, type: float, description: "Air temperature °C."}
+              - {name: dew_point_c, type: float}
+              - {name: humidity_pct, type: float}
+              - {name: wind_speed_ms, type: float, description: "Wind speed in m/s."}
+              - {name: wind_direction_deg, type: float}
+              - {name: wind_gust_ms, type: float}
+              - {name: cloud_cover_pct, type: float, description: "Cloud cover 0-100%. Higher = lower solar output."}
+              - {name: cloud_cover_low_pct, type: float}
+              - {name: cloud_cover_mid_pct, type: float}
+              - {name: cloud_cover_high_pct, type: float}
+              - {name: precipitation_mm, type: float}
+              - {name: sunshine_duration_s, type: float}
+              - {name: pressure_msl_hpa, type: float}
+              - {name: is_day, type: int}
+              - {name: is_valid, type: boolean}
+              - {name: quality_flag, type: string}
+              - {name: region, type: string}
+
+          air_quality:
+            description: "Hourly air quality (AQI + pollutant breakdown) per facility location. Affects solar panel soiling and UV attenuation."
+            grain: [location_id, aqi_timestamp_local]
+            columns:
+              - {name: location_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: latitude, type: float}
+              - {name: longitude, type: float}
+              - {name: aqi_timestamp, type: timestamp, description: "UTC observation time."}
+              - {name: aqi_timestamp_local, type: timestamp}
+              - {name: aqi_date, type: date}
+              - {name: aqi_date_local, type: date}
+              - {name: aqi_index, type: int, description: "Internal index value."}
+              - {name: aqi_value, type: int, description: "US-EPA AQI value (0-500). PREFER this over aqi_index."}
+              - {name: aqi_category, type: string, description: "Good / Moderate / Unhealthy / Hazardous."}
+              - {name: pm25, type: float, description: "PM2.5 µg/m³."}
+              - {name: pm10, type: float}
+              - {name: no2, type: float, description: "NO₂ µg/m³."}
+              - {name: o3, type: float, description: "Ozone µg/m³."}
+              - {name: dust, type: float}
+              - {name: sulphur_dioxide, type: float}
+              - {name: carbon_monoxide, type: float}
+              - {name: uv_index, type: float}
+              - {name: uv_index_clear_sky, type: float, description: "Clear-sky UV; compare to uv_index for atmospheric attenuation."}
+              - {name: is_valid, type: boolean}
+              - {name: quality_flag, type: string}
+              - {name: region, type: string}
+
+          facility_status:
+            description: "SCD Type 2 facility metadata snapshots — capacity, location, status with effective_from/effective_to. Filter is_current=TRUE for latest record."
+            grain: [facility_id, effective_from]
+            columns:
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: network_id, type: string}
+              - {name: region, type: string}
+              - {name: state, type: string}
+              - {name: location_lat, type: float}
+              - {name: location_lng, type: float}
+              - {name: unit_count, type: int}
+              - {name: rated_capacity_kw, type: float}
+              - {name: capacity_registered_kw, type: float}
+              - {name: capacity_maximum_kw, type: float}
+              - {name: technology_type, type: string}
+              - {name: status, type: string}
+              - {name: effective_from, type: timestamp}
+              - {name: effective_to, type: timestamp}
+              - {name: is_current, type: boolean, description: "TRUE for the active record. Always filter on this for current state."}
+
+          data_quality_log:
+            description: "Per-rule quality check log written by Silver curation jobs."
+            grain: [check_timestamp, rule_name, table_name]
+            columns:
+              - {name: log_id, type: string}
+              - {name: batch_id, type: string}
+              - {name: table_name, type: string}
+              - {name: rule_name, type: string}
+              - {name: rule_type, type: string, description: "duplicate_check / null_check / freshness_check / range_check."}
+              - {name: status, type: string, description: "PASSED / FAILED / WARN."}
+              - {name: total_rows, type: int}
+              - {name: failed_rows, type: int}
+              - {name: failed_rate, type: float}
+              - {name: threshold_value, type: float}
+              - {name: detail, type: string}
+              - {name: check_timestamp, type: timestamp}
+              - {name: check_date, type: date}
+
+      gold:
+        description: "Star schema (dim_*, fact_*) + pre-computed KPI marts. Use for ranking, summaries, dashboards."
+        tables:
+          dim_facility:
+            description: "Facility master with location, capacity. SCD Type 2 — filter is_current=TRUE for latest. Has location_lat+location_lng → enables map visualization."
+            primary_key: facility_sk
+            columns:
+              - {name: facility_sk, type: bigint, description: "Surrogate key (use in joins)."}
+              - {name: facility_id, type: string, description: "Business key (WRSF1, AVLSF, ...)"}
+              - {name: facility_name, type: string}
+              - {name: facility_code, type: string}
+              - {name: network_id, type: string, description: "Grid/network ID."}
+              - {name: region, type: string}
+              - {name: state, type: string}
+              - {name: location_lat, type: double, description: "GPS latitude. PRESENCE OF location_lat+location_lng ENABLES MAP RENDERING."}
+              - {name: location_lng, type: double, description: "GPS longitude."}
+              - {name: total_capacity_mw, type: double, description: "Total installed capacity in MW (preferred)."}
+              - {name: rated_capacity_kw, type: double}
+              - {name: capacity_registered_kw, type: double}
+              - {name: capacity_maximum_kw, type: double}
+              - {name: technology_type, type: string}
+              - {name: status, type: string}
+              - {name: is_current, type: boolean, description: "SCD2 — TRUE for the active record. Always filter on this."}
+              - {name: is_active, type: boolean}
+              - {name: valid_from, type: timestamp}
+              - {name: valid_to, type: timestamp}
+            sample_questions:
+              - "Where are the facilities located?"
+              - "Show me a map"
+              - "List all facilities with their capacity"
+              - "What region is each station in?"
+
+          fact_energy:
+            description: "Hourly energy fact table — joins to dim_facility, dim_date, dim_time. Use for analytics aggregations."
+            grain: [facility_sk, date_hour_local]
+            columns:
+              - {name: facility_sk, type: bigint}
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: date_hour_local, type: timestamp}
+              - {name: reading_date_local, type: date}
+              - {name: energy_mwh, type: numeric}
+              - {name: predicted_energy_mwh, type: numeric, description: "ML model prediction for this hour."}
+              - {name: capacity_factor_pct, type: numeric}
+              - {name: performance_ratio_pct, type: numeric, description: "Hourly Performance Ratio %."}
+              - {name: weather_condition_key, type: integer}
+
+          mart_energy_daily:
+            description: "Per-facility daily energy totals, capacity factor, performance ratio, weather + AQI averages, data quality. Pre-aggregated — faster than fact_energy for daily questions."
+            grain: [facility_id, energy_date]
+            columns:
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: region, type: string}
+              - {name: state, type: string}
+              - {name: energy_date, type: date, description: "Date partition. Use in WHERE for filtering."}
+              - {name: energy_mwh_daily, type: double, description: "Total daily energy in MWh."}
+              - {name: energy_kwh_daily, type: double}
+              - {name: rated_capacity_mw, type: double}
+              - {name: weighted_capacity_factor_pct, type: double, description: "Weighted capacity factor (preferred over peak)."}
+              - {name: peak_capacity_factor_pct, type: double}
+              - {name: peak_production_hour_utc, type: int}
+              - {name: peak_production_hour_local, type: int}
+              - {name: specific_yield_kwh_per_kwp, type: double, description: "kWh per kW installed — yield metric."}
+              - {name: daytime_hours_above_threshold, type: int}
+              - {name: zero_daytime_hours, type: int}
+              - {name: night_energy_events, type: int}
+              - {name: avg_shortwave_radiation, type: double, description: "Solar irradiance proxy (W/m²)."}
+              - {name: avg_direct_normal_irradiance, type: double}
+              - {name: avg_cloud_cover_pct, type: double}
+              - {name: avg_temperature_c, type: double}
+              - {name: max_temperature_c, type: double}
+              - {name: avg_precipitation_mm, type: double}
+              - {name: total_precipitation_mm, type: double}
+              - {name: avg_aqi_value, type: double}
+              - {name: dominant_aqi_category, type: string}
+              - {name: dominant_weather_condition, type: string}
+              - {name: daily_insolation_kwh_m2, type: double}
+              - {name: performance_ratio_pct, type: double, description: "Performance Ratio % — actual / theoretical energy. Higher is better."}
+              - {name: completeness_pct_daily, type: double, description: "Data completeness % for the day."}
+              - {name: good_quality_row_pct, type: double}
+              - {name: warning_quality_row_pct, type: double}
+              - {name: bad_quality_row_pct, type: double}
+              - {name: facility_rank_by_energy, type: int}
+              - {name: facility_rank_by_cf, type: int}
+              - {name: batch_id, type: string}
+              - {name: created_at, type: timestamp}
+              - {name: updated_at, type: timestamp}
+            sample_questions:
+              - "Top 5 facilities by energy last 30 days"
+              - "Daily capacity factor trend"
+              - "Performance Ratio per facility"
+
+          mart_system_kpi_daily:
+            description: "System-wide daily KPIs — total production, fleet availability, data quality, weather averages, champion ML model metrics, forecast for next 3 days."
+            grain: [kpi_date]
+            columns:
+              - {name: kpi_date, type: date, description: "Date — use in WHERE for filtering."}
+              - {name: total_facility_count, type: int}
+              - {name: active_facility_count, type: int}
+              - {name: fleet_availability_pct, type: double}
+              - {name: total_energy_mwh, type: double}
+              - {name: total_energy_kwh, type: double}
+              - {name: avg_capacity_factor_pct, type: double}
+              - {name: peak_capacity_factor_pct, type: double}
+              - {name: peak_production_hour_utc, type: int}
+              - {name: peak_production_hour_local, type: int}
+              - {name: specific_yield_kwh_per_kwp, type: double}
+              - {name: daytime_hours_count, type: int}
+              - {name: avg_shortwave_radiation, type: double}
+              - {name: avg_direct_normal_irradiance, type: double}
+              - {name: avg_cloud_cover_pct, type: double}
+              - {name: avg_temperature_c, type: double}
+              - {name: avg_precipitation_mm, type: double}
+              - {name: avg_aqi_value, type: double}
+              - {name: dominant_aqi_category, type: string}
+              - {name: dominant_weather_condition, type: string}
+              - {name: data_completeness_pct, type: double}
+              - {name: good_quality_row_pct, type: double}
+              - {name: warning_quality_row_pct, type: double}
+              - {name: bad_quality_row_pct, type: double}
+              - {name: champion_model_name, type: string}
+              - {name: champion_model_version, type: string}
+              - {name: champion_r2, type: double}
+              - {name: champion_skill_score, type: double}
+              - {name: champion_nrmse_pct, type: double}
+              - {name: champion_mape_day_pct, type: double}
+              - {name: forecast_next_day_mwh, type: double, description: "Predicted total energy for D+1 (next day). The mart only carries D+1, D+2, D+3 — for D+5 / D+7 use pv.gold.forecast_daily directly."}
+              - {name: forecast_day2_mwh, type: double, description: "Predicted total energy for D+2."}
+              - {name: forecast_day3_mwh, type: double, description: "Predicted total energy for D+3."}
+              - {name: batch_id, type: string}
+              - {name: created_at, type: timestamp}
+              - {name: updated_at, type: timestamp}
+            sample_questions:
+              - "Give me a system overview"
+              - "Total production yesterday"
+              - "Forecast next 3 days from system KPI"
+
+          mart_weather_impact_daily:
+            description: "Daily weather × energy impact per facility — cloud/temp/wind/humidity bands + radiation-to-energy efficiency. Use for weather correlation questions."
+            grain: [facility_id, weather_date]
+            columns:
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: region, type: string}
+              - {name: weather_date, type: date}
+              - {name: cloud_band, type: string, description: "Bucketed cloud cover (low/medium/high)."}
+              - {name: temperature_band, type: string}
+              - {name: rain_band, type: string}
+              - {name: weather_condition_description, type: string}
+              - {name: observation_hours, type: int}
+              - {name: daytime_observation_hours, type: int}
+              - {name: avg_energy_mwh_per_hour, type: double}
+              - {name: total_energy_mwh, type: double}
+              - {name: avg_capacity_factor_pct, type: double}
+              - {name: avg_shortwave_radiation, type: double}
+              - {name: avg_direct_normal_irradiance, type: double}
+              - {name: avg_diffuse_radiation, type: double}
+              - {name: avg_cloud_cover_pct, type: double}
+              - {name: avg_temperature_c, type: double}
+              - {name: avg_humidity_pct, type: double}
+              - {name: avg_wind_speed_ms, type: double, description: "Wind speed in m/s."}
+              - {name: total_precipitation_mm, type: double}
+              - {name: radiation_to_energy_ratio, type: double}
+              - {name: clear_sky_energy_loss_mwh, type: double}
+              - {name: batch_id, type: string}
+              - {name: created_at, type: timestamp}
+              - {name: updated_at, type: timestamp}
+
+          mart_aqi_impact_daily:
+            description: "Daily air quality × energy impact per facility — AQI breakdown + UV/radiation attenuation."
+            grain: [facility_id, aqi_date]
+            columns:
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: region, type: string}
+              - {name: aqi_date, type: date}
+              - {name: aqi_category, type: string, description: "Good / Moderate / Unhealthy etc."}
+              - {name: aqi_category_key, type: int}
+              - {name: observation_hours, type: int}
+              - {name: daytime_observation_hours, type: int}
+              - {name: avg_aqi_value, type: double}
+              - {name: max_aqi_value, type: double}
+              - {name: avg_pm25, type: double}
+              - {name: avg_pm10, type: double}
+              - {name: avg_no2, type: double}
+              - {name: avg_o3, type: double}
+              - {name: avg_dust, type: double}
+              - {name: avg_uv_index, type: double}
+              - {name: avg_uv_index_clear_sky, type: double}
+              - {name: uv_attenuation_ratio, type: double}
+              - {name: avg_energy_mwh_per_hour, type: double}
+              - {name: avg_capacity_factor_pct, type: double}
+              - {name: avg_shortwave_radiation, type: double}
+              - {name: radiation_efficiency_ratio, type: double}
+              - {name: estimated_aqi_energy_loss_pct, type: double}
+              - {name: batch_id, type: string}
+              - {name: created_at, type: timestamp}
+              - {name: updated_at, type: timestamp}
+
+          mart_forecast_accuracy_daily:
+            description: "ML forecast accuracy per facility per day — R²/RMSE/MAE/NRMSE/skill score, with 7-day rolling averages and version-over-version deltas."
+            grain: [facility_id, eval_date]
+            columns:
+              - {name: facility_id, type: string}
+              - {name: facility_name, type: string}
+              - {name: region, type: string}
+              - {name: eval_date, type: date}
+              - {name: model_name, type: string}
+              - {name: model_version, type: string}
+              - {name: approach, type: string, description: "A/B/C/D/E benchmark approach."}
+              - {name: algorithm, type: string, description: "Ridge / GBT / RF / Stacking."}
+              - {name: is_champion, type: boolean}
+              - {name: is_fallback, type: boolean}
+              - {name: daytime_rows, type: int}
+              - {name: r2, type: double, description: "Coefficient of determination (regression, can go negative)."}
+              - {name: rmse_mwh, type: double}
+              - {name: mae_mwh, type: double}
+              - {name: nrmse_pct, type: double}
+              - {name: nmae_pct, type: double}
+              - {name: mape_day_pct, type: double}
+              - {name: skill_score, type: double, description: "Skill vs persistence baseline; positive = better than persistence."}
+              - {name: mean_capacity_mw, type: double}
+              - {name: r2_7d_avg, type: double}
+              - {name: nrmse_7d_avg, type: double}
+              - {name: skill_score_7d_avg, type: double}
+              - {name: r2_vs_prev_version, type: double}
+              - {name: rmse_vs_prev_version, type: double}
+              - {name: forecast_accuracy_grade, type: string, description: "A / B / C / D / F human-readable grade."}
+              - {name: generated_at_utc, type: timestamp}
+              - {name: batch_id, type: string}
+
+          forecast_daily:
+            description: "Daily energy forecast per facility — predicted vs actual, with 4 horizon-specific models (D+1, D+3, D+5, D+7). For ad-hoc 'next 7 days' rollups use forecast_horizon=7 (gives the day-7 prediction); to get the timeline use forecast_horizon IN (1,3,5,7) and ORDER BY forecast_date."
+            grain: [facility_id, forecast_date, forecast_horizon]
+            columns:
+              - {name: forecast_daily_id, type: string}
+              - {name: facility_id, type: string}
+              - {name: forecast_date, type: date, description: "Calendar date the forecast targets."}
+              - {name: predicted_energy_mwh_daily, type: double}
+              - {name: actual_energy_mwh_daily, type: double, description: "Backfilled once the day passes; NULL for future dates."}
+              - {name: predicted_capacity_factor_daily, type: double}
+              - {name: model_name, type: string, description: "One of: pv.gold.daily_forecast_d1 / _d3 / _d5 / _d7 (horizon-specific) or pv.gold.energy_forecast_champion (legacy backfill)."}
+              - {name: model_version, type: string}
+              - {name: generated_at_utc, type: timestamp}
+              - {name: batch_id, type: string}
+              - {name: forecast_horizon, type: int, description: "Days ahead at generation time. Discrete values 1, 3, 5, 7 (each backed by its own registered model). NULL on legacy pre-2026-04 rows."}
+            sample_questions:
+              - "Dự báo sản lượng 7 ngày tới"
+              - "Tomorrow's predicted production"
+              - "Forecast accuracy yesterday"
+              - "Forecast for D+5 by facility"
+
+          model_monitoring_daily:
+            description: "Champion model regression metrics over time — R², RMSE, MAE, NRMSE, skill score per facility per eval_date."
+            grain: [facility_id, eval_date]
+            columns:
+              - {name: monitoring_id, type: string}
+              - {name: facility_id, type: string}
+              - {name: eval_date, type: date}
+              - {name: model_name, type: string}
+              - {name: model_version, type: string}
+              - {name: approach, type: string}
+              - {name: daytime_rows, type: int}
+              - {name: r2, type: double, description: "R² (regression metric)."}
+              - {name: rmse_mwh, type: double}
+              - {name: mae_mwh, type: double}
+              - {name: nrmse_pct, type: double}
+              - {name: nmae_pct, type: double}
+              - {name: mape_day_pct, type: double}
+              - {name: skill_score, type: double}
+              - {name: mean_capacity_mw, type: double}
+              - {name: generated_at_utc, type: timestamp}
+              - {name: batch_id, type: string}
+
+          pipeline_run_diagnostics:
+            description: "Per-pipeline run health — bronze/silver/gold stage row counts, status, failures."
+            grain: [pipeline_name, run_timestamp_utc]
+            columns:
+              - {name: diagnostic_id, type: string}
+              - {name: pipeline_name, type: string, description: "ingestion / transformation / warehouse / ml / maintenance."}
+              - {name: status, type: string, description: "SUCCESS / FAILED / RUNNING / SKIPPED."}
+              - {name: lookback_hours, type: int}
+              - {name: run_timestamp_utc, type: timestamp}
+              - {name: run_date, type: date}
+              - {name: bronze_ingest_events, type: int}
+              - {name: bronze_failed_events, type: int}
+              - {name: silver_quality_checks, type: int}
+              - {name: silver_quality_failed_checks, type: int}
+              - {name: gold_monitoring_records, type: int}
+              - {name: forecast_hourly_rows_generated, type: int}
+              - {name: forecast_daily_rows_generated, type: int}
+              - {name: detail, type: string, description: "Free-text diagnostic detail."}
+
+          dim_date:
+            description: "Conformed date dimension — calendar lookups, fiscal periods."
+            grain: [date_key]
+            columns:
+              - {name: date_key, type: int}
+              - {name: full_date, type: date}
+              - {name: year, type: int}
+              - {name: month, type: int}
+              - {name: day, type: int}
+              - {name: day_of_week, type: int}
+              - {name: day_name, type: string}
+              - {name: month_name, type: string}
+              - {name: quarter, type: int}
+              - {name: is_weekend, type: boolean}
+
+          dim_time:
+            description: "Conformed time-of-day dimension — hour-of-day breakdowns."
+            grain: [time_key]
+            columns:
+              - {name: time_key, type: int}
+              - {name: hour, type: int}
+              - {name: minute, type: int}
+              - {name: second, type: int}
+              - {name: is_daytime, type: boolean}
+
+          dim_aqi_category:
+            description: "Static AQI category lookup (Good / Moderate / Unhealthy / Hazardous)."
+            columns:
+              - {name: aqi_category_key, type: int}
+              - {name: aqi_category_name, type: string}
+              - {name: aqi_min, type: int}
+              - {name: aqi_max, type: int}
+              - {name: health_advisory, type: string}
+
+          dim_weather_condition:
+            description: "Derived weather condition grouping (clear / partly cloudy / overcast / rain etc.)."
+            columns:
+              - {name: weather_condition_key, type: int}
+              - {name: condition_name, type: string}
+              - {name: cloud_cover_band, type: string}
+
+# -----------------------------------------------------------------------------
+# Canonical metrics — pre-defined SQL templates the LLM picks via recall_metric
+# -----------------------------------------------------------------------------
+
+metrics:
+
+  # === System overview ===
+  system_overview:
+    description: "Fleet-level AGGREGATE KPI only. Returns ONE row of rolled-up numbers — total energy MWh, average capacity factor pct, data completeness pct, count of active sites. NEVER use this when the user asks about per-site details, listings, locations, rankings, or comparisons."
+    synonyms: ["tổng quan hệ thống", "tong quan he thong", "system overview", "system kpi", "fleet kpi", "kpi cards", "kpi dashboard", "overall fleet", "fleet aggregate", "aggregate kpi", "rolled-up kpi", "average capacity factor", "avg capacity factor", "fleet capacity factor", "system capacity factor", "tóm tắt hệ thống", "tom tat he thong", "tóm tắt toàn hệ thống"]
+    sample_questions:
+      - "Cho tôi xem tổng quan hệ thống"
+      - "Show fleet KPI for last 7 days"
+      - "Tóm tắt hiệu suất hệ thống"
+      - "What's the overall fleet KPI"
+      - "Fleet-wide rolled-up KPI for the past month"
+      - "Tóm tắt KPI toàn hệ thống"
+    sql_template: |
+      SELECT
+        SUM(total_energy_mwh) AS total_energy_mwh,
+        AVG(avg_capacity_factor_pct) AS avg_capacity_factor_pct,
+        MAX(total_facility_count) AS facility_count,
+        MAX(active_facility_count) AS active_facility_count,
+        AVG(data_completeness_pct) AS data_completeness_pct,
+        COUNT(*) AS window_days
+      FROM pv.gold.mart_system_kpi_daily
+      WHERE kpi_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+    parameters:
+      - {name: window_days, type: int, default: 30, range: [1, 365]}
+    suggested_chart: null   # KPI cards, no chart
+    suggested_kpi_cards: ["total_energy_mwh", "avg_capacity_factor_pct", "facility_count", "data_completeness_pct"]
+
+  # === Energy ranking ===
+  top_facilities_by_energy:
+    description: "Top N trạm theo tổng sản lượng. Use for 'top N facilities', 'top trạm', 'best facilities', 'ranking by energy', 'highest producing facilities'."
+    synonyms: ["top facilities", "top facility", "top n facilities", "top 5 facilities", "top 10 facilities", "top trạm", "top tram", "best facilities", "best performing facilities", "top performing facilities", "ranking by energy", "rank facilities", "ranking", "xếp hạng", "xep hang", "tốt nhất", "tot nhat", "cao nhất", "cao nhat", "nhiều nhất", "highest production", "highest producing", "leaderboard", "biggest producers", "largest producers"]
+    sample_questions:
+      - "Top 5 trạm sản lượng cao nhất 30 ngày qua"
+      - "Top 5 facilities by energy in the last 30 days"
+      - "Best facilities by energy this month"
+      - "Xếp hạng trạm theo sản lượng"
+      - "Which facilities produced the most energy"
+    sql_template: |
+      SELECT facility_name,
+             SUM(energy_mwh_daily) AS total_energy_mwh,
+             AVG(weighted_capacity_factor_pct) AS avg_capacity_factor_pct
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_name
+      ORDER BY total_energy_mwh {sort_order}
+      LIMIT {n}
+    parameters:
+      - {name: window_days, type: int, default: 30}
+      - {name: n, type: int, default: 5, range: [1, 50]}
+      - {name: sort_order, type: enum, values: [DESC, ASC], default: DESC}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: total_energy_mwh
+
+  facility_energy_contribution:
+    description: "Tỉ lệ đóng góp điện năng của từng trạm trong tổng sản lượng. Use for 'tỉ lệ đóng góp', 'energy share', 'contribution ratio', 'phần trăm sản lượng từng trạm'."
+    synonyms: [
+      "tỉ lệ đóng góp", "ti le dong gop", "tỷ lệ đóng góp", "ty le dong gop",
+      "phần trăm sản lượng", "phan tram san luong", "phần trăm điện năng",
+      "đóng góp điện năng", "dong gop dien nang", "đóng góp sản lượng",
+      "share", "contribution ratio", "energy share", "energy contribution",
+      "percentage of total", "share of total", "percent of energy",
+      "split by facility", "breakdown by facility", "phân bổ sản lượng",
+      "tỉ trọng", "ti trong", "tỷ trọng",
+    ]
+    sample_questions:
+      - "Tỉ lệ đóng góp điện năng của 8 trạm trong hệ thống"
+      - "Tỷ lệ đóng góp sản lượng từng trạm"
+      - "Energy share by facility"
+      - "Contribution ratio per facility"
+      - "Phần trăm sản lượng mỗi trạm"
+    sql_template: |
+      WITH per_facility AS (
+        SELECT facility_name,
+               SUM(energy_mwh_daily) AS total_energy_mwh
+        FROM pv.gold.mart_energy_daily
+        WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        GROUP BY facility_name
+      )
+      SELECT facility_name,
+             total_energy_mwh,
+             ROUND(100.0 * total_energy_mwh / SUM(total_energy_mwh) OVER (), 2) AS share_pct
+      FROM per_facility
+      ORDER BY total_energy_mwh DESC
+    parameters:
+      - {name: window_days, type: int, default: 30, range: [1, 365]}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: share_pct
+
+  wind_impact_on_energy:
+    description: "Tác động của tốc độ gió đến hiệu suất sản xuất điện theo từng trạm. Use for 'wind speed impact', 'tác động tốc độ gió', 'ảnh hưởng gió đến sản lượng'."
+    synonyms: [
+      # Distinctive single tokens — "wind" / "gió" alone should boost this
+      # over generic weather correlation metrics.
+      "wind", "gió", "gio",
+      "wind speed", "tốc độ gió", "toc do gio",
+      "tác động tốc độ gió", "tac dong toc do gio",
+      "tác động của tốc độ gió", "tac dong cua toc do gio",
+      "ảnh hưởng tốc độ gió", "anh huong toc do gio",
+      "ảnh hưởng của tốc độ gió", "anh huong cua toc do gio",
+      "ảnh hưởng của gió", "anh huong cua gio",
+      "tác động của gió", "tac dong cua gio",
+      "wind speed impact", "wind impact on energy",
+      "impact of wind speed", "impact of wind",
+      "wind on production", "wind on energy",
+      "wind vs energy", "wind speed vs",
+      "tốc độ gió và sản lượng", "toc do gio va san luong",
+      "gió và hiệu suất", "gio va hieu suat",
+      "gió và sản lượng", "gio va san luong",
+    ]
+    sample_questions:
+      - "Tác động của tốc độ gió đến hiệu suất sản xuất năng lượng PV"
+      - "Phân tích ảnh hưởng của tốc độ gió đến hiệu suất"
+      - "Ảnh hưởng của gió đến sản lượng từng trạm"
+      - "Impact of wind speed on PV energy production"
+      - "How does wind speed affect facility energy output"
+      - "Wind speed vs total energy by facility"
+    sql_template: |
+      SELECT facility_name,
+             AVG(avg_wind_speed_ms) AS avg_wind_speed_ms,
+             AVG(avg_capacity_factor_pct) AS avg_capacity_factor_pct,
+             SUM(total_energy_mwh) AS total_energy_mwh
+      FROM pv.gold.mart_weather_impact_daily
+      WHERE weather_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_name
+      ORDER BY avg_wind_speed_ms DESC
+    parameters:
+      - {name: window_days, type: int, default: 30, range: [1, 365]}
+    suggested_chart:
+      chart_type: scatter
+      x: avg_wind_speed_ms
+      y: avg_capacity_factor_pct
+
+  temperature_vs_energy_correlation:
+    description: "Tương quan nhiệt độ vs hiệu suất tạo điện (capacity factor). Use for 'tương quan nhiệt độ', 'correlation temperature energy', 'temp vs performance'."
+    synonyms: [
+      "tương quan nhiệt độ", "tuong quan nhiet do",
+      "correlation temperature", "temperature vs energy",
+      "temp vs performance", "nhiệt độ và hiệu suất",
+      "nhiệt độ và sản lượng", "temperature impact",
+      "ảnh hưởng nhiệt độ", "anh huong nhiet do",
+      "tương quan", "tuong quan", "correlation",
+    ]
+    sample_questions:
+      - "Phân tích tương quan giữa nhiệt độ và hiệu suất tạo điện"
+      - "Correlation between temperature and energy production"
+      - "How does temperature affect capacity factor"
+      - "Tương quan nhiệt độ và sản lượng"
+    sql_template: |
+      SELECT facility_name,
+             AVG(avg_temperature_c) AS avg_temperature_c,
+             AVG(weighted_capacity_factor_pct) AS avg_capacity_factor_pct,
+             SUM(energy_mwh_daily) AS total_energy_mwh
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_name
+      ORDER BY avg_temperature_c
+    parameters:
+      - {name: window_days, type: int, default: 30}
+    suggested_chart:
+      chart_type: scatter
+      x: avg_temperature_c
+      y: avg_capacity_factor_pct
+
+  facility_energy_specific_day:
+    description: "Sản lượng từng trạm trong 1 ngày cụ thể (mặc định: hôm qua). Use for 'trạm nào sản lượng cao nhất hôm qua', 'highest energy yesterday', 'energy yesterday by facility'."
+    synonyms: [
+      "yesterday", "hôm qua", "hom qua",
+      "highest energy yesterday", "top facility yesterday",
+      "trạm cao nhất hôm qua", "tram cao nhat hom qua",
+      "sản lượng hôm qua", "san luong hom qua",
+      "energy yesterday by facility", "yesterday by facility",
+      "energy on", "trên ngày", "ngày cụ thể",
+    ]
+    sample_questions:
+      - "Which facility had the highest energy output yesterday?"
+      - "Trạm nào sản lượng cao nhất hôm qua"
+      - "Sản lượng từng trạm hôm qua"
+      - "Energy yesterday by facility"
+      - "Top facility yesterday"
+    sql_template: |
+      SELECT facility_name,
+             energy_mwh_daily AS total_energy_mwh,
+             weighted_capacity_factor_pct AS capacity_factor_pct,
+             performance_ratio_pct
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date = CURRENT_DATE - INTERVAL '{days_ago}' DAY
+      ORDER BY energy_mwh_daily DESC
+    parameters:
+      - {name: days_ago, type: int, default: 1, range: [0, 30],
+         description: "0 = today, 1 = yesterday, 7 = same day last week."}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: total_energy_mwh
+
+  facilities_by_performance_ratio:
+    description: "Ranking trạm theo Performance Ratio (PR) — tỷ lệ năng lượng thực / lý thuyết. Use for 'PR tốt nhất', 'best performance ratio', 'top facilities by PR'."
+    synonyms: [
+      # Strong PR-specific tokens — single token boosts must be unambiguous
+      "pr", "performance ratio", "performance_ratio",
+      "tỷ lệ hiệu suất", "ty le hieu suat",
+      "tỉ lệ hiệu suất", "ti le hieu suat",
+      "best pr", "highest pr", "top pr", "pr cao nhất",
+      "pr tốt nhất", "pr tot nhat", "pr cao nhat",
+      "best performance ratio", "highest performance ratio",
+      "top performance ratio", "pr ranking",
+      "facility pr", "trạm pr", "tram pr",
+      "ranking by pr", "rank by performance ratio",
+      "pr theo trạm", "pr theo tram",
+    ]
+    sample_questions:
+      - "Trạm trong hệ thống có PR tốt nhất"
+      - "Top 5 trạm theo Performance Ratio"
+      - "Which facility has the best Performance Ratio"
+      - "Best PR facility last 30 days"
+      - "Xếp hạng các trạm theo PR"
+      - "Performance Ratio của từng trạm"
+    sql_template: |
+      SELECT facility_name,
+             AVG(performance_ratio_pct) AS avg_performance_ratio_pct,
+             AVG(weighted_capacity_factor_pct) AS avg_capacity_factor_pct,
+             SUM(energy_mwh_daily) AS total_energy_mwh
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_name
+      ORDER BY avg_performance_ratio_pct {sort_order}
+      LIMIT {n}
+    parameters:
+      - {name: window_days, type: int, default: 30, range: [1, 365]}
+      - {name: n, type: int, default: 8, range: [1, 50]}
+      - {name: sort_order, type: enum, values: [DESC, ASC], default: DESC}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: avg_performance_ratio_pct
+
+  bottom_facilities_by_capacity_factor:
+    description: "Trạm có capacity factor thấp nhất. Use for 'underperformers', 'trạm yếu', 'lowest CF'."
+    synonyms: ["underperformer", "trạm yếu", "tram yeu", "thấp nhất", "thap nhat", "kém nhất", "kem nhat", "lowest", "worst facilities", "tệ nhất", "te nhat"]
+    sample_questions:
+      - "Trạm nào hiệu suất kém nhất tháng qua"
+      - "Worst performing facilities last 30 days"
+      - "Show underperformers by capacity factor"
+    sql_template: |
+      SELECT facility_name,
+             AVG(weighted_capacity_factor_pct) AS avg_capacity_factor_pct,
+             SUM(energy_mwh_daily) AS total_energy_mwh
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_name
+      ORDER BY avg_capacity_factor_pct ASC
+      LIMIT {n}
+    parameters:
+      - {name: window_days, type: int, default: 30}
+      - {name: n, type: int, default: 5}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: avg_capacity_factor_pct
+
+  # === Hourly trends ===
+  hourly_energy_trend:
+    description: "Tổng năng lượng theo giờ trong N ngày qua (toàn hệ thống). Use for 'hourly energy generation', 'hourly trend this month', 'theo giờ tháng này'."
+    synonyms: ["hourly energy", "hourly generation", "hourly trend", "energy by hour", "theo giờ", "theo gio", "trend tháng này", "this month", "tháng này", "thang nay", "energy trend", "generation trend", "production trend", "biến động sản lượng"]
+    sample_questions:
+      - "Show hourly energy generation trend for this month"
+      - "Hourly trend last 7 days"
+      - "Biến động sản lượng theo giờ tháng này"
+      - "Hourly production this month"
+    sql_template: |
+      SELECT date_hour_local,
+             SUM(energy_mwh) AS total_energy_mwh
+      FROM pv.gold.fact_energy
+      WHERE date_hour_local >= CURRENT_TIMESTAMP - INTERVAL '{window_days}' DAY
+      GROUP BY date_hour_local
+      ORDER BY date_hour_local
+    parameters:
+      - {name: window_days, type: int, default: 30, range: [1, 90]}
+    suggested_chart:
+      chart_type: line
+      x: date_hour_local
+      y: total_energy_mwh
+
+  peak_hours_pattern:
+    description: "Pattern sản lượng theo giờ trong ngày (avg per hour-of-day). Use for 'peak hour', 'giờ cao điểm', 'giờ nào sản lượng cao nhất', 'which hour highest output'."
+    synonyms: [
+      "peak hour", "peak hours", "peak production hour", "peak production",
+      "giờ cao điểm", "gio cao diem", "giờ cao nhất", "gio cao nhat",
+      "giờ nào cao nhất", "gio nao cao nhat",
+      "giờ nào sản lượng cao nhất", "gio nao san luong cao nhat",
+      "sản lượng cao nhất trong ngày", "san luong cao nhat trong ngay",
+      "khung giờ", "khung gio", "khung giờ cao điểm",
+      "hourly trend", "hour of day", "hour-of-day",
+      "by hour", "trong ngày", "trong ngay",
+      "which hour highest", "what hour peak", "highest output hour",
+      "đỉnh sản lượng", "dinh san luong", "giờ đỉnh", "gio dinh",
+    ]
+    sample_questions:
+      - "Giờ nào sản lượng cao nhất trong ngày"
+      - "Peak production hour pattern"
+      - "Sản lượng theo từng giờ"
+      - "Which hour of day has the highest output"
+      - "What's the peak hour for solar generation"
+      - "Giờ cao điểm sản lượng"
+    sql_template: |
+      SELECT EXTRACT(HOUR FROM date_hour_local) AS hour_of_day,
+             AVG(energy_mwh) AS avg_energy_mwh
+      FROM pv.gold.fact_energy
+      WHERE date_hour_local >= CURRENT_TIMESTAMP - INTERVAL '{window_days}' DAY
+      GROUP BY EXTRACT(HOUR FROM date_hour_local)
+      ORDER BY hour_of_day
+    parameters:
+      - {name: window_days, type: int, default: 30}
+    suggested_chart:
+      chart_type: line
+      x: hour_of_day
+      y: avg_energy_mwh
+
+  # === Facility info / map ===
+  facility_locations_map:
+    description: "Toạ độ tất cả trạm cho map visualization. Use for 'map', 'vị trí', 'where are', 'show locations'."
+    synonyms: ["map", "bản đồ", "ban do", "vị trí", "vi tri", "ở đâu", "o dau", "where are", "locations", "geo", "toạ độ", "toa do", "lat lng", "coordinates", "địa điểm", "dia diem"]
+    sample_questions:
+      - "Các trạm điện mặt trời ở đâu, cho tôi xem map"
+      - "Show me a map of all facilities"
+      - "Vị trí địa lý các trạm"
+      - "Where are the solar farms located"
+    sql_template: |
+      SELECT facility_name,
+             facility_id,
+             location_lat AS latitude,
+             location_lng AS longitude,
+             total_capacity_mw AS capacity_mw,
+             region,
+             state
+      FROM pv.gold.dim_facility
+      WHERE is_current = TRUE
+    parameters: []
+    suggested_chart:
+      chart_type: scatter_geo
+      longitude: longitude
+      latitude: latitude
+      size: capacity_mw
+      hover_text: facility_name
+
+  facility_metadata_list:
+    description: "Per-facility LIST — one row per active facility (capacity, region, state, status, lat/lng). ALWAYS use this when the user asks about facilities/stations/trạm in any way that implies a list, info per station, locations, or 'what/which/how many facilities'. Returns 8 rows."
+    synonyms: [
+      # English list/info phrases
+      "list facilities", "list all facilities", "list of facilities", "list of stations",
+      "facility list", "facilities list", "stations list",
+      "facility details", "facility info", "facility information", "facilities information",
+      "stations info", "stations information", "station info", "station information",
+      "info about facilities", "info about stations", "info about the facilities",
+      "info on facilities", "info on stations", "all facilities info",
+      "facilities in the system", "stations in the system", "facilities in our system",
+      "system facilities", "system stations", "all facilities", "all stations",
+      "active facilities", "active stations", "operating facilities", "operating stations",
+      "facility metadata", "metadata facilities",
+      "how many facilities", "what facilities", "which facilities", "which facilities exist",
+      # Vietnamese list/info phrases
+      "danh sách trạm", "danh sach tram", "danh sách các trạm",
+      "thông tin trạm", "thong tin tram", "thông tin từng trạm", "thong tin tung tram",
+      "thông tin các trạm", "thong tin cac tram", "thông tin chi tiết",
+      "thông tin về các trạm", "thong tin ve cac tram", "thông tin về trạm",
+      "chi tiết trạm", "chi tiet tram", "chi tiết các trạm", "chi tiết từng trạm",
+      "trạm trong hệ thống", "tram trong he thong", "các trạm trong hệ thống",
+      "trạm đang hoạt động", "tram dang hoat dong",
+      "công suất các trạm", "cong suat cac tram", "công suất từng trạm",
+      "bao nhiêu trạm", "bao nhieu tram", "có bao nhiêu trạm", "co bao nhieu tram",
+      # Single-word fallback so a query like "system overview facilities" still
+      # gets a synonym boost via word-boundary match.
+      "facilities", "stations",
+    ]
+    sample_questions:
+      - "Danh sách công suất các trạm"
+      - "List all facilities with their capacity"
+      - "Thông tin chi tiết về các trạm"
+      - "Liệt kê tất cả các trạm đang hoạt động"
+      - "Hiện tại hệ thống có bao nhiêu trạm đang hoạt động, thông tin của từng trạm"
+      - "Show me all facility details"
+      - "How many facilities are active and their info"
+      - "Thông tin từng trạm trong hệ thống"
+    sql_template: |
+      SELECT facility_id,
+             facility_name,
+             total_capacity_mw AS capacity_mw,
+             location_lat AS latitude,
+             location_lng AS longitude,
+             region,
+             state,
+             technology_type
+      FROM pv.gold.dim_facility
+      WHERE is_current = TRUE
+      ORDER BY total_capacity_mw DESC
+    parameters: []
+    # Map preferred — lat/lng present + capacity sizes the bubble.
+    suggested_chart:
+      chart_type: scatter_geo
+      longitude: longitude
+      latitude: latitude
+      size: capacity_mw
+
+  facility_comparison:
+    description: "So sánh 2 trạm cụ thể: metadata (capacity, location) + hiệu suất 30 ngày (energy, capacity factor, PR, irradiance, cloud, temp). Use for 'so sánh', 'compare', 'versus', 'vs', 'difference between', 'đối chiếu', '2 trạm', 'hai trạm'."
+    synonyms: [
+      "so sánh", "so sanh", "so sánh 2 trạm", "so sánh hai trạm",
+      "đối chiếu", "doi chieu", "so sánh trạm", "so sanh tram",
+      "compare", "compare facilities", "compare stations",
+      "comparison", "facility comparison", "station comparison",
+      "versus", "vs", "vs.", "đối chiếu trạm",
+      "difference between", "khác nhau", "khac nhau",
+      "giữa hai trạm", "giua hai tram", "giữa 2 trạm",
+      "Darlington", "Avonlie", "DARLSF vs", "AVLSF vs",
+      "so sánh sản lượng", "so sánh hiệu suất", "so sánh công suất",
+      "Darlington Point vs Avonlie", "Darlington vs Avonlie",
+    ]
+    sample_questions:
+      - "So sánh trạm Darlington Point và Avonlie"
+      - "Compare Darlington Point and Avonlie facilities"
+      - "DARLSF vs AVLSF — capacity, energy, capacity factor"
+      - "Sự khác nhau giữa DARLSF và AVLSF về hiệu suất"
+      - "Which is better: DARLSF or AVLSF"
+      - "Compare AVLSF and WRSF1 energy performance"
+    sql_template: |
+      WITH meta AS (
+        SELECT facility_id, facility_name,
+               total_capacity_mw, region, state,
+               location_lat, location_lng, technology_type
+        FROM pv.gold.dim_facility
+        WHERE is_current = TRUE
+          AND facility_id IN ('{facility_id_1}', '{facility_id_2}')
+      ),
+      energy AS (
+        SELECT facility_id,
+               ROUND(SUM(energy_mwh_daily), 2)              AS total_energy_mwh,
+               ROUND(AVG(weighted_capacity_factor_pct), 2)  AS avg_cf_pct,
+               ROUND(AVG(performance_ratio_pct), 2)         AS avg_pr_pct,
+               ROUND(AVG(avg_shortwave_radiation), 1)       AS avg_irradiance_w_m2,
+               ROUND(AVG(avg_cloud_cover_pct), 1)           AS avg_cloud_pct,
+               ROUND(AVG(avg_temperature_c), 1)             AS avg_temp_c
+        FROM pv.gold.mart_energy_daily
+        WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+          AND facility_id IN ('{facility_id_1}', '{facility_id_2}')
+        GROUP BY facility_id
+      )
+      SELECT m.facility_name,
+             m.total_capacity_mw    AS capacity_mw,
+             m.region,
+             m.state,
+             e.total_energy_mwh,
+             e.avg_cf_pct           AS avg_capacity_factor_pct,
+             e.avg_pr_pct           AS avg_performance_ratio_pct,
+             e.avg_irradiance_w_m2,
+             e.avg_cloud_pct        AS avg_cloud_cover_pct,
+             e.avg_temp_c           AS avg_temperature_c
+      FROM meta m
+      JOIN energy e ON m.facility_id = e.facility_id
+      ORDER BY m.facility_name
+    parameters:
+      - {name: facility_id_1, type: string, description: "First facility code (e.g. DARLSF). Required."}
+      - {name: facility_id_2, type: string, description: "Second facility code (e.g. AVLSF). Required."}
+      - {name: window_days, type: int, default: 30, range: [1, 365]}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: total_energy_mwh
+
+  # === Forecast (D+1, D+3, D+5, D+7 horizon-specific models) ===
+  forecast_7d:
+    description: "Dự báo sản lượng tới 7 ngày (D+1, D+3, D+5, D+7) cho toàn hệ thống — ML pipeline registers một model riêng cho mỗi horizon. Use for 'dự báo 7 ngày', 'forecast next week', 'D+5/D+7', 'predicted next days'."
+    synonyms: [
+      "dự báo", "du bao", "forecast", "predict", "predicted",
+      "dự đoán", "du doan", "tomorrow", "ngày mai", "ngay mai",
+      "7 ngày tới", "7 ngay toi", "next 7 days", "next week",
+      "tuần tới", "tuan toi", "tuần này", "tuan nay",
+      "D+1", "D+3", "D+5", "D+7", "horizon",
+      "5 ngày", "5 ngay", "5 days",
+    ]
+    sample_questions:
+      - "Dự báo sản lượng 7 ngày tới"
+      - "Forecast next 7 days production"
+      - "Sản lượng dự kiến tuần tới"
+      - "Predicted energy for D+5"
+    sql_template: |
+      SELECT forecast_date,
+             SUM(predicted_energy_mwh_daily) AS predicted_energy_mwh,
+             MAX(forecast_horizon) AS horizon
+      FROM pv.gold.forecast_daily
+      WHERE forecast_date >= CURRENT_DATE
+        AND forecast_date <= CURRENT_DATE + INTERVAL '{horizon_days}' DAY
+        AND forecast_horizon IS NOT NULL
+      GROUP BY forecast_date
+      ORDER BY forecast_date
+    parameters:
+      - {name: horizon_days, type: int, default: 7, range: [1, 7]}
+    suggested_chart:
+      chart_type: line
+      x: forecast_date
+      y: predicted_energy_mwh
+
+  forecast_per_facility_7d:
+    description: "Dự báo per-facility cho 7 ngày tới (D+1..D+7). Use when user wants per-station forecast breakdown."
+    synonyms: [
+      "dự báo per trạm", "dự báo theo trạm", "dự báo từng trạm",
+      "forecast per facility", "per station forecast",
+      "breakdown forecast", "từng trạm dự báo",
+      "facility forecast", "per-facility 7 day",
+    ]
+    sample_questions:
+      - "Dự báo từng trạm 7 ngày tới"
+      - "Per-facility forecast breakdown D+1 to D+7"
+      - "Dự báo theo trạm tuần tới"
+    sql_template: |
+      SELECT f.facility_name,
+             f.facility_id,
+             d.forecast_date,
+             d.forecast_horizon,
+             d.predicted_energy_mwh_daily AS predicted_mwh
+      FROM pv.gold.forecast_daily d
+      JOIN pv.gold.dim_facility f
+        ON f.facility_id = d.facility_id
+       AND f.is_current = TRUE
+      WHERE d.forecast_date >= CURRENT_DATE
+        AND d.forecast_date <= CURRENT_DATE + INTERVAL '{horizon_days}' DAY
+        AND d.forecast_horizon IS NOT NULL
+      ORDER BY f.facility_name, d.forecast_date
+    parameters:
+      - {name: horizon_days, type: int, default: 7, range: [1, 7]}
+    suggested_chart:
+      chart_type: line
+      x: forecast_date
+      y: predicted_mwh
+      color: facility_name
+
+  forecast_by_horizon:
+    description: "So sánh dự báo theo từng horizon (D+1 vs D+3 vs D+5 vs D+7) cho 1 ngày target. Use when user asks 'how does the D+7 prediction compare to D+1' for the same date — measures forecast stability."
+    synonyms: [
+      "so sánh horizon", "so sanh horizon",
+      "compare horizon", "horizon comparison",
+      "D+1 vs D+7", "stability forecast",
+      "forecast drift", "độ ổn định dự báo",
+    ]
+    sample_questions:
+      - "So sánh dự báo D+1, D+3, D+5, D+7 cho ngày mai"
+      - "Compare forecast at different horizons for next week"
+      - "Forecast drift between D+1 and D+7"
+    sql_template: |
+      SELECT forecast_date,
+             forecast_horizon,
+             SUM(predicted_energy_mwh_daily) AS predicted_energy_mwh
+      FROM pv.gold.forecast_daily
+      WHERE forecast_date >= CURRENT_DATE
+        AND forecast_date <= CURRENT_DATE + INTERVAL '7' DAY
+        AND forecast_horizon IN (1, 3, 5, 7)
+      GROUP BY forecast_date, forecast_horizon
+      ORDER BY forecast_date, forecast_horizon
+    parameters: []
+    suggested_chart:
+      chart_type: line
+      x: forecast_date
+      y: predicted_energy_mwh
+      color: forecast_horizon
+
+  model_metadata:
+    description: "Thông tin model ML hiện tại: tên, version, approach, accuracy metrics (R², RMSE, NRMSE, skill_score) cho mỗi horizon (D+1, D+3, D+5, D+7). Use when user asks about 'model nào đang dùng', 'phiên bản model', 'độ chính xác model', 'thông tin model', 'current model', 'model info'."
+    synonyms: [
+      "thông tin model", "thong tin model",
+      "model nào", "model nao", "phiên bản model", "phien ban model",
+      "độ chính xác model", "do chinh xac model",
+      "model info", "current model", "champion model",
+      "model version", "which model", "what model",
+      "model performance", "model metadata",
+      "metadata model", "ml model info",
+      "horizon model", "model horizon",
+    ]
+    sample_questions:
+      - "Mô hình ML hiện tại đang dùng là gì?"
+      - "Thông tin model dự báo D+1, D+3, D+5, D+7"
+      - "What ML model is currently in production?"
+      - "Show me the champion model + accuracy per horizon"
+      - "Phiên bản model dự báo và R², RMSE bao nhiêu?"
+    sql_template: |
+      WITH ranked AS (
+        SELECT model_name, model_version, approach, eval_date,
+               r2, rmse_mwh, nrmse_pct, mape_day_pct, skill_score, daytime_rows,
+               ROW_NUMBER() OVER (PARTITION BY model_name ORDER BY eval_date DESC) AS rn
+        FROM pv.gold.model_monitoring_daily
+        WHERE facility_id = 'ALL'
+          AND model_name LIKE 'pv.gold.daily_forecast_%'
+          AND eval_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      )
+      SELECT model_name,
+             TRY_CAST(REGEXP_EXTRACT(model_name, 'd([0-9]+)$', 1) AS INT) AS horizon_days,
+             model_version,
+             approach,
+             eval_date,
+             ROUND(r2, 3)             AS r2,
+             ROUND(rmse_mwh, 2)       AS rmse_mwh,
+             ROUND(nrmse_pct, 2)      AS nrmse_pct,
+             ROUND(mape_day_pct, 2)   AS mape_pct,
+             ROUND(skill_score, 3)    AS skill_score,
+             daytime_rows             AS sample_count
+      FROM ranked
+      WHERE rn = 1
+      ORDER BY horizon_days
+    parameters:
+      - {name: window_days, type: int, default: 7, range: [1, 30]}
+    suggested_chart: null
+    suggested_kpi_cards: ["model_name", "model_version", "r2", "rmse_mwh", "nrmse_pct", "skill_score"]
+
+  # === Per-station reports ===
+  station_daily_report:
+    description: "Báo cáo hàng ngày cho 1 trạm (sản lượng, capacity factor, chất lượng dữ liệu) trong N ngày qua. Use for 'báo cáo trạm', 'station daily report', 'daily report this week'."
+    synonyms: ["station daily report", "báo cáo trạm", "bao cao tram", "daily report", "báo cáo hàng ngày", "bao cao hang ngay", "this week", "tuần này", "tuan nay", "last week", "tuần qua", "tuan qua", "report for station", "báo cáo cho trạm"]
+    sample_questions:
+      - "Daily station report for this week"
+      - "Báo cáo hàng ngày cho trạm AVLSF tuần này"
+      - "Show me the daily report for WRSF1 last 7 days"
+      - "Báo cáo sản lượng hàng ngày 7 ngày qua"
+    sql_template: |
+      SELECT m.energy_date,
+             m.facility_name,
+             m.energy_mwh_daily AS total_energy_mwh,
+             m.weighted_capacity_factor_pct AS capacity_factor_pct,
+             m.completeness_pct_daily AS data_completeness_pct
+      FROM pv.gold.mart_energy_daily m
+      WHERE m.energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        AND ('{facility_id}' = '' OR m.facility_id = '{facility_id}')
+      ORDER BY m.energy_date DESC, m.facility_name
+    parameters:
+      - {name: window_days, type: int, default: 7, range: [1, 90]}
+      - {name: facility_id, type: string, default: "", description: "Optional facility code; '' = all stations"}
+    suggested_chart:
+      chart_type: line
+      x: energy_date
+      y: total_energy_mwh
+      color: facility_name
+
+  station_hourly_report:
+    description: "Báo cáo theo giờ cho 1 trạm trong N ngày qua. Use for 'hourly report', 'theo giờ', 'giờ qua'."
+    synonyms: ["hourly report", "theo giờ", "theo gio", "by hour", "hourly trend per station", "báo cáo theo giờ", "bao cao theo gio", "trong giờ qua", "trong gio qua"]
+    sample_questions:
+      - "Hourly report for AVLSF last 24 hours"
+      - "Báo cáo theo giờ cho trạm WRSF1"
+      - "Show hourly production for Bomen last 3 days"
+    sql_template: |
+      SELECT date_hour_local,
+             facility_name,
+             energy_mwh,
+             capacity_factor_pct
+      FROM pv.gold.fact_energy
+      WHERE date_hour_local >= CURRENT_TIMESTAMP - INTERVAL '{window_days}' DAY
+        AND ('{facility_id}' = '' OR facility_id = '{facility_id}')
+      ORDER BY date_hour_local DESC, facility_name
+    parameters:
+      - {name: window_days, type: int, default: 3, range: [1, 14]}
+      - {name: facility_id, type: string, default: "", description: "Optional facility code; '' = all stations"}
+    suggested_chart:
+      chart_type: line
+      x: date_hour_local
+      y: energy_mwh
+      color: facility_name
+
+  # === Extreme values ===
+  extreme_aqi:
+    description: "Top/bottom AQI readings trong window. Use for 'AQI cao nhất', 'worst air quality'."
+    synonyms: ["aqi", "air quality", "chất lượng không khí", "chat luong khong khi", "ô nhiễm", "o nhiem", "pollution", "pm25", "pm2.5", "pm10", "khói bụi"]
+    sample_questions:
+      - "AQI cao nhất tuần qua ở đâu"
+      - "Worst air quality readings last 30 days"
+      - "Mức ô nhiễm cao nhất"
+    sql_template: |
+      SELECT location_id,
+             aqi_timestamp_local AS observed_at,
+             aqi_value,
+             pm25,
+             pm10
+      FROM pv.silver.air_quality
+      WHERE aqi_timestamp_local >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        AND aqi_value IS NOT NULL
+      ORDER BY aqi_value {sort_order}
+      LIMIT {n}
+    parameters:
+      - {name: window_days, type: int, default: 30}
+      - {name: n, type: int, default: 5}
+      - {name: sort_order, type: enum, values: [DESC, ASC], default: DESC}
+    suggested_chart:
+      chart_type: bar
+      x: location_id
+      y: aqi
+
+  extreme_weather:
+    description: "Top/bottom giá trị weather (gió, mây, nhiệt độ) per facility. Use for 'gió mạnh nhất', 'cloudiest day', 'wind speed ranking'."
+    synonyms: ["gió mạnh", "gio manh", "wind speed", "tốc độ gió", "toc do gio", "mây nhiều", "may nhieu", "cloudy", "cloud cover", "nhiệt độ cao", "nhiet do cao", "temperature", "thời tiết khắc nghiệt", "thoi tiet", "weather extreme", "humidity", "độ ẩm", "do am"]
+    sample_questions:
+      - "Trạm nào có tốc độ gió cao nhất, vẽ biểu đồ"
+      - "Highest wind speed by facility"
+      - "Ngày nào nhiều mây nhất"
+      - "Top temperature readings"
+    sql_template: |
+      SELECT COALESCE(facility_name, location_id) AS facility,
+             weather_timestamp_local AS observed_at,
+             {value_column} AS metric_value
+      FROM pv.silver.weather
+      WHERE weather_timestamp_local >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        AND {value_column} IS NOT NULL
+      ORDER BY {value_column} {sort_order}
+      LIMIT {n}
+    parameters:
+      - {name: window_days, type: int, default: 30}
+      - {name: value_column, type: enum, values: [wind_speed_ms, cloud_cover_pct, temperature_c, humidity_pct], default: wind_speed_ms}
+      - {name: n, type: int, default: 5}
+      - {name: sort_order, type: enum, values: [DESC, ASC], default: DESC}
+    suggested_chart:
+      chart_type: bar
+      x: facility
+      y: metric_value
+
+  extreme_energy:
+    description: "Top/bottom hourly energy readings. Use for 'sản lượng cao nhất ngày nào', 'peak production hour'."
+    synonyms: ["sản lượng cao nhất", "san luong cao nhat", "peak production", "highest energy", "kỷ lục", "ky luc", "record production", "max output", "min output", "thấp nhất sản lượng"]
+    sample_questions:
+      - "Sản lượng cao nhất ngày nào tháng qua"
+      - "Peak hourly energy reading"
+      - "Lowest production hours"
+    sql_template: |
+      SELECT COALESCE(facility_name, facility_id) AS facility,
+             date_hour_local AS observed_at,
+             energy_kwh
+      FROM pv.silver.energy_readings
+      WHERE date_hour_local >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        AND energy_kwh IS NOT NULL
+      ORDER BY energy_kwh {sort_order}
+      LIMIT {n}
+    parameters:
+      - {name: window_days, type: int, default: 30}
+      - {name: n, type: int, default: 5}
+      - {name: sort_order, type: enum, values: [DESC, ASC], default: DESC}
+
+  # === ML model info: see `model_metadata` above ===
+  # The legacy `ml_model_metrics` was removed in the D+1→D+7 cutover —
+  # its `LIMIT 1` collapsed all 4 horizon-specific models into one row, and
+  # `AVG()` over facility_id silently squashed the 8-facility dimension.
+  # Use `model_metadata` instead — it returns one row per horizon (D+1, D+3,
+  # D+5, D+7) with proper rounding and horizon extracted from model_name.
+
+  # === Pipeline status ===
+  pipeline_recent_runs:
+    description: "Recent pipeline run health (success/failed counts). Use for 'pipeline status', 'có job nào fail không'."
+    synonyms: ["pipeline", "job", "status", "ingestion", "etl", "run history", "fail", "failed", "lỗi job", "loi job", "tình trạng pipeline", "tinh trang pipeline", "data flow"]
+    sample_questions:
+      - "Pipeline có job nào fail không"
+      - "Recent ETL run status"
+      - "Tình trạng ingestion 24h qua"
+    sql_template: |
+      SELECT pipeline_name,
+             status,
+             COUNT(*) AS run_count,
+             MAX(run_timestamp_utc) AS latest_run,
+             SUM(bronze_failed_events) AS bronze_failed_total,
+             SUM(silver_quality_failed_checks) AS silver_failed_total
+      FROM pv.gold.pipeline_run_diagnostics
+      WHERE run_timestamp_utc >= CURRENT_TIMESTAMP - INTERVAL '{lookback_hours}' HOUR
+      GROUP BY pipeline_name, status
+      ORDER BY pipeline_name, status
+    parameters:
+      - {name: lookback_hours, type: int, default: 24, range: [1, 720]}
+
+  # === Data quality ===
+  data_quality_per_facility:
+    description: "Quality / completeness per facility in last window. Use for 'chất lượng dữ liệu', 'trạm nào có vấn đề'."
+    synonyms: ["data quality", "chất lượng dữ liệu", "chat luong du lieu", "completeness", "missing data", "thiếu dữ liệu", "thieu du lieu", "null", "vấn đề", "van de", "anomaly", "bất thường", "bat thuong"]
+    sample_questions:
+      - "Trạm nào có vấn đề data quality"
+      - "Missing data by facility this week"
+      - "Chất lượng dữ liệu các trạm 7 ngày qua"
+    sql_template: |
+      SELECT facility_id,
+             facility_name,
+             AVG(weighted_capacity_factor_pct) AS avg_capacity_factor_pct,
+             COUNT(DISTINCT energy_date) AS days_observed,
+             SUM(CASE WHEN energy_mwh_daily IS NULL OR energy_mwh_daily = 0 THEN 1 ELSE 0 END) AS zero_or_null_days
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_id, facility_name
+      ORDER BY zero_or_null_days DESC, avg_capacity_factor_pct ASC
+    parameters:
+      - {name: window_days, type: int, default: 7}
+    suggested_chart:
+      chart_type: bar
+      x: facility_name
+      y: zero_or_null_days
+
+  # === Correlation ===
+  weather_energy_correlation:
+    description: "Mối tương quan weather-energy theo facility (uses mart_energy_daily as source — has both weather + energy aggregates). Use for 'correlation', 'mối tương quan'."
+    synonyms: ["correlation", "tương quan", "tuong quan", "mối quan hệ", "moi quan he", "ảnh hưởng", "anh huong", "yếu tố ảnh hưởng", "yeu to anh huong", "factor", "irradiance", "bức xạ", "buc xa", "weather impact", "scatter", "regression"]
+    sample_questions:
+      - "Yếu tố nào ảnh hưởng nhất đến hiệu suất tạo điện"
+      - "Correlation between cloud cover and energy output"
+      - "Mối quan hệ giữa bức xạ và sản lượng"
+      - "Weather factors driving production"
+    sql_template: |
+      SELECT facility_id,
+             facility_name,
+             AVG(avg_cloud_cover_pct) AS avg_cloud_cover_pct,
+             AVG(avg_temperature_c) AS avg_temperature_c,
+             AVG(avg_shortwave_radiation) AS avg_irradiance,
+             SUM(energy_mwh_daily) AS total_energy_mwh
+      FROM pv.gold.mart_energy_daily
+      WHERE energy_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      GROUP BY facility_id, facility_name
+    parameters:
+      - {name: window_days, type: int, default: 30}
+    suggested_chart:
+      chart_type: scatter
+      x: avg_cloud_cover_pct
+      y: total_energy_mwh
+      color: facility_name
+
+# -----------------------------------------------------------------------------
+# Per-role table whitelist — narrows discover_schema for each role
+# -----------------------------------------------------------------------------
+
+roles:
+  admin:
+    description: "Full access."
+    allowed_tables: ["*"]
+    allowed_metrics: ["*"]
+
+  ml_engineer:
+    description: "Model + forecast focus."
+    allowed_tables:
+      - pv.gold.dim_facility
+      - pv.gold.fact_energy
+      - pv.gold.mart_energy_daily
+      - pv.gold.mart_system_kpi_daily
+      - pv.gold.mart_forecast_accuracy_daily
+      - pv.gold.forecast_daily
+      - pv.gold.model_monitoring_daily
+      - pv.silver.energy_readings
+    allowed_metrics: ["*"]
+
+  data_engineer:
+    description: "Pipeline + quality focus."
+    allowed_tables:
+      - pv.gold.pipeline_run_diagnostics
+      - pv.gold.dim_facility
+      - pv.gold.mart_system_kpi_daily
+      - pv.gold.mart_energy_daily
+      - pv.silver.energy_readings
+      - pv.silver.weather
+      - pv.silver.air_quality
+    allowed_metrics:
+      - system_overview
+      - pipeline_recent_runs
+      - data_quality_per_facility
+      - facility_metadata_list
+      - facility_comparison
+
+  data_analyst:
+    description: "Read-only analytics. KPI marts only."
+    allowed_tables:
+      - pv.gold.dim_facility
+      - pv.gold.mart_energy_daily
+      - pv.gold.mart_system_kpi_daily
+      - pv.gold.mart_weather_impact_daily
+      - pv.gold.mart_aqi_impact_daily
+      - pv.gold.forecast_daily
+    allowed_metrics:
+      - system_overview
+      - top_facilities_by_energy
+      - bottom_facilities_by_capacity_factor
+      - peak_hours_pattern
+      - facility_locations_map
+      - facility_metadata_list
+      - facility_comparison
+      - forecast_7d
+      - forecast_per_facility_7d
+      - forecast_by_horizon
+      - model_metadata
+      - weather_energy_correlation
+      - station_daily_report
+      - station_hourly_report
+      - hourly_energy_trend
+      - facility_energy_contribution
+      - temperature_vs_energy_correlation
+      - wind_impact_on_energy
+      - facilities_by_performance_ratio
+      - facility_energy_specific_day

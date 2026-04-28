@@ -59,7 +59,7 @@ class SolarChatSettings(BaseSettings):
         validation_alias=AliasChoices("SOLAR_CHAT_FALLBACK_MODEL", "fallback_model"),
     )
     request_timeout_seconds: float = Field(
-        default=15.0,
+        default=90.0,
         validation_alias=AliasChoices("SOLAR_CHAT_REQUEST_TIMEOUT_SECONDS", "request_timeout_seconds"),
     )
     llm_default_max_output_tokens: int = Field(
@@ -78,28 +78,11 @@ class SolarChatSettings(BaseSettings):
             "llm_tool_call_max_output_tokens",
         ),
     )
-    llm_planner_max_output_tokens: int = Field(
-        default=2600,
+    llm_reasoning_effort: str | None = Field(
+        default=None,
         validation_alias=AliasChoices(
-            "SOLAR_CHAT_LLM_PLANNER_MAX_OUTPUT_TOKENS",
-            "SOLAR_AI_PLANNER_MAX_OUTPUT_TOKENS",
-            "llm_planner_max_output_tokens",
-        ),
-    )
-    llm_synthesis_max_output_tokens: int = Field(
-        default=3600,
-        validation_alias=AliasChoices(
-            "SOLAR_CHAT_LLM_SYNTHESIS_MAX_OUTPUT_TOKENS",
-            "SOLAR_AI_SYNTHESIS_MAX_OUTPUT_TOKENS",
-            "llm_synthesis_max_output_tokens",
-        ),
-    )
-    llm_verifier_max_output_tokens: int = Field(
-        default=1600,
-        validation_alias=AliasChoices(
-            "SOLAR_CHAT_LLM_VERIFIER_MAX_OUTPUT_TOKENS",
-            "SOLAR_AI_VERIFIER_MAX_OUTPUT_TOKENS",
-            "llm_verifier_max_output_tokens",
+            "SOLAR_CHAT_REASONING_EFFORT",
+            "llm_reasoning_effort",
         ),
     )
     llm_anthropic_version: str = Field(
@@ -163,72 +146,6 @@ class SolarChatSettings(BaseSettings):
     pg_database_url: str | None = Field(default=None, alias="DATABASE_URL")
     pg_sslmode: str | None = Field(default=None, alias="POSTGRES_SSLMODE")
     pg_channel_binding: str | None = Field(default=None, alias="POSTGRES_CHANNEL_BINDING")
-
-    embedding_primary_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "SOLAR_CHAT_EMBEDDING_PRIMARY_API_KEY",
-            "SOLAR_CHAT_EMBEDDING_API_KEY",  # legacy
-            "SOLAR_CHAT_GEMINI_API_KEY",
-        ),
-    )
-    embedding_fallback_api_key: str | None = Field(
-        default=None,
-        alias="SOLAR_CHAT_EMBEDDING_FALLBACK_API_KEY",
-    )
-    embedding_base_url: str = Field(
-        default="https://generativelanguage.googleapis.com/v1beta",
-        validation_alias=AliasChoices("SOLAR_CHAT_EMBEDDING_BASE_URL", "SOLAR_CHAT_GEMINI_BASE_URL"),
-    )
-    embedding_model: str = Field(
-        default="gemini-embedding-001",
-        alias="SOLAR_CHAT_EMBEDDING_MODEL",
-    )
-    embedding_dimensions: int = Field(
-        default=3072,
-        alias="SOLAR_CHAT_EMBEDDING_DIMENSIONS",
-    )
-    rag_chunk_size: int = Field(default=512, alias="SOLAR_CHAT_RAG_CHUNK_SIZE")
-    rag_chunk_overlap: int = Field(default=64, alias="SOLAR_CHAT_RAG_CHUNK_OVERLAP")
-    rag_top_k: int = Field(default=5, alias="SOLAR_CHAT_RAG_TOP_K")
-    analytics_lookback_days: int = Field(
-        default=30,
-        alias="SOLAR_CHAT_ANALYTICS_LOOKBACK_DAYS",
-    )
-    intent_semantic_enabled: bool = Field(
-        default=True,
-        alias="SOLAR_CHAT_INTENT_SEMANTIC_ENABLED",
-    )
-    intent_semantic_min_confidence: float = Field(
-        default=0.70,
-        alias="SOLAR_CHAT_INTENT_SEMANTIC_MIN_CONFIDENCE",
-    )
-    intent_keyword_fastpath_score: int = Field(
-        default=2,
-        alias="SOLAR_CHAT_INTENT_KEYWORD_FASTPATH_SCORE",
-    )
-
-    # --- Agent Architecture Feature Flags ---
-    planner_enabled: bool = Field(
-        default=True,
-        alias="SOLAR_AI_PLANNER_ENABLED",
-    )
-    orchestrator_enabled: bool = Field(
-        default=True,
-        alias="SOLAR_AI_ORCHESTRATOR_ENABLED",
-    )
-    verifier_enabled: bool = Field(
-        default=True,
-        alias="SOLAR_AI_VERIFIER_ENABLED",
-    )
-    hybrid_retrieval_enabled: bool = Field(
-        default=True,
-        alias="SOLAR_AI_HYBRID_RETRIEVAL_ENABLED",
-    )
-    max_tool_steps: int = Field(
-        default=6,
-        alias="SOLAR_AI_MAX_TOOL_STEPS",
-    )
 
     @property
     def gemini_api_key(self) -> str | None:
@@ -345,21 +262,6 @@ class SolarChatSettings(BaseSettings):
 
         repository_root = Path(__file__).resolve().parents[4]
         return repository_root / "main" / "sql"
-
-    @property
-    def embedding_api_key(self) -> str | None:
-        """Backward-compatible alias for callers expecting a single key."""
-        return self.embedding_primary_api_key
-
-    @property
-    def embedding_api_keys(self) -> tuple[str, ...]:
-        """Ordered tuple of distinct embedding keys: primary first, then fallback."""
-        keys: list[str] = []
-        for candidate in (self.embedding_primary_api_key, self.embedding_fallback_api_key):
-            value = (candidate or "").strip()
-            if value and value not in keys:
-                keys.append(value)
-        return tuple(keys)
 
 
 @lru_cache(maxsize=1)

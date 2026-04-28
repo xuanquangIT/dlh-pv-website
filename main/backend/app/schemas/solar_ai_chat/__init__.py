@@ -15,21 +15,6 @@ from app.schemas.solar_ai_chat.session import (
     UpdateSessionTitleRequest,
 )
 from app.schemas.solar_ai_chat.tools import TOOL_DECLARATIONS, TOOL_NAME_TO_TOPIC
-from app.schemas.solar_ai_chat.agent import (
-    PlannerAction,
-    PlannerOutput,
-    EvidenceItem,
-    EvidenceStore,
-    ToolResultEnvelope,
-)
-from app.schemas.solar_ai_chat.rag import (
-    RagChunk,
-    RetrievedChunk,
-    RagSearchResult,
-    IngestDocumentRequest,
-    IngestDocumentResponse,
-    RagStatsResponse,
-)
 from app.schemas.solar_ai_chat.ui_features import (
     UiFeature,
     ROLE_UI_FEATURES,
@@ -74,17 +59,6 @@ __all__ = [
     "UpdateSessionTitleRequest",
     "TOOL_DECLARATIONS",
     "TOOL_NAME_TO_TOPIC",
-    "RagChunk",
-    "RetrievedChunk",
-    "RagSearchResult",
-    "IngestDocumentRequest",
-    "IngestDocumentResponse",
-    "RagStatsResponse",
-    "PlannerAction",
-    "PlannerOutput",
-    "EvidenceItem",
-    "EvidenceStore",
-    "ToolResultEnvelope",
     "ThinkingStepEvent",
     "ToolResultEvent",
     "StatusUpdateEvent",

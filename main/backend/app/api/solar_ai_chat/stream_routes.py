@@ -16,6 +16,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.api.dependencies import require_role
 from app.db.database import AuthUser
@@ -28,6 +29,7 @@ from app.api.solar_ai_chat.routes import (
     _resolve_user_chat_role,
 )
 from app.repositories.solar_ai_chat.base_repository import DatabricksDataUnavailableError
+from app.services.solar_ai_chat.cancellation import cancel as _cancel_trace
 
 logger = logging.getLogger(__name__)
 
@@ -96,3 +98,31 @@ def stream_solar_ai_chat(
             "Access-Control-Allow-Origin": "*",
         },
     )
+
+
+class StopRequest(BaseModel):
+    trace_id: str = Field(..., min_length=1, max_length=64)
+
+
+class StopResponse(BaseModel):
+    cancelled: bool
+
+
+@stream_router.post("/stop", response_model=StopResponse)
+def stop_solar_ai_chat(
+    body: StopRequest,
+    current_user: AuthUser = Depends(require_role(["admin", "data_engineer", "ml_engineer"])),
+) -> StopResponse:
+    """Cancel an in-flight chat run by trace_id.
+
+    Sets the cancellation event for the trace. The engine checks the event
+    between LLM turns and raises EngineCancelled on the next checkpoint, so
+    the actual stop happens when the current LLM call returns (soft stop —
+    same UX as ChatGPT's stop button). Returns ``{cancelled: false}`` if
+    the trace_id is unknown (already finished or never existed).
+    """
+    cancelled = _cancel_trace(body.trace_id)
+    if cancelled:
+        logger.info("solar_chat_stop trace_id=%s by user=%s",
+                    body.trace_id, current_user.username)
+    return StopResponse(cancelled=cancelled)

@@ -1,0 +1,82 @@
+name: Solar Chat — semantic + safety gate
+
+on:
+  pull_request:
+    paths:
+      - "main/backend/app/services/solar_ai_chat/**"
+      - "main/backend/app/services/solar_ai_chat/semantic/**"
+      - "main/backend/tests/unit/**"
+      - "main/backend/tests/eval/question_sets/**"
+      - "main/backend/scripts/solar_chat_eval_cli.py"
+      - ".github/workflows/solar-chat-eval.yml"
+  push:
+    branches: ["main", "feat/solar-chat-engine-v2"]
+
+jobs:
+  unit-and-eval-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate semantic layer YAML
+        env:
+          PYTHONPATH: main/backend
+        run: |
+          python <<'PY'
+          from app.services.solar_ai_chat.semantic_loader import load_semantic_layer
+          layer = load_semantic_layer()
+          assert layer.tables, 'no tables loaded'
+          assert layer.metrics, 'no metrics loaded'
+          assert layer.role_policies, 'no role policies loaded'
+          print(f'OK: {len(layer.tables)} tables, {len(layer.metrics)} metrics, {len(layer.role_policies)} roles')
+          PY
+
+      - name: Static metrics.yaml validation
+        env:
+          PYTHONPATH: main/backend
+        run: |
+          python main/backend/scripts/validate_metrics_yaml.py --static
+
+      - name: Run engine + LLM client + semantic + SQL safety unit tests
+        env:
+          PYTHONPATH: main/backend
+        run: |
+          python -m pytest \
+            main/backend/tests/unit/test_engine.py \
+            main/backend/tests/unit/test_llm_client.py \
+            main/backend/tests/unit/test_llm_client_extended.py \
+            main/backend/tests/unit/test_llm_client_parsers.py \
+            main/backend/tests/unit/test_llm_function_calling.py \
+            main/backend/tests/unit/test_semantic_layer.py \
+            main/backend/tests/unit/test_sql_safety.py \
+            main/backend/tests/unit/test_chart_payload_contract.py \
+            --override-ini="addopts=" \
+            -q
+
+      - name: Validate eval question sets parseable
+        run: |
+          python <<'PY'
+          import yaml, pathlib
+          for p in pathlib.Path('main/backend/tests/eval/question_sets').glob('*.yaml'):
+              data = yaml.safe_load(p.read_text(encoding='utf-8')) or []
+              # Question sets may be a bare list OR a dict like {questions: [...]}.
+              qs = data.get('questions', data) if isinstance(data, dict) else data
+              assert isinstance(qs, list) and qs, f'{p} empty or invalid'
+              for q in qs:
+                  assert 'id' in q and 'query' in q, f"{p}:{q.get('id')} missing required field"
+              print(f'OK {p.name}: {len(qs)} questions')
+          PY
+
+  # Optional: a full live capture+judge job runs against staging when SOLAR_CHAT_EVAL_BASE_URL is set.
+  # Wire this in once a long-lived staging environment is provisioned.

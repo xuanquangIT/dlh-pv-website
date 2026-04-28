@@ -194,14 +194,20 @@ class QueryEndpointTests(_BaseChatTest):
         cls.app = cls._build_app("admin")
         cls.mock_history = cls._build_history_mock()
         cls.mock_service = cls._build_service_mock()
-        # Patch lru_cache singletons
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        # `get_solar_ai_chat_service` is called directly inside
+        # `_resolve_chat_service_for_request`, NOT via FastAPI Depends, so
+        # `dependency_overrides` doesn't intercept it. Monkey-patch the
+        # module-level reference instead so the mock is hit on every call.
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def test_query_success(self) -> None:
@@ -331,11 +337,14 @@ class BenchmarkEndpointTests(_BaseChatTest):
         cls.mock_service = cls._build_service_mock()
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def test_benchmark_full_pipeline_success(self) -> None:
@@ -661,177 +670,6 @@ class SessionEndpointTests(_BaseChatTest):
 
 
 # ---------------------------------------------------------------------------
-# RAG document endpoints (admin only)
-# ---------------------------------------------------------------------------
-
-class RagDocumentEndpointTests(_BaseChatTest):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.app = cls._build_app("admin")
-        cls.mock_vector_repo = MagicMock()
-        cls.mock_vector_repo.count_chunks.return_value = {
-            "total_chunks": 42,
-            "by_doc_type": {"incident_report": 20, "equipment_manual": 22},
-        }
-        cls.mock_vector_repo.delete_by_source.return_value = 5
-        from app.api.solar_ai_chat import routes as chat_routes
-        cls.app.dependency_overrides[chat_routes._get_vector_repository] = (
-            lambda: cls.mock_vector_repo
-        )
-        cls.client = TestClient(cls.app)
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls.app.dependency_overrides.clear()
-
-    # --- Stats ---
-
-    def test_get_document_stats_success(self) -> None:
-        response = self.client.get("/solar-ai-chat/documents/stats")
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["total_chunks"], 42)
-        self.assertIn("by_doc_type", body)
-
-    def test_get_document_stats_no_vector_repo_returns_zeros(self) -> None:
-        from app.api.solar_ai_chat import routes as chat_routes
-        self.app.dependency_overrides[chat_routes._get_vector_repository] = lambda: None
-        response = self.client.get("/solar-ai-chat/documents/stats")
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["total_chunks"], 0)
-        self.app.dependency_overrides[chat_routes._get_vector_repository] = (
-            lambda: self.mock_vector_repo
-        )
-
-    def test_get_document_stats_forbidden_for_data_engineer(self) -> None:
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("data_engineer")
-        response = self.client.get("/solar-ai-chat/documents/stats")
-        self.assertEqual(response.status_code, 403)
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("admin")
-
-    def test_get_document_stats_forbidden_for_ml_engineer(self) -> None:
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("ml_engineer")
-        response = self.client.get("/solar-ai-chat/documents/stats")
-        self.assertEqual(response.status_code, 403)
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("admin")
-
-    # --- Delete ---
-
-    def test_delete_document_success_returns_204(self) -> None:
-        self.mock_vector_repo.delete_by_source.return_value = 3
-        response = self.client.delete("/solar-ai-chat/documents/my_manual.pdf")
-        self.assertEqual(response.status_code, 204)
-
-    def test_delete_document_not_found_returns_404(self) -> None:
-        self.mock_vector_repo.delete_by_source.return_value = 0
-        response = self.client.delete("/solar-ai-chat/documents/ghost.pdf")
-        self.assertEqual(response.status_code, 404)
-        self.mock_vector_repo.delete_by_source.return_value = 5
-
-    def test_delete_document_no_vector_repo_returns_503(self) -> None:
-        from app.api.solar_ai_chat import routes as chat_routes
-        self.app.dependency_overrides[chat_routes._get_vector_repository] = lambda: None
-        response = self.client.delete("/solar-ai-chat/documents/my_manual.pdf")
-        self.assertEqual(response.status_code, 503)
-        self.app.dependency_overrides[chat_routes._get_vector_repository] = (
-            lambda: self.mock_vector_repo
-        )
-
-    def test_delete_document_forbidden_for_data_engineer(self) -> None:
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("data_engineer")
-        response = self.client.delete("/solar-ai-chat/documents/some.pdf")
-        self.assertEqual(response.status_code, 403)
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("admin")
-
-    # --- Ingest ---
-
-    def test_ingest_document_no_embedding_key_returns_503(self) -> None:
-        with patch(
-            "app.api.solar_ai_chat.routes.get_solar_chat_settings"
-        ) as mock_settings_fn:
-            mock_settings = MagicMock()
-            mock_settings.embedding_api_key = None
-            mock_settings_fn.return_value = mock_settings
-            response = self.client.post(
-                "/solar-ai-chat/documents/ingest",
-                json={"file_path": "/some/file.txt", "doc_type": "incident_report"},
-            )
-        self.assertEqual(response.status_code, 503)
-        self.assertIn("Embedding API key", response.json()["detail"])
-
-    def test_ingest_document_forbidden_for_data_engineer(self) -> None:
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("data_engineer")
-        response = self.client.post(
-            "/solar-ai-chat/documents/ingest",
-            json={"file_path": "/some/file.txt", "doc_type": "incident_report"},
-        )
-        self.assertEqual(response.status_code, 403)
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user("admin")
-
-    def test_ingest_document_invalid_doc_type_returns_422(self) -> None:
-        response = self.client.post(
-            "/solar-ai-chat/documents/ingest",
-            json={"file_path": "/some/file.txt", "doc_type": "invalid_type"},
-        )
-        self.assertEqual(response.status_code, 422)
-
-    def test_ingest_document_missing_file_path_returns_422(self) -> None:
-        response = self.client.post(
-            "/solar-ai-chat/documents/ingest",
-            json={"doc_type": "incident_report"},
-        )
-        self.assertEqual(response.status_code, 422)
-
-    def test_ingest_document_file_not_found_returns_400(self) -> None:
-        mock_settings = MagicMock()
-        mock_settings.embedding_api_key = "test-key"
-        mock_settings.resolved_data_root = Path("/app/data/sql")
-
-        with (
-            patch("app.api.solar_ai_chat.routes.get_solar_chat_settings", return_value=mock_settings),
-            patch("app.api.solar_ai_chat.routes._get_vector_repository", return_value=self.mock_vector_repo),
-            patch("app.api.solar_ai_chat.routes._get_embedding_client", return_value=MagicMock()),
-        ):
-            response = self.client.post(
-                "/solar-ai-chat/documents/ingest",
-                json={
-                    "file_path": "/nonexistent/path/file.txt",
-                    "doc_type": "incident_report",
-                },
-            )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("File not found", response.json()["detail"])
-
-    def test_ingest_document_path_outside_data_root_returns_400(self) -> None:
-        import tempfile
-
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
-            tmp.write(b"some content")
-            tmp_path = tmp.name
-
-        try:
-            mock_settings = MagicMock()
-            mock_settings.embedding_api_key = "test-key"
-            # Set data root to a path that does NOT contain the temp file
-            mock_settings.resolved_data_root = Path("/restricted/data/sql")
-
-            with (
-                patch("app.api.solar_ai_chat.routes.get_solar_chat_settings", return_value=mock_settings),
-                patch("app.api.solar_ai_chat.routes._get_vector_repository", return_value=self.mock_vector_repo),
-                patch("app.api.solar_ai_chat.routes._get_embedding_client", return_value=MagicMock()),
-            ):
-                response = self.client.post(
-                    "/solar-ai-chat/documents/ingest",
-                    json={"file_path": tmp_path, "doc_type": "incident_report"},
-                )
-            self.assertEqual(response.status_code, 400)
-            self.assertIn("data directory", response.json()["detail"])
-        finally:
-            Path(tmp_path).unlink(missing_ok=True)
-
-
-# ---------------------------------------------------------------------------
 # SSE stream endpoint
 # ---------------------------------------------------------------------------
 
@@ -843,11 +681,14 @@ class StreamEndpointTests(_BaseChatTest):
         cls.mock_service = cls._build_service_mock()
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def _make_sse_events(self) -> list[str]:
@@ -956,11 +797,14 @@ class RoleMappingTests(_BaseChatTest):
         cls.mock_service = cls._build_dynamic_service_mock()
         from app.api.solar_ai_chat import routes as chat_routes
         cls.app.dependency_overrides[chat_routes._get_history_repository] = lambda: cls.mock_history
-        cls.app.dependency_overrides[chat_routes.get_solar_ai_chat_service] = lambda: cls.mock_service
+        cls._chat_routes = chat_routes
+        cls._original_get_service = chat_routes.get_solar_ai_chat_service
+        chat_routes.get_solar_ai_chat_service = lambda: cls.mock_service
         cls.client = TestClient(cls.app)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        cls._chat_routes.get_solar_ai_chat_service = cls._original_get_service
         cls.app.dependency_overrides.clear()
 
     def test_admin_role_mapped_correctly(self) -> None:
@@ -997,7 +841,7 @@ class AdminToolStatsTests(_BaseChatTest):
             "by_tool": [
                 {"tool_name": "get_system_overview", "count": 20,
                  "avg_latency_ms": 123.4, "success_rate": 1.0},
-                {"tool_name": "get_forecast_72h", "count": 10,
+                {"tool_name": "get_forecast_7d", "count": 10,
                  "avg_latency_ms": 200.0, "success_rate": 0.9},
             ],
             "by_role": [{"role": "admin", "count": 30}],

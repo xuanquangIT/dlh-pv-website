@@ -41,6 +41,12 @@ class LLMGenerationResult:
 class ToolCallRequest:
     name: str
     arguments: dict[str, object]
+    # Opaque per-provider metadata that must round-trip back to the model
+    # on the next turn. Currently used only for Gemini's `thoughtSignature`
+    # which Gemini 3 requires to be echoed verbatim or it returns HTTP 400
+    # ("Function call is missing a thought_signature in functionCall parts").
+    # Other providers leave this empty.
+    provider_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,10 @@ class LLMModelRouter:
         self._anthropic_version = settings.llm_anthropic_version
         self._default_max_output_tokens = max(1, int(settings.llm_default_max_output_tokens))
         self._tool_call_max_output_tokens = max(1, int(settings.llm_tool_call_max_output_tokens))
+        # OpenAI reasoning models (o1, o3, gpt-5, codex-oauth proxies) accept
+        # `reasoning_effort` ∈ {low, medium, high}. None ⇒ omit the field.
+        raw_effort = (getattr(settings, "llm_reasoning_effort", None) or "").strip().lower()
+        self._reasoning_effort = raw_effort if raw_effort in {"low", "medium", "high"} else None
         self._request_executor = request_executor
         # Models that produced invalid tool invocations are skipped for a short TTL window.
         self._tool_call_disabled_models: dict[str, float] = {}
@@ -208,13 +218,14 @@ class LLMModelRouter:
                     contents.append(msg)
             payload: dict[str, object] = {
                 "contents": contents,
-                "tools": [{"function_declarations": tools}],
-                "tool_config": {"function_calling_config": {"mode": function_call_mode}},
                 "generationConfig": {
                     "maxOutputTokens": effective_max_tokens,
                     "temperature": 0.0,
                 },
             }
+            if tools:
+                payload["tools"] = [{"function_declarations": tools}]
+                payload["tool_config"] = {"function_calling_config": {"mode": function_call_mode}}
             if system_parts:
                 payload["systemInstruction"] = {"parts": system_parts}
             return payload, None
@@ -236,24 +247,30 @@ class LLMModelRouter:
                     non_system_messages.append(msg)
             payload = {
                 "messages": self._convert_gemini_messages_to_anthropic(non_system_messages),
-                "tools": self._convert_gemini_tools_to_anthropic(tools),
                 "max_tokens": effective_max_tokens,
                 "temperature": 0.0,
             }
+            if tools:
+                payload["tools"] = self._convert_gemini_tools_to_anthropic(tools)
+                if require_function_call:
+                    payload["tool_choice"] = {"type": "any"}
             if system_texts:
                 payload["system"] = "\n\n".join(system_texts)
-            if require_function_call:
-                payload["tool_choice"] = {"type": "any"}
             return payload, None
 
-        tool_choice = "required" if require_function_call else "auto"
-        payload = {
+        openai_tools = self._convert_gemini_tools_to_openai(tools)
+        payload: dict[str, object] = {
             "messages": self._convert_gemini_messages_to_openai(messages),
-            "tools": self._convert_gemini_tools_to_openai(tools),
-            "tool_choice": tool_choice,
             "temperature": 0.0,
             "max_tokens": effective_max_tokens,
         }
+        # tools / tool_choice are mutually required by the OpenAI API: passing
+        # tool_choice with an empty/missing tools array yields HTTP 400. v2's
+        # forced-synthesis turn deliberately sends tools=[] to make the model
+        # produce text — handle that here by omitting both.
+        if openai_tools:
+            payload["tools"] = openai_tools
+            payload["tool_choice"] = "required" if require_function_call else "auto"
         return payload, self._active_tool_call_disabled_models()
 
     def _build_tool_result_payload(
@@ -548,10 +565,18 @@ class LLMModelRouter:
                 arguments = function_call.get("args", {})
                 if not isinstance(arguments, dict):
                     arguments = {}
+                # Gemini 3 attaches `thoughtSignature` either on the Part
+                # itself or inside `functionCall`. We must echo it back on
+                # the next turn or the API returns HTTP 400.
+                metadata: dict[str, object] = {}
+                sig = part.get("thoughtSignature") or function_call.get("thoughtSignature")
+                if sig:
+                    metadata["thoughtSignature"] = sig
                 calls.append(
                     ToolCallRequest(
                         name=str(function_call.get("name", "")),
                         arguments=arguments,
+                        provider_metadata=metadata or None,
                     )
                 )
         if calls:
@@ -925,6 +950,10 @@ class LLMModelRouter:
         endpoint = f"{self._base_url}/chat/completions"
         request_payload = dict(payload)
         request_payload["model"] = model_name
+        # Inject reasoning_effort for OpenAI-compatible reasoning models.
+        # Server ignores the field if the model isn't a reasoning model.
+        if self._reasoning_effort and "reasoning_effort" not in request_payload:
+            request_payload["reasoning_effort"] = self._reasoning_effort
         if self._request_executor is not None:
             return self._request_executor(endpoint, request_payload, self._timeout)
         headers: dict[str, str] = {"Content-Type": "application/json"}
