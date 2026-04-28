@@ -2,6 +2,14 @@
 const DEFAULT_JOB_ID = 28718564084384; // matches backend DEFAULT_JOB_ID
 let currentJobId = DEFAULT_JOB_ID;
 
+function notify(message, type) {
+    if (window.PVPortalToast && typeof window.PVPortalToast.show === "function") {
+        window.PVPortalToast.show(message, { type: type });
+        return;
+    }
+    alert(message);
+}
+
 async function loadJobList() {
     const sel = document.getElementById('job-selector');
     if (!sel) return;
@@ -184,18 +192,30 @@ function formatScheduleReadable(cron, timezone, frequency, hour, minute, dayOfWe
 }
 
 function renderJobInfo(jobInfo) {
-    document.getElementById('job-name').textContent = jobInfo.settings.name || 'pv-lakehouse-incremental';
+    if (!jobInfo || !jobInfo.settings) {
+        const displayEl = document.getElementById('schedule-display');
+        if (displayEl) displayEl.textContent = 'No schedule configured (manual run only)';
+        return;
+    }
+
+    const jobNameEl = document.getElementById('job-name');
+    if (jobNameEl) {
+        jobNameEl.textContent = jobInfo.settings.name || 'pv-lakehouse-incremental';
+    }
+
     if(jobInfo.settings.schedule) {
         const schedule = jobInfo.settings.schedule;
         const cron = schedule.quartz_cron_expression || '0 0 3 * * ?';
         const timezone = schedule.timezone_id || 'UTC';
+        const pauseStatus = schedule.pause_status || 'UNPAUSED';
 
         const parsed = parseQuartzToPicker(cron);
         const readableSchedule = formatScheduleReadable(cron, timezone, parsed.frequency, parsed.hour, parsed.minute, parsed.dayOfWeek);
         
         const displayEl = document.getElementById('schedule-display');
         if (displayEl) {
-            displayEl.textContent = readableSchedule;
+            const pauseLabel = pauseStatus === 'PAUSED' ? 'Paused' : 'Active';
+            displayEl.textContent = readableSchedule + ' - ' + pauseLabel;
         }
 
         const frequencySelect = document.getElementById('schedule-frequency');
@@ -225,7 +245,7 @@ function renderJobInfo(jobInfo) {
         if (timezoneSelect && document.activeElement !== timezoneSelect) timezoneSelect.value = timezone;
     } else {
         const displayEl = document.getElementById('schedule-display');
-        if (displayEl) displayEl.textContent = 'No schedule configured';
+        if (displayEl) displayEl.textContent = 'No schedule configured (manual run only)';
     }
 }
 
@@ -282,13 +302,13 @@ function renderRecentRuns(runs) {
                 try {
                     const res = await fetch(`/data-pipeline/jobs/runs/${run.run_id}/cancel`, { method: 'POST' });
                     if(res.ok) {
-                        alert('Run cancellation requested.');
+                        notify('Run cancellation requested.', 'success');
                         fetchPipelineData();
                     } else {
-                        alert('Failed to cancel run.');
+                        notify('Failed to cancel run.', 'error');
                     }
                 } catch(e) {
-                    alert('Error canceling run.');
+                    notify('Error canceling run.', 'error');
                 } finally {
                     cancelBtn.disabled = false;
                     cancelBtn.textContent = 'Cancel';
@@ -424,6 +444,10 @@ function renderDAG(configuredTasks, runTasks) {
         gold:   { cls: 'layer-gold',   label: 'GOLD'   },
         ml:     { cls: 'layer-ml',     label: 'ML & SERVING' },
         forecast: { cls: 'layer-gold', label: 'GOLD'   },
+        incremental: { cls: 'layer-gold', label: 'GOLD' },
+        diagnostics: { cls: 'layer-gold', label: 'GOLD' },
+        finetune: { cls: 'layer-ml', label: 'ML & SERVING' },
+        post_finetune: { cls: 'layer-ml', label: 'ML & SERVING' },
     };
 
     function getLayerMeta(tasks, depthIdx) {
@@ -530,14 +554,14 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const response = await fetch(`/data-pipeline/jobs/run?job_id=${currentJobId}`, { method: 'POST' });
                 if(response.ok) {
-                    alert('Pipeline triggered successfully!');
+                    notify('Pipeline triggered successfully!', 'success');
                     fetchPipelineData(); // Refresh immediately
                 } else {
-                    alert('Failed to trigger pipeline.');
+                    notify('Failed to trigger pipeline.', 'error');
                 }
             } catch (err) {
                 console.error("Trigger failed", err);
-                alert('Failed to trigger pipeline.');
+                notify('Failed to trigger pipeline.', 'error');
             } finally {
                 runBtn.disabled = false;
                 runBtn.textContent = 'Run Now';
@@ -625,11 +649,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(message);
                 }
 
-                alert('Schedule updated successfully.');
+                notify('Schedule updated successfully.', 'success');
                 await fetchPipelineData();
             } catch (error) {
                 console.error('Schedule update failed', error);
-                alert(error.message || 'Failed to update schedule.');
+                notify(error.message || 'Failed to update schedule.', 'error');
             } finally {
                 if (saveBtn) {
                     saveBtn.disabled = false;

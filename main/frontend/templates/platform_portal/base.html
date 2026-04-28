@@ -33,6 +33,8 @@
 
     {% include "platform_portal/components/logout_modal.html" %}
 
+    <div class="portal-toast" id="portal-toast" role="status" aria-live="polite"></div>
+
     <script>
         window.PV_ROUTE = "{{ current_page | default('dashboard') }}";
         window.PV_USER_ROLE = "{{ api_role | default('') }}";

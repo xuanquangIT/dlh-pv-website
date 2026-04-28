@@ -38,6 +38,46 @@ body {
   color: var(--txt);
 }
 
+.portal-toast {
+  position: fixed;
+  top: 72px;
+  right: 20px;
+  max-width: 320px;
+  background: #111c14;
+  color: #fff;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  font-family: "DM Mono", monospace;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 2000;
+  box-shadow: 0 10px 22px rgba(8, 14, 10, 0.2);
+}
+
+.portal-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.portal-toast.is-error {
+  background: #2b1515;
+}
+
+.portal-toast.is-success {
+  background: #111c14;
+}
+
+@media (max-width: 720px) {
+  .portal-toast {
+    right: 12px;
+    left: 12px;
+    top: 64px;
+    max-width: none;
+  }
+}
+
 html[data-theme="dark"] body {
   background: var(--bg-base);
   color: var(--txt);

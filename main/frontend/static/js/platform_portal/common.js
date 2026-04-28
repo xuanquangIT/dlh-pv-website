@@ -119,6 +119,41 @@
     }
   }
 
+  var toastTimer = null;
+
+  function showToast(message, options) {
+    var toast = document.getElementById("portal-toast");
+    if (!toast) {
+      return false;
+    }
+
+    var opts = options && typeof options === "object" ? options : {};
+    var type = opts.type === "error" ? "error" : "success";
+    var duration = Number(opts.durationMs || 2200);
+
+    toast.textContent = message;
+    toast.classList.remove("is-error", "is-success");
+    toast.classList.add(type === "error" ? "is-error" : "is-success");
+    toast.classList.remove("show");
+
+    window.requestAnimationFrame(function () {
+      toast.classList.add("show");
+    });
+
+    if (toastTimer) {
+      window.clearTimeout(toastTimer);
+    }
+    toastTimer = window.setTimeout(function () {
+      toast.classList.remove("show");
+    }, duration);
+
+    return true;
+  }
+
+  window.PVPortalToast = {
+    show: showToast
+  };
+
   document.addEventListener("DOMContentLoaded", function () {
     enforcePortalAuth();
 

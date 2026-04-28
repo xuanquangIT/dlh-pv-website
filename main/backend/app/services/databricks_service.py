@@ -1,7 +1,10 @@
+import logging
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
 from app.core.settings import get_solar_chat_settings
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def get_databricks_client() -> WorkspaceClient:
@@ -116,19 +119,19 @@ def execute_sql(query: str) -> list[dict]:
     warehouse_id = settings.databricks_warehouse_id
     if not warehouse_id:
         raise ValueError("DATABRICKS_WAREHOUSE_ID is not set.")
-    
+
     response = client.statement_execution.execute_statement(
         warehouse_id=warehouse_id,
         statement=query,
         wait_timeout="30s"
     )
-    
+
     if not response or not response.manifest or not response.result:
         return []
-        
+
     columns = [col.name for col in response.manifest.schema.columns]
     data = response.result.data_array or []
-    
+
     results = []
     for row in data:
         results.append(dict(zip(columns, row)))
@@ -147,7 +150,7 @@ def get_quality_summary_metrics() -> dict:
       UNION ALL
       SELECT quality_flag FROM pv.silver.air_quality
     )
-    SELECT 
+    SELECT
       SUM(CASE WHEN quality_flag = 'GOOD'    THEN 1 ELSE 0 END) as valid,
       SUM(CASE WHEN quality_flag = 'WARNING' THEN 1 ELSE 0 END) as warning,
       SUM(CASE WHEN quality_flag = 'BAD'     THEN 1 ELSE 0 END) as invalid
@@ -191,7 +194,7 @@ def get_facility_quality_scores() -> list[dict]:
       UNION ALL
       SELECT facility_id as facility, quality_flag FROM pv.silver.facility_status
     )
-    SELECT 
+    SELECT
       facility,
       COUNT(*) as total,
       SUM(CASE WHEN quality_flag = 'GOOD' THEN 1 ELSE 0 END) as valid,
@@ -228,14 +231,14 @@ def get_recent_quality_issues() -> list[dict]:
     # rule_type column stores the check category (duplicate_key, null_rate,
     # range_check, ratio_bounds, freshness, timestamp_parse) — use it as 'sensor'.
     query = """
-    SELECT 
+    SELECT
       date_format(check_timestamp, 'HH:mm z')   AS time,
       table_name                                 AS facility,
       rule_type                                  AS sensor,
       rule_name                                  AS issue,
       CONCAT(CAST(failed_rows AS STRING), ' records') AS affected,
       CAST(failed_rate AS DOUBLE)                AS failed_rate,
-      CASE 
+      CASE
         WHEN CAST(failed_rate AS DOUBLE) <= 0.05 THEN 'WARNING'
         ELSE 'BAD'
       END                                        AS severity,
@@ -347,7 +350,7 @@ def get_model_monitoring_metrics(model_name: str | None = None) -> list[dict]:
           mape_day_pct             AS mape,
           skill_score
         FROM pv.gold.model_monitoring_daily
-        WHERE facility_id = 'ALL'
+        WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
         {model_filter}
         ORDER BY eval_date DESC
         LIMIT 30
@@ -357,10 +360,40 @@ def get_model_monitoring_metrics(model_name: str | None = None) -> list[dict]:
     return execute_sql(query)
 
 def get_model_evaluation_metrics(horizon: int | None = None) -> list[dict]:
-    # Queries model_evaluation_weekly: 30-day rolling window, 240 points (30d × 8 facilities).
-    # This gives statistically reliable R² vs model_monitoring_daily which uses 8 points/day.
-    horizon_filter = f"AND forecast_horizon = {horizon}" if horizon else ""
+    # Weekly evaluation table created by ml.production.evaluate_daily_models.
+    # Prefer the native schema; fall back to legacy columns if needed.
+    horizon_filter = f"AND horizon = {horizon}" if horizon else ""
     query = f"""
+    SELECT * FROM (
+        SELECT
+          eval_date     AS date,
+          horizon,
+          model_name,
+          model_version,
+          rmse          AS rmse,
+          mae           AS mae,
+          r2,
+          mape          AS mape,
+          skill_score
+        FROM pv.gold.model_evaluation_weekly
+        WHERE model_alias = 'champion'
+        {horizon_filter}
+        ORDER BY eval_date DESC
+        LIMIT 12
+    )
+    ORDER BY date ASC
+    """
+    try:
+        results = execute_sql(query)
+    except Exception as exc:
+        logger.warning("model_evaluation_weekly query failed, trying legacy schema: %s", exc)
+        results = []
+
+    if results:
+        return results
+
+    legacy_horizon_filter = f"AND forecast_horizon = {horizon}" if horizon else ""
+    legacy_query = f"""
     SELECT * FROM (
         SELECT
           eval_date                   AS date,
@@ -371,17 +404,16 @@ def get_model_evaluation_metrics(horizon: int | None = None) -> list[dict]:
           mae_mwh                     AS mae,
           r2,
           mape_day_pct                AS mape,
-          skill_score,
-          n_eval_days
+          skill_score
         FROM pv.gold.model_evaluation_weekly
-        WHERE facility_id = 'ALL'
-        {horizon_filter}
+        WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
+        {legacy_horizon_filter}
         ORDER BY eval_date DESC
         LIMIT 12
     )
     ORDER BY date ASC
     """
-    return execute_sql(query)
+    return execute_sql(legacy_query)
 
 def get_registry_models() -> list[dict]:
     # Group by (model_name, model_version) so each horizon×version is a distinct row.
@@ -397,7 +429,7 @@ def get_registry_models() -> list[dict]:
       ROUND(AVG(mape_day_pct), 2)       AS mape,
       MIN(eval_date)                    AS created
     FROM pv.gold.model_monitoring_daily
-    WHERE facility_id = 'ALL'
+    WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
     GROUP BY model_name, model_version
     ORDER BY model_name ASC, created DESC
     """
