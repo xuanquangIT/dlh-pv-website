@@ -48,14 +48,23 @@
       }
 
       tbody.innerHTML = data.map(function(model, idx) {
+        const approach = model.approach || 'Unknown Approach';
+        const algo = model.algorithm || 'Unknown Algorithm';
+        const isChampion = model.champion ? true : false;
+        const statusHtml = isChampion 
+            ? '<span class="badge badge-warn">★ CHAMPION</span>' 
+            : '<span class="badge" style="background:#dde3ed;color:#556075">challenger</span>';
+
         return `
           <tr class="registry-row" data-model-idx="${idx}" style="cursor:pointer;">
+            <td>${approach}</td>
+            <td>${algo}</td>
             <td>${horizonLabel(model.model_name)}</td>
-            <td>v${model.version}</td>
+            <td style="font-family: monospace;">v${model.version}</td>
+            <td style="font-family: monospace; font-weight: 500;">${formatMetricValue(model.r2, 4, '-', '')}</td>
             <td>${formatMetricValue(model.rmse, 2, '-', '')}</td>
             <td>${formatMetricValue(model.mae, 2, '-', '')}</td>
-            <td>${formatMetricValue(model.r2, 4, '-', '')}</td>
-            <td>${formatMetricValue(model.mape, 2, '-', '%')}</td>
+            <td>${statusHtml}</td>
             <td>${model.created || '-'}</td>
           </tr>
         `;

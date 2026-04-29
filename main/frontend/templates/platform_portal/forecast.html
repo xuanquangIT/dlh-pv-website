@@ -58,5 +58,72 @@
     </div>
 </section>
 
-<script src="/static/js/platform_portal/forecast.js?v=6"></script>
+<!-- Facility Drill-through Modal -->
+<div class="model-detail-modal" id="facility-drill-modal">
+    <div class="model-detail-content" style="max-width: 900px; width: 90%;">
+        <div class="model-detail-header">
+            <h2 id="facility-drill-title">Facility Drill-through</h2>
+            <button class="btn-close" id="facility-drill-close">&times;</button>
+        </div>
+        <div class="model-detail-body" id="facility-drill-body" style="background:#f8fafc; padding: 16px;">
+            <div id="facility-drill-loading" style="text-align:center; padding:40px;">Loading facility data...</div>
+            <div id="facility-drill-content" style="display:none;">
+                <!-- Header Info -->
+                <div style="margin-bottom: 16px;">
+                    <div style="font-family: monospace; font-size: 12px; color: #556075;" id="fd-code">FAC_ID</div>
+                    <h2 id="fd-name" style="margin: 4px 0;">Facility Name</h2>
+                    <div style="font-size: 12px; color: #556075;" id="fd-meta">Region · State · Capacity MW · Lat, Lon</div>
+                </div>
+
+                <!-- KPIs -->
+                <div class="grid-4" style="margin-bottom: 16px;">
+                    <article class="card" style="padding:12px;">
+                        <div class="kpi-label">Today Energy</div>
+                        <div class="kpi-value" id="fd-today-energy">...</div>
+                    </article>
+                    <article class="card" style="padding:12px;">
+                        <div class="kpi-label">Capacity Factor</div>
+                        <div class="kpi-value" id="fd-cf">...</div>
+                    </article>
+                    <article class="card" style="padding:12px;">
+                        <div class="kpi-label">Specific Yield</div>
+                        <div class="kpi-value" id="fd-yield">...</div>
+                    </article>
+                    <article class="card" style="padding:12px;">
+                        <div class="kpi-label">AQI Today</div>
+                        <div class="kpi-value" id="fd-aqi">...</div>
+                    </article>
+                </div>
+
+                <!-- Charts Row 1 -->
+                <div class="grid-2" style="margin-bottom: 16px;">
+                    <article class="card">
+                        <h2 class="card-title">Energy vs Forecast (30 days)</h2>
+                        <div class="chart-box" style="height:220px;"><canvas id="fdEnergyChart"></canvas></div>
+                    </article>
+                    <article class="card">
+                        <h2 class="card-title">Weather & AQI (30 days)</h2>
+                        <div class="chart-box" style="height:220px;"><canvas id="fdWeatherChart"></canvas></div>
+                    </article>
+                </div>
+
+                <!-- Charts Row 2 -->
+                <div class="grid-2">
+                    <article class="card">
+                        <h2 class="card-title">Capacity Factor Trend</h2>
+                        <div class="chart-box" style="height:200px;"><canvas id="fdCfChart"></canvas></div>
+                    </article>
+                    <article class="card">
+                        <h2 class="card-title">Model Accuracy by Week</h2>
+                        <div style="display:flex; gap: 8px; flex-wrap: wrap; margin-top: 16px;" id="fd-grades">
+                            <!-- filled by JS -->
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/platform_portal/forecast.js?v=7"></script>
 {% endblock %}

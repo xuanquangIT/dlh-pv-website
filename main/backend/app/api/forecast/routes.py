@@ -57,3 +57,31 @@ def get_forecast_monitoring(
     except Exception as e:
         logger.error(f"Error fetching forecast monitoring: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch forecast monitoring")
+
+@router.get("/facility-heatmap", response_model=Dict[str, Any])
+def get_facility_heatmap_route(
+    horizon: Optional[int] = Query(1, description="Forecast horizon in days"),
+    _: object = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"]))
+):
+    from app.services.databricks_service import get_facility_heatmap
+    try:
+        grid = get_facility_heatmap(horizon)
+        return {"grid": grid}
+    except Exception as e:
+        logger.error(f"Error fetching heatmap: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch heatmap")
+
+@router.get("/facility-drill/{facility_id}", response_model=Dict[str, Any])
+def get_facility_drill_route(
+    facility_id: str,
+    horizon: Optional[int] = Query(1, description="Forecast horizon in days"),
+    _: object = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"]))
+):
+    from app.services.databricks_service import get_facility_drill
+    try:
+        data = get_facility_drill(facility_id, horizon)
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching facility drill: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch facility drill")
+        raise HTTPException(status_code=500, detail="Failed to fetch facility drill")

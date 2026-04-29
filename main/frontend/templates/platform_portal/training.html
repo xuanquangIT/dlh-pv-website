@@ -34,16 +34,17 @@
         </article>
 
         <article class="card">
-            <h2 class="card-title">Model Reliability Score</h2>
-            <div style="height:9px;border-radius:5px;background:#dde3ed;overflow:hidden;">
-                <div
-                    id="training-progress-bar"
-                    data-progress="0%"
-                    style="height:100%;width:0%;background:linear-gradient(90deg,#f4b942,#10b981);"
-                ></div>
+            <h2 class="card-title">Accuracy Grade</h2>
+            <div id="accuracy-grade-container" style="display:flex; align-items:center; gap: 16px; margin-top: 8px;">
+                <div id="accuracy-grade-letter" style="font-size: 32px; font-weight: bold; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #f6c54422; color: #f6c544; border: 1px solid #f6c54477;">B</div>
+                <div style="display: flex; flex-direction: column;">
+                    <div style="font-weight: bold;">Champion performance</div>
+                    <div id="accuracy-grade-desc" class="page-subtitle" style="font-size: 12px;">R² ≥ 0.75 · operationally usable</div>
+                </div>
             </div>
-            <div class="page-subtitle" style="margin-top:8px;" id="training-progress-text">0% Reliability (0 R2)</div>
-            <button class="btn btn-pri" type="button" style="margin-top:10px;">Retrain Champion</button>
+            <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 4px;">
+                <div style="display: flex; justify-content: space-between; font-size: 12px;"><span style="color:#7fc97f">A: ≥ 0.85</span><span style="color:#f6c544">B: 0.75-0.85</span><span style="color:#ffa24a">C: 0.60-0.75</span><span style="color:#e15759">D: < 0.60</span></div>
+            </div>
         </article>
     </div>
 
@@ -53,7 +54,12 @@
     </article>
 </section>
 
-<script src="/static/js/platform_portal/training.js?v=4"></script>
+<section class="card" style="margin-top:16px;">
+    <h2 class="card-title">Residuals — Actual − Forecast (30d)</h2>
+    <div class="chart-box" style="height:300px;"><canvas id="residualsChart"></canvas></div>
+</section>
+
+<script src="/static/js/platform_portal/training.js?v=5"></script>
 {% endblock %}
 
 {% block scripts %}
