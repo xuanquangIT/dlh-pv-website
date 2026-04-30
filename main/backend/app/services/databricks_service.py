@@ -299,35 +299,89 @@ def get_daily_forecast(
     start_date: str | None = None,
     end_date: str | None = None,
     horizon: int = 1,
+    exclude_bad_actuals: bool = True,
 ) -> list[dict]:
     # Filter by a single forecast_horizon to avoid summing D+1+D+3+D+5+D+7
     # for the same forecast_date (which would give 4x the real predicted value).
-    horizon_filter = f"AND forecast_horizon = {horizon}"
+    horizon_filter = f"AND f.forecast_horizon = {horizon}"
 
     if start_date and end_date:
-        where_clause = f"WHERE forecast_date BETWEEN '{start_date}' AND '{end_date}'"
+        where_clause = f"WHERE f.forecast_date BETWEEN '{start_date}' AND '{end_date}'"
+        energy_where_clause = f"WHERE reading_date BETWEEN '{start_date}' AND '{end_date}'"
         limit_clause = "LIMIT 60"
     elif start_date:
-        where_clause = f"WHERE forecast_date >= '{start_date}'"
+        where_clause = f"WHERE f.forecast_date >= '{start_date}'"
+        energy_where_clause = f"WHERE reading_date >= '{start_date}'"
         limit_clause = "LIMIT 60"
     else:
-        where_clause = "WHERE forecast_date >= current_date() - INTERVAL 14 DAYS"
+        where_clause = "WHERE f.forecast_date >= current_date() - INTERVAL 14 DAYS"
+        energy_where_clause = "WHERE reading_date >= current_date() - INTERVAL 14 DAYS"
         limit_clause = "LIMIT 28"
 
-    query = f"""
-    SELECT * FROM (
+    quality_cte = ""
+    join_clause = ""
+    actual_expr = "SUM(f.actual_energy_mwh_daily)"
+    predicted_expr = "SUM(f.predicted_energy_mwh_daily)"
+    energy_eps = 0.001
+    past_date_cond = "CAST(f.forecast_date AS DATE) <= current_date()"
+
+    if exclude_bad_actuals:
+        quality_cte = f"""
+    WITH quality_bad AS (
         SELECT
-          CAST(forecast_date AS STRING)             AS date,
-          {horizon}                                 AS horizon,
-          SUM(actual_energy_mwh_daily)              AS actual,
-          SUM(predicted_energy_mwh_daily)           AS predicted,
-          SUM(predicted_energy_mwh_daily) * 0.95   AS lower,
-          SUM(predicted_energy_mwh_daily) * 1.05   AS upper
-        FROM pv.gold.forecast_daily
+          UPPER(facility_id) AS facility_id,
+          CAST(reading_date AS DATE) AS forecast_date,
+          MAX(CASE
+                WHEN quality_flag = 'BAD'
+                  OR COALESCE(quality_issues, '') LIKE '%DAYTIME_ZERO_ENERGY%'
+                  OR COALESCE(quality_issues, '') LIKE '%EQUIPMENT_DOWNTIME%'
+                THEN 1 ELSE 0 END) AS is_bad
+        FROM pv.silver.energy_readings
+        {energy_where_clause}
+        GROUP BY UPPER(facility_id), CAST(reading_date AS DATE)
+    )
+    """
+        join_clause = """
+    LEFT JOIN quality_bad q
+      ON q.facility_id = UPPER(f.facility_id)
+     AND q.forecast_date = CAST(f.forecast_date AS DATE)
+    """
+        invalid_actual_cond = (
+            "q.is_bad = 1 AND f.actual_energy_mwh_daily IS NOT NULL "
+            f"AND f.actual_energy_mwh_daily <= {energy_eps}"
+        )
+        missing_actual_cond = "f.actual_energy_mwh_daily IS NULL"
+        actual_expr = (
+            "SUM(CASE WHEN " + invalid_actual_cond + " THEN NULL "
+            "ELSE f.actual_energy_mwh_daily END)"
+        )
+        predicted_expr = (
+            "SUM(CASE WHEN " + past_date_cond + " AND (" + missing_actual_cond
+            + " OR " + invalid_actual_cond + ") THEN NULL "
+            "ELSE f.predicted_energy_mwh_daily END)"
+        )
+
+    query = f"""
+    {quality_cte}
+    SELECT
+      date,
+      horizon,
+      actual,
+      predicted,
+      predicted * 0.95 AS lower,
+      predicted * 1.05 AS upper
+    FROM (
+        SELECT
+          CAST(f.forecast_date AS STRING) AS date,
+          {horizon} AS horizon,
+          {actual_expr} AS actual,
+          {predicted_expr} AS predicted
+        FROM pv.gold.forecast_daily f
+        {join_clause}
         {where_clause}
         {horizon_filter}
-        GROUP BY forecast_date
-        ORDER BY forecast_date DESC
+        GROUP BY f.forecast_date
+        ORDER BY f.forecast_date DESC
         {limit_clause}
     )
     ORDER BY date ASC

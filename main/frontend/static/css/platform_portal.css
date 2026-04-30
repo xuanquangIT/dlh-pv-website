@@ -775,6 +775,24 @@ html[data-theme="dark"] td {
   height: 260px;
 }
 
+.chart-box--forecast {
+  height: 220px;
+}
+
+.week-picker {
+  padding: 6px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--txt2);
+}
+
+html[data-theme="dark"] .week-picker {
+  background: #141b24;
+  color: var(--txt2);
+}
+
 .model-detail-modal {
   position: fixed;
   left: var(--sw);

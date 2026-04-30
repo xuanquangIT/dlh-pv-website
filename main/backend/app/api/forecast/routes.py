@@ -38,10 +38,19 @@ def get_forecast_daily(
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     horizon: int = Query(1, description="Forecast horizon in days (1, 3, 5, 7)"),
+    exclude_bad_actuals: bool = Query(
+        True,
+        description="Exclude facility-days flagged as bad (or outage) in Silver quality signals",
+    ),
     _: object = Depends(require_role(["admin", "data_engineer", "ml_engineer", "analyst"]))
 ):
     try:
-        return get_daily_forecast(start_date=start_date, end_date=end_date, horizon=horizon)
+        return get_daily_forecast(
+            start_date=start_date,
+            end_date=end_date,
+            horizon=horizon,
+            exclude_bad_actuals=exclude_bad_actuals,
+        )
     except Exception as e:
         logger.error(f"Error fetching daily forecast: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch daily forecast")

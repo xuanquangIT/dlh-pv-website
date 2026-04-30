@@ -77,6 +77,7 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
                 ),
             ),
             patch("app.api.data_quality.routes.get_quality_summary_metrics", return_value={"ok": True}),
+            patch("app.api.ml_training.routes.get_model_evaluation_metrics", return_value=[{"ok": True}]),
             patch("app.api.ml_training.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
             patch("app.api.model_registry.routes.get_registry_models", return_value=[{"ok": True}]),
             patch("app.api.forecast.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),

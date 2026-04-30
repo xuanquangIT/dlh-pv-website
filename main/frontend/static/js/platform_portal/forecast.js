@@ -12,6 +12,8 @@
   const HORIZON_CONF_MEDIUM = { 1: 0.05, 3: 0.08, 5: 0.12, 7: 0.15 };
 
   let selectedHorizon = 1;
+  let scaleMode = "absolute";
+  let lastDailyData = [];
 
   // ─── Week helpers ──────────────────────────────────────────────
   function toISODate(d) {
@@ -44,12 +46,57 @@
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
   }
 
+  function getSeriesBase(series) {
+    for (const v of series) {
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
+    }
+    return null;
+  }
+
+  function normalizeSeries(series, base) {
+    if (!base || !Number.isFinite(base)) return series.map(() => null);
+    return series.map((v) => {
+      if (v === null || !Number.isFinite(v)) return null;
+      return (v / base) * 100;
+    });
+  }
+
+  function toWeekValue(dateStr) {
+    const d = new Date(dateStr + "T00:00:00");
+    const utcDate = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const day = utcDate.getUTCDay() || 7;
+    utcDate.setUTCDate(utcDate.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((utcDate - yearStart) / 86400000) + 1) / 7);
+    return `${utcDate.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+  }
+
+  function weekValueToDate(weekValue) {
+    if (!weekValue || !weekValue.includes("-W")) return null;
+    const parts = weekValue.split("-W");
+    const year = parseInt(parts[0], 10);
+    const week = parseInt(parts[1], 10);
+    if (!Number.isFinite(year) || !Number.isFinite(week)) return null;
+
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const jan4Day = jan4.getUTCDay() || 7;
+    const monday = new Date(jan4);
+    monday.setUTCDate(jan4.getUTCDate() - (jan4Day - 1) + (week - 1) * 7);
+    const local = new Date(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate());
+    return toISODate(local);
+  }
+
   let weekStart = getWeekStart(toISODate(new Date()));
 
   function updateWeekLabel() {
     const end = getWeekEnd(weekStart);
     const el = document.getElementById("week-range-display");
     if (el) el.textContent = `${formatDisplay(weekStart)} – ${formatDisplay(end)}`;
+  }
+
+  function updateWeekPicker() {
+    const picker = document.getElementById("week-picker");
+    if (picker) picker.value = toWeekValue(weekStart);
   }
 
   function updateHorizonLabel() {
@@ -111,10 +158,11 @@
       const res = await fetch(`/forecast/daily?${params}`);
       if (!res.ok) throw new Error('Network response was not ok');
       const data = await res.json();
+      lastDailyData = Array.isArray(data) ? data : [];
 
       if (!tbody) return;
 
-      if (data.length === 0) {
+      if (lastDailyData.length === 0) {
         tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:16px;">No data available for this week</td></tr>`;
         return;
       }
@@ -123,7 +171,7 @@
       const threshLow = HORIZON_CONF_LOW[selectedHorizon]    || 0.15;
       const threshMed = HORIZON_CONF_MEDIUM[selectedHorizon] || 0.08;
 
-      tbody.innerHTML = data.map(row => {
+      tbody.innerHTML = lastDailyData.map(row => {
         let errStr = "N/A";
         let conf   = "High";
 
@@ -154,7 +202,7 @@
         `;
       }).join('');
 
-      renderChart(data);
+      renderChart(lastDailyData);
 
     } catch (err) {
       console.error("Failed to load daily forecast", err);
@@ -172,9 +220,22 @@
       forecastChart = null;
     }
 
-    const labels    = data.map(d => d.date);
-    const actual    = data.map(d => d.actual    !== null ? parseFloat(d.actual)    : null);
-    const predicted = data.map(d => d.predicted !== null ? parseFloat(d.predicted) : null);
+    const labels = data.map(d => d.date);
+    let actual = data.map(d => d.actual    !== null ? parseFloat(d.actual)    : null);
+    let predicted = data.map(d => d.predicted !== null ? parseFloat(d.predicted) : null);
+
+    let yTitle = "MWh";
+    let actualLabel = "Actual (MWh)";
+    let predictedLabel = "Predicted (MWh)";
+    if (scaleMode === "index") {
+      const actualBase = getSeriesBase(actual);
+      const predBase = getSeriesBase(predicted);
+      actual = normalizeSeries(actual, actualBase);
+      predicted = normalizeSeries(predicted, predBase);
+      yTitle = "Index (base=100)";
+      actualLabel = "Actual (Index)";
+      predictedLabel = "Predicted (Index)";
+    }
 
     forecastChart = new Chart(canvas, {
       type: "line",
@@ -182,7 +243,7 @@
         labels,
         datasets: [
           {
-            label: "Actual (MWh)",
+            label: actualLabel,
             data: actual,
             borderColor: colors.solar,
             backgroundColor: "rgba(244, 185, 66, 0.1)",
@@ -191,7 +252,7 @@
             spanGaps: false
           },
           {
-            label: "Predicted (MWh)",
+            label: predictedLabel,
             data: predicted,
             borderColor: colors.blue,
             borderDash: [5, 3],
@@ -204,7 +265,12 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false }
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y: {
+            title: { display: true, text: yTitle }
+          }
+        }
       }
     });
   }
@@ -301,18 +367,21 @@
   function shiftWeek(direction) {
     weekStart = addDays(weekStart, direction * 7);
     updateWeekLabel();
+    updateWeekPicker();
     loadForecastDaily();
   }
 
   function resetToThisWeek() {
     weekStart = getWeekStart(toISODate(new Date()));
     updateWeekLabel();
+    updateWeekPicker();
     loadForecastDaily();
   }
 
   // ─── Bootstrap ────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', function () {
     updateWeekLabel();
+    updateWeekPicker();
     updateHorizonLabel();
 
     document.getElementById('btn-prev-week')  ?.addEventListener('click', () => shiftWeek(-1));
@@ -325,6 +394,19 @@
       updateHorizonLabel();
       loadForecastSummary();
       loadForecastDaily();
+    });
+
+    document.getElementById('week-picker')?.addEventListener('change', function () {
+      const newStart = weekValueToDate(String(this.value || ""));
+      if (!newStart) return;
+      weekStart = newStart;
+      updateWeekLabel();
+      loadForecastDaily();
+    });
+
+    document.getElementById('scale-select')?.addEventListener('change', function () {
+      scaleMode = String(this.value || "absolute");
+      if (lastDailyData.length > 0) renderChart(lastDailyData);
     });
     
     document.getElementById('facility-drill-close')?.addEventListener('click', () => {
