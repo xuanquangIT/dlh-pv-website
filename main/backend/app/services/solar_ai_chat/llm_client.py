@@ -950,6 +950,8 @@ class LLMModelRouter:
         endpoint = f"{self._base_url}/chat/completions"
         request_payload = dict(payload)
         request_payload["model"] = model_name
+        # Force non-streaming so proxies that default to SSE don't break JSON parsing.
+        request_payload.setdefault("stream", False)
         # Inject reasoning_effort for OpenAI-compatible reasoning models.
         # Server ignores the field if the model isn't a reasoning model.
         if self._reasoning_effort and "reasoning_effort" not in request_payload:
