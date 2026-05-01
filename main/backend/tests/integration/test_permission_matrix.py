@@ -37,7 +37,6 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
             "/dashboard": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/pipeline": {"admin", "data_engineer"},
             "/quality": {"admin", "data_engineer"},
-            "/training": {"admin", "ml_engineer"},
             "/registry": {"admin", "ml_engineer"},
             "/forecast": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/solar-chat": {"admin", "data_engineer", "ml_engineer"},
@@ -60,7 +59,6 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
             "/dashboard/embed-info": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/data-pipeline/status": {"data_engineer", "system"},
             "/data-quality/summary": {"admin", "data_engineer"},
-            "/ml-training/monitoring": {"admin", "ml_engineer", "data_engineer"},
             "/model-registry/models-list": {"admin", "ml_engineer", "data_engineer"},
             "/forecast/summary-kpi": {"admin", "data_engineer", "ml_engineer", "analyst"},
             "/solar-ai-chat/topics": {"admin", "data_engineer", "ml_engineer"},
@@ -77,10 +75,8 @@ class PermissionMatrixIntegrationTests(unittest.TestCase):
                 ),
             ),
             patch("app.api.data_quality.routes.get_quality_summary_metrics", return_value={"ok": True}),
-            patch("app.api.ml_training.routes.get_model_evaluation_metrics", return_value=[{"ok": True}]),
-            patch("app.api.ml_training.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
             patch("app.api.model_registry.routes.get_registry_models", return_value=[{"ok": True}]),
-            patch("app.api.forecast.routes.get_model_monitoring_metrics", return_value=[{"ok": True}]),
+            patch("app.api.forecast.routes.get_forecast_registry_kpis", return_value={"ok": True}),
         ):
             for path, allowed_roles in api_matrix.items():
                 for role in roles:

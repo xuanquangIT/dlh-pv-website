@@ -1,4 +1,6 @@
 import logging
+import os
+from datetime import datetime
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
 from app.core.settings import get_solar_chat_settings
@@ -388,188 +390,284 @@ def get_daily_forecast(
     """
     return execute_sql(query)
 
-def get_model_monitoring_metrics(model_name: str | None = None) -> list[dict]:
-    # Filter by model_name to avoid mixing D+1..D+7 metrics in one result set.
-    # Default: return all horizons so caller can pick what to display.
-    model_filter = f"AND model_name = '{model_name}'" if model_name else ""
-    query = f"""
-    SELECT * FROM (
-        SELECT
-          eval_date                 AS date,
-          model_name,
-          model_version,
-          rmse_mwh                 AS rmse,
-          mae_mwh                  AS mae,
-          r2,
-          mape_day_pct             AS mape,
-          skill_score
-        FROM pv.gold.model_monitoring_daily
-        WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
-        {model_filter}
-        ORDER BY eval_date DESC
-        LIMIT 30
-    )
-    ORDER BY date ASC
-    """
-    return execute_sql(query)
+def get_forecast_champion_meta(model_name: str) -> dict:
+    """Return champion alias version and model label for a UC model name.
 
-def get_model_evaluation_metrics(horizon: int | None = None) -> list[dict]:
-        # Use raw monitoring metrics (daily) for ML Training view.
-        horizon_filter = (
-                f"AND model_name LIKE '%daily_forecast_d{horizon}%'" if horizon else ""
-        )
-        query = f"""
-        SELECT * FROM (
-                SELECT
-                    eval_date AS date,
-                    CASE
-                        WHEN model_name LIKE '%daily_forecast_d1%' THEN 1
-                        WHEN model_name LIKE '%daily_forecast_d3%' THEN 3
-                        WHEN model_name LIKE '%daily_forecast_d5%' THEN 5
-                        WHEN model_name LIKE '%daily_forecast_d7%' THEN 7
-                        ELSE NULL
-                    END AS horizon,
-                    model_name,
-                    model_version,
-                    rmse_mwh     AS rmse,
-                    mae_mwh      AS mae,
-                    r2,
-                    mape_day_pct AS mape,
-                    skill_score
-                FROM pv.gold.model_monitoring_daily
-                WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
-                {horizon_filter}
-                ORDER BY eval_date DESC
-                LIMIT 12
-        )
-        ORDER BY date ASC
+    Falls back to best-effort heuristics if system tables are unavailable.
+    """
+    alias_row = {}
+    try:
+        alias_query = f"""
+        SELECT
+          model_name,
+          alias,
+          version
+        FROM system.ml.model_aliases
+        WHERE model_name = '{model_name}' AND alias = 'champion'
+        LIMIT 1
         """
-        return execute_sql(query)
+        alias_rows = execute_sql(alias_query)
+        if alias_rows:
+            alias_row = alias_rows[0]
+    except Exception:
+        alias_row = {}
+
+    version = alias_row.get("version") if alias_row else None
+    model_label = "Stacking"
+
+    return {
+        "model_name": model_name,
+        "model_alias": alias_row.get("alias") if alias_row else None,
+        "model_version": version,
+        "model_label": model_label,
+    }
+
+def _get_mlflow_latest_run_payload(model_name: str) -> dict:
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+    except Exception:
+        return {}
+
+    settings = get_solar_chat_settings()
+    if settings.databricks_host:
+        os.environ.setdefault("DATABRICKS_HOST", settings.databricks_host)
+    if settings.databricks_token:
+        os.environ.setdefault("DATABRICKS_TOKEN", settings.databricks_token)
+
+    try:
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_registry_uri("databricks-uc")
+        client = MlflowClient()
+    except Exception:
+        return {}
+
+    try:
+        versions = client.search_model_versions(f"name='{model_name}'")
+    except Exception:
+        return {}
+
+    if not versions:
+        return {}
+
+    latest = max(versions, key=lambda v: int(v.version))
+    created = latest.creation_timestamp
+    created_date = None
+    if created:
+        created_date = datetime.utcfromtimestamp(created / 1000).date().isoformat()
+
+    try:
+        run = client.get_run(latest.run_id)
+    except Exception:
+        return {
+            "model_version": latest.version,
+            "run_id": latest.run_id,
+            "date": created_date,
+        }
+
+    return {
+        "model_version": latest.version,
+        "run_id": latest.run_id,
+        "date": created_date,
+        "metrics": run.data.metrics or {},
+        "params": run.data.params or {},
+    }
+
+def _format_forecast_kpis(
+    metrics: dict,
+    metric_keys: dict,
+    eval_date: str,
+    meta: dict,
+) -> dict:
+    def pick_metric(keys: list[str]) -> str | float:
+        for key in keys:
+            if key in metrics and metrics[key] is not None:
+                return metrics[key]
+        return "N/A"
+
+    return {
+        "rmse": pick_metric(metric_keys["rmse"]),
+        "mae": pick_metric(metric_keys["mae"]),
+        "r2": pick_metric(metric_keys["r2"]),
+        "mape": pick_metric(metric_keys["mape"]),
+        "skill_score": pick_metric(metric_keys["skill_score"]),
+        "date": eval_date,
+        **meta,
+    }
+
+def _merge_missing_kpis(base: dict, fallback: dict) -> dict:
+    merged = dict(base)
+    for key in ("rmse", "mae", "r2", "mape", "skill_score", "date"):
+        val = merged.get(key)
+        if val in (None, "N/A") and fallback.get(key) is not None:
+            merged[key] = fallback.get(key)
+    return merged
+
+def _get_mlflow_horizon_kpis(metrics: dict, horizon: int, eval_date: str) -> dict:
+    stacking_prefix = f"stacking__d_{horizon}"
+    persistence_prefix = f"persistence__d_{horizon}"
+
+    r2 = metrics.get(f"{stacking_prefix}_r2")
+    nrmse = metrics.get(f"{stacking_prefix}_nrmse_pct")
+    nmae = metrics.get(f"{stacking_prefix}_nmae_pct")
+    baseline_nrmse = metrics.get(f"{persistence_prefix}_nrmse_pct")
+
+    skill_score = None
+    if isinstance(nrmse, (int, float)) and isinstance(baseline_nrmse, (int, float)):
+        if baseline_nrmse > 0:
+            # Match daily_utils._compute_skill_score: 1 - (candidate / reference)
+            skill_score = 1.0 - (float(nrmse) / float(baseline_nrmse))
+
+    return {
+        "rmse": nrmse,
+        "mae": nmae,
+        "r2": r2,
+        "mape": None,
+        "skill_score": skill_score,
+        "date": eval_date,
+    }
+
+
+def get_forecast_registry_kpis(model_name: str, horizon: int) -> dict:
+    """Fetch KPI metrics from MLflow model registry for the champion version."""
+    meta = get_forecast_champion_meta(model_name)
+    version = meta.get("model_version")
+
+    metric_keys = {
+        "r2": [f"stacking__d_{horizon}_r2", "r2", "test_r2"],
+        "rmse": [f"stacking__d_{horizon}_nrmse_pct", "nrmse_pct", "rmse_mwh", "rmse"],
+        "mae": [f"stacking__d_{horizon}_nmae_pct", "nmae_pct", "mae_mwh", "mae"],
+        "mape": ["mape_pct", "mape"],
+        "skill_score": [f"stacking__d_{horizon}_skill", "skill_score", "skill"],
+    }
+
+    rows = []
+    if version:
+        try:
+            flat_keys = [k for keys in metric_keys.values() for k in keys]
+            key_list = ", ".join([f"'{k}'" for k in dict.fromkeys(flat_keys)])
+            metrics_query = f"""
+            SELECT
+              key,
+              value
+            FROM system.ml.model_version_metrics
+            WHERE model_name = '{model_name}'
+              AND version = '{version}'
+              AND key IN ({key_list})
+            """
+            rows = execute_sql(metrics_query)
+        except Exception:
+            rows = []
+
+    metrics = {row.get("key"): row.get("value") for row in rows if row.get("key")}
+    eval_date = "N/A"
+    if version:
+        try:
+            date_query = f"""
+            SELECT CAST(creation_time AS DATE) AS created
+            FROM system.ml.model_versions
+            WHERE model_name = '{model_name}' AND version = '{version}'
+            LIMIT 1
+            """
+            date_rows = execute_sql(date_query)
+            if date_rows and date_rows[0].get("created"):
+                eval_date = str(date_rows[0]["created"])
+        except Exception:
+            eval_date = "N/A"
+
+    result = _format_forecast_kpis(metrics, metric_keys, eval_date, meta)
+    has_registry_values = any(
+        result[k] != "N/A" for k in ("rmse", "mae", "r2", "mape", "skill_score")
+    )
+    mlflow_payload = _get_mlflow_latest_run_payload(model_name)
+    if mlflow_payload:
+        if not version and mlflow_payload.get("model_version"):
+            meta = {**meta, "model_version": mlflow_payload.get("model_version")}
+        mlflow_metrics = mlflow_payload.get("metrics") or {}
+        mlflow_date = mlflow_payload.get("date") or eval_date
+        mlflow_kpis = _get_mlflow_horizon_kpis(mlflow_metrics, horizon, mlflow_date)
+        result = _merge_missing_kpis(result, mlflow_kpis)
+        if not has_registry_values:
+            return result
+        return result
+
+    if has_registry_values:
+        return result
+
+    return result
 
 def get_registry_models() -> list[dict]:
-    query = """
-    WITH ranked AS (
-        SELECT
-          model_name,
-          model_version                     AS version,
-          MAX(approach)                     AS approach,
-          MAX(algorithm)                    AS algorithm,
-          ROUND(AVG(rmse_mwh), 3)           AS rmse,
-          ROUND(AVG(mae_mwh), 3)            AS mae,
-          ROUND(AVG(r2), 4)                 AS r2,
-          ROUND(AVG(mape_day_pct), 2)       AS mape,
-          MIN(eval_date)                    AS created,
-                    ROW_NUMBER() OVER(PARTITION BY model_name ORDER BY TRY_CAST(model_version AS INT) DESC, MIN(eval_date) DESC) as rnk
-        FROM pv.gold.mart_forecast_accuracy_daily
-        WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
-          AND is_champion = true
-        GROUP BY model_name, model_version
-    )
-    SELECT
-      model_name,
-      version,
-      approach,
-      algorithm,
-      rmse,
-      mae,
-      r2,
-      mape,
-      created
-    FROM ranked
-    WHERE rnk = 1
-    ORDER BY model_name ASC
-    """
-    results = execute_sql(query)
-    if results:
-        for row in results:
-            row['champion'] = True
-        return results
+    model_names = [
+        "pv.gold.daily_forecast_d1",
+        "pv.gold.daily_forecast_d3",
+        "pv.gold.daily_forecast_d5",
+        "pv.gold.daily_forecast_d7",
+    ]
 
-    fallback_query = """
-    WITH ranked AS (
-        SELECT
-          model_name,
-          model_version                     AS version,
-          MAX(approach)                     AS approach,
-          CAST(NULL AS STRING)              AS algorithm,
-          ROUND(AVG(rmse_mwh), 3)           AS rmse,
-          ROUND(AVG(mae_mwh), 3)            AS mae,
-          ROUND(AVG(r2), 4)                 AS r2,
-          ROUND(AVG(mape_day_pct), 2)       AS mape,
-          MIN(eval_date)                    AS created,
-          ROW_NUMBER() OVER(PARTITION BY model_name ORDER BY TRY_CAST(model_version AS INT) DESC, MIN(eval_date) DESC) as rnk
-        FROM pv.gold.model_monitoring_daily
-        WHERE facility_id = 'ALL' AND model_name NOT LIKE '%champion%'
-        GROUP BY model_name, model_version
-    )
-    SELECT
-      model_name,
-      version,
-      approach,
-      algorithm,
-      rmse,
-      mae,
-      r2,
-      mape,
-      created
-    FROM ranked
-    WHERE rnk = 1
-    ORDER BY model_name ASC
-    """
-    results = execute_sql(fallback_query)
-    for row in results:
-        row['champion'] = True
+    champion_versions: dict[str, str] = {}
+    try:
+        import mlflow
+        from mlflow.tracking import MlflowClient
+
+        settings = get_solar_chat_settings()
+        if settings.databricks_host:
+            os.environ.setdefault("DATABRICKS_HOST", settings.databricks_host)
+        if settings.databricks_token:
+            os.environ.setdefault("DATABRICKS_TOKEN", settings.databricks_token)
+
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_registry_uri("databricks-uc")
+        client = MlflowClient()
+        for name in model_names:
+            try:
+                alias = client.get_model_version_by_alias(name, "champion")
+                if alias and alias.version:
+                    champion_versions[name] = str(alias.version)
+            except Exception:
+                continue
+    except Exception:
+        champion_versions = {}
+
+    results: list[dict] = []
+    for name in model_names:
+        payload = _get_mlflow_latest_run_payload(name)
+        if not payload:
+            continue
+
+        version = payload.get("model_version")
+        created = payload.get("date")
+        metrics = payload.get("metrics") or {}
+
+        horizon = None
+        if name.endswith("_d1"):
+            horizon = 1
+        elif name.endswith("_d3"):
+            horizon = 3
+        elif name.endswith("_d5"):
+            horizon = 5
+        elif name.endswith("_d7"):
+            horizon = 7
+
+        kpis = {}
+        if horizon is not None:
+            kpis = _get_mlflow_horizon_kpis(metrics, horizon, created or "N/A")
+
+        results.append({
+            "model_name": name,
+            "version": version,
+            "approach": "Stacking",
+            "algorithm": "Ensemble",
+            "rmse": kpis.get("rmse"),
+            "r2": kpis.get("r2"),
+            "skill_score": kpis.get("skill_score"),
+            "created": created,
+            "champion": str(version) == champion_versions.get(name),
+        })
+
     return results
 
 def get_facility_heatmap(horizon: int) -> list[dict]:
-    model_filter = f"%daily_forecast_d{horizon}%"
-    query = f"""
-    SELECT
-      facility_id,
-      DATE_TRUNC('week', eval_date) AS week_start,
-      ROUND(AVG(r2), 2) AS r2
-    FROM pv.gold.mart_forecast_accuracy_daily
-    WHERE facility_id != 'ALL'
-      AND model_name LIKE '{model_filter}'
-      AND is_champion = true
-      AND eval_date >= current_date() - interval 56 days
-    GROUP BY facility_id, DATE_TRUNC('week', eval_date)
-    ORDER BY facility_id, week_start DESC
-    """
-    results = execute_sql(query)
-    
-    heatmap = {}
-    weeks_set = set()
-    for row in results:
-        fac = row['facility_id']
-        w = str(row['week_start']).split(' ')[0]
-        r2 = row['r2']
-        if r2 is None: continue
-        
-        r2 = float(r2)
-        if r2 >= 0.85: grade = 'A'
-        elif r2 >= 0.75: grade = 'B'
-        elif r2 >= 0.60: grade = 'C'
-        else: grade = 'D'
-        
-        if fac not in heatmap:
-            heatmap[fac] = {}
-        heatmap[fac][w] = {"r2": r2, "grade": grade}
-        weeks_set.add(w)
-        
-    weeks = sorted(list(weeks_set))
-    grid = []
-    for fac, w_data in heatmap.items():
-        w_list = []
-        for w in weeks:
-            w_list.append({
-                "week": w[5:10], # MM-DD
-                "r2": w_data.get(w, {}).get("r2", 0),
-                "grade": w_data.get(w, {}).get("grade", "-")
-            })
-        grid.append({"facility_id": fac, "weeks": w_list})
-    
-    return grid
+    return []
 
 def get_facility_drill(facility_id: str, horizon: int) -> dict:
     model_filter = f"%daily_forecast_d{horizon}%"
@@ -598,32 +696,7 @@ def get_facility_drill(facility_id: str, horizon: int) -> dict:
         row['cloud_pct'] = 0
         row['aqi_value'] = 0
         
-    # Weekly grades
-    q_weeks = f"""
-    SELECT
-      DATE_TRUNC('week', eval_date) AS week_start,
-      ROUND(AVG(r2), 2) AS r2
-    FROM pv.gold.mart_forecast_accuracy_daily
-    WHERE facility_id = '{facility_id}'
-      AND model_name LIKE '{model_filter}'
-      AND is_champion = true
-      AND eval_date >= current_date() - interval 56 days
-    GROUP BY DATE_TRUNC('week', eval_date)
-    ORDER BY week_start DESC
-    """
-    week_rows = execute_sql(q_weeks)
-    weeks = []
-    for row in week_rows:
-        r2 = float(row.get('r2') or 0)
-        if r2 >= 0.85: grade = 'A'
-        elif r2 >= 0.75: grade = 'B'
-        elif r2 >= 0.60: grade = 'C'
-        else: grade = 'D'
-        weeks.append({
-            "week": str(row['week_start']).split(' ')[0][5:10],
-            "r2": r2,
-            "grade": grade
-        })
+        weeks: list[dict] = []
         
     last_energy = chart_rows[-1]['energy_mwh_daily'] if chart_rows else 0
     last_cf = chart_rows[-1]['capacity_factor_pct'] if chart_rows else 0

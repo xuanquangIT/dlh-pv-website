@@ -108,7 +108,6 @@ dlh-pv-website/
 | Data Quality | `/quality` | Per-facility quality scores, issue tracking |
 | Forecast | `/forecast` | 7-day energy forecast (D+1, D+3, D+5, D+7) with confidence intervals |
 | Pipeline | `/pipeline` | Medallion pipeline stage progress & diagnostics |
-| ML Training | `/training` | Model training metrics & evaluation |
 | Model Registry | `/registry` | Model version registry & comparison |
 | Accounts | `/settings/accounts` | User management (admin only) |
 

@@ -96,10 +96,10 @@
     new Chart(canvas, {
       type: "radar",
       data: {
-        labels: ["RMSE", "MAE", "R2", "MAPE", "Speed", "Memory"],
+        labels: ["RMSE", "R2", "Speed", "Memory"],
         datasets: [
-          { label: "GBT-v4.2", data: [92, 90, 94, 95, 80, 75], borderColor: colors.orange, backgroundColor: "rgba(224,123,57,.1)" },
-          { label: "GBT-v4.1", data: [84, 83, 88, 87, 82, 78], borderColor: colors.blue, backgroundColor: "rgba(27,108,168,.1)" }
+          { label: "GBT-v4.2", data: [92, 94, 80, 75], borderColor: colors.orange, backgroundColor: "rgba(224,123,57,.1)" },
+          { label: "GBT-v4.1", data: [84, 88, 82, 78], borderColor: colors.blue, backgroundColor: "rgba(27,108,168,.1)" }
         ]
       },
       options: { responsive: true, maintainAspectRatio: false }

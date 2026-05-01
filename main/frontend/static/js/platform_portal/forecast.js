@@ -12,7 +12,6 @@
   const HORIZON_CONF_MEDIUM = { 1: 0.05, 3: 0.08, 5: 0.12, 7: 0.15 };
 
   let selectedHorizon = 1;
-  let scaleMode = "absolute";
   let lastDailyData = [];
 
   // ─── Week helpers ──────────────────────────────────────────────
@@ -44,21 +43,6 @@
   function formatDisplay(dateStr) {
     const d = new Date(dateStr + "T00:00:00");
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
-  }
-
-  function getSeriesBase(series) {
-    for (const v of series) {
-      if (typeof v === "number" && Number.isFinite(v) && v > 0) return v;
-    }
-    return null;
-  }
-
-  function normalizeSeries(series, base) {
-    if (!base || !Number.isFinite(base)) return series.map(() => null);
-    return series.map((v) => {
-      if (v === null || !Number.isFinite(v)) return null;
-      return (v / base) * 100;
-    });
   }
 
   function toWeekValue(dateStr) {
@@ -112,7 +96,19 @@
       const data = await res.json();
 
       const vEl = document.getElementById('kpi-version');
-      if (vEl) vEl.textContent = data.model_version || 'Unknown';
+      if (vEl) {
+        const modelName = data.model_name || 'Unknown model';
+        const label = data.model_label ? String(data.model_label).trim() : '';
+        const version = (data.model_version !== undefined && data.model_version !== null)
+          ? `v${data.model_version}`
+          : '';
+        const alias = data.model_alias ? `alias ${data.model_alias}` : '';
+        const labelVersion = `${label} ${version}`.trim();
+        const parts = [modelName];
+        if (labelVersion) parts.push(labelVersion);
+        if (alias) parts.push(alias);
+        vEl.textContent = parts.join(' · ');
+      }
 
       const container = document.getElementById('forecast-kpis');
       if (!container) return;
@@ -121,8 +117,6 @@
         (val !== 'N/A' && val !== null && val !== undefined) ? (parseFloat(val).toFixed(dec) + suffix) : 'N/A';
 
       const kpis = [
-        { name: 'MAPE',        value: formatKpi(data.mape, 2, '%') },
-        { name: 'MAE (MWh)',   value: formatKpi(data.mae, 3) },
         { name: 'RMSE (MWh)',  value: formatKpi(data.rmse, 3) },
         { name: 'R2 Score',    value: formatKpi(data.r2, 4) },
         { name: 'Skill Score', value: formatKpi(data.skill_score, 3) },
@@ -224,17 +218,15 @@
     let actual = data.map(d => d.actual    !== null ? parseFloat(d.actual)    : null);
     let predicted = data.map(d => d.predicted !== null ? parseFloat(d.predicted) : null);
 
-    let yTitle = "MWh";
-    let actualLabel = "Actual (MWh)";
-    let predictedLabel = "Predicted (MWh)";
-    if (scaleMode === "index") {
-      const actualBase = getSeriesBase(actual);
-      const predBase = getSeriesBase(predicted);
-      actual = normalizeSeries(actual, actualBase);
-      predicted = normalizeSeries(predicted, predBase);
-      yTitle = "Index (base=100)";
-      actualLabel = "Actual (Index)";
-      predictedLabel = "Predicted (Index)";
+    const allVals = [...actual, ...predicted].filter(v => v !== null && Number.isFinite(v));
+    let yOpts = { title: { display: true, text: "MWh" }, beginAtZero: false };
+    if (allVals.length > 0) {
+      const dMin = Math.min(...allVals);
+      const dMax = Math.max(...allVals);
+      const range = dMax - dMin || Math.abs(dMax) || 1;
+      const pad = range * 0.08;
+      yOpts.min = Math.floor(dMin - pad);
+      yOpts.max = Math.ceil(dMax + pad);
     }
 
     forecastChart = new Chart(canvas, {
@@ -243,7 +235,7 @@
         labels,
         datasets: [
           {
-            label: actualLabel,
+            label: "Actual (MWh)",
             data: actual,
             borderColor: colors.solar,
             backgroundColor: "rgba(244, 185, 66, 0.1)",
@@ -252,7 +244,7 @@
             spanGaps: false
           },
           {
-            label: predictedLabel,
+            label: "Predicted (MWh)",
             data: predicted,
             borderColor: colors.blue,
             borderDash: [5, 3],
@@ -267,9 +259,7 @@
         maintainAspectRatio: false,
         interaction: { mode: 'index', intersect: false },
         scales: {
-          y: {
-            title: { display: true, text: yTitle }
-          }
+          y: yOpts
         }
       }
     });
@@ -404,11 +394,6 @@
       loadForecastDaily();
     });
 
-    document.getElementById('scale-select')?.addEventListener('change', function () {
-      scaleMode = String(this.value || "absolute");
-      if (lastDailyData.length > 0) renderChart(lastDailyData);
-    });
-    
     document.getElementById('facility-drill-close')?.addEventListener('click', () => {
         document.getElementById('facility-drill-modal').classList.remove('open');
     });
