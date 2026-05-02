@@ -41,7 +41,7 @@
       if (!tbody) return;
 
       if (!data || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">No models registered</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;">No models registered</td></tr>';
         const summary = document.getElementById('lineage-summary');
         if (summary) summary.textContent = 'No model data available for lineage.';
         return;
@@ -62,7 +62,9 @@
             <td>${horizonLabel(model.model_name)}</td>
             <td style="font-family: monospace;">v${model.version}</td>
             <td style="font-family: monospace; font-weight: 500;">${formatMetricValue(model.r2, 4, '-', '')}</td>
-            <td>${formatMetricValue(model.rmse, 2, '-', '')}</td>
+            <td>${formatMetricValue(model.rmse, 2, '-', '%')}</td>
+            <td>${formatMetricValue(model.mae, 2, '-', '%')}</td>
+            <td>${formatMetricValue(model.mape, 2, '-', '%')}</td>
             <td>${formatMetricValue(model.skill_score, 3, '-', '')}</td>
             <td>${statusHtml}</td>
             <td>${model.created || '-'}</td>
@@ -76,7 +78,7 @@
     } catch (err) {
       console.error("Failed to load registry models", err);
       const tbody = document.getElementById('registry-table-body');
-      if (tbody) tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;">Error loading models</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;">Error loading models</td></tr>';
     }
   }
 
@@ -87,21 +89,25 @@
     const existingChart = Chart.getChart(canvas);
     if (existingChart) existingChart.destroy();
 
-    // Normalize for radar: RMSE (pct), R2 (0-1), Skill Score
+    // Normalize for radar: R2 (0-1), RMSE (pct), MAE (pct), MAPE (pct), Skill Score
     const datasets = modelsToCompare.map((m, idx) => {
         const c = colors[idx % colors.length];
-        const pRmse = parseMetricValue(m.rmse) || 0;
-        const pR2   = parseMetricValue(m.r2)   || 0;
+        const pR2    = parseMetricValue(m.r2)    || 0;
+        const pRmse  = parseMetricValue(m.rmse)  || 0;
+        const pMae   = parseMetricValue(m.mae)   || 0;
+        const pMape  = parseMetricValue(m.mape)  || 0;
         const pSkill = parseMetricValue(m.skill_score) || 0;
 
         // Scale: 0=worst, 100=best for each metric
-        const nRMSE  = Math.max(0, Math.min(100, 100 - pRmse * 2));
         const nR2    = Math.max(0, Math.min(100, pR2 * 100));
+        const nRMSE  = Math.max(0, Math.min(100, 100 - pRmse * 4));
+        const nMAE   = Math.max(0, Math.min(100, 100 - pMae * 6));
+        const nMAPE  = Math.max(0, Math.min(100, 100 - pMape * 3));
         const nSkill = Math.max(0, Math.min(100, pSkill * 100));
 
         return {
             label: `${horizonLabel(m.model_name)} v${m.version}`,
-            data: [nRMSE, nR2, nSkill],
+            data: [nR2, nRMSE, nMAE, nMAPE, nSkill],
             borderColor: c.border,
             backgroundColor: c.bg,
             pointBackgroundColor: c.border
@@ -111,7 +117,7 @@
     new Chart(canvas, {
       type: "radar",
       data: {
-        labels: ["RMSE Score", "R² (%)", "Skill Score"],
+        labels: ["R² (%)", "RMSE Score", "MAE Score", "MAPE Score", "Skill Score"],
         datasets: datasets
       },
       options: {
@@ -144,6 +150,12 @@
     const rmse = sorted.map(function (m) {
       return parseMetricValue(m.rmse);
     });
+    const mae = sorted.map(function (m) {
+      return parseMetricValue(m.mae);
+    });
+    const mape = sorted.map(function (m) {
+      return parseMetricValue(m.mape);
+    });
     const r2 = sorted.map(function (m) {
       return parseMetricValue(m.r2);
     });
@@ -160,7 +172,7 @@
         labels: labels,
         datasets: [
           {
-            label: "RMSE",
+            label: "RMSE (%)",
             data: rmse,
             borderColor: "#c0392b",
             backgroundColor: "rgba(192,57,43,.1)",
@@ -168,7 +180,23 @@
             yAxisID: "y"
           },
           {
-            label: "R2",
+            label: "MAE (%)",
+            data: mae,
+            borderColor: "#e07b39",
+            backgroundColor: "rgba(224,123,57,.1)",
+            tension: 0.25,
+            yAxisID: "y"
+          },
+          {
+            label: "MAPE (%)",
+            data: mape,
+            borderColor: "#8e44ad",
+            backgroundColor: "rgba(142,68,173,.1)",
+            tension: 0.25,
+            yAxisID: "y"
+          },
+          {
+            label: "R²",
             data: r2,
             borderColor: "#1b6ca8",
             backgroundColor: "rgba(27,108,168,.1)",
@@ -187,14 +215,16 @@
         scales: {
           y: {
             type: "linear",
-            position: "left"
+            position: "left",
+            title: { display: true, text: "%" }
           },
           y1: {
             type: "linear",
             position: "right",
             grid: { drawOnChartArea: false },
             min: 0,
-            max: 1
+            max: 1,
+            title: { display: true, text: "R²" }
           }
         }
       }
@@ -214,7 +244,9 @@
     const horizon = horizonLabel(model.model_name);
     title.textContent = `Model Details · ${horizon} v${model.version || '?'}`;
 
-    const rmse  = formatMetricValue(model.rmse, 2, 'N/A', '');
+    const rmse  = formatMetricValue(model.rmse, 2, 'N/A', '%');
+    const mae   = formatMetricValue(model.mae,  2, 'N/A', '%');
+    const mape  = formatMetricValue(model.mape, 2, 'N/A', '%');
     const r2    = formatMetricValue(model.r2,   4, 'N/A', '');
     const skill = formatMetricValue(model.skill_score, 3, 'N/A', '');
 
@@ -230,6 +262,8 @@
         <h3 class="detail-section-title">Metrics (ALL facilities avg)</h3>
         <div class="detail-row"><span class="detail-label">R²</span><span class="detail-value">${r2}</span></div>
         <div class="detail-row"><span class="detail-label">RMSE</span><span class="detail-value">${rmse}</span></div>
+        <div class="detail-row"><span class="detail-label">MAE</span><span class="detail-value">${mae}</span></div>
+        <div class="detail-row"><span class="detail-label">MAPE</span><span class="detail-value">${mape}</span></div>
         <div class="detail-row"><span class="detail-label">Skill Score</span><span class="detail-value">${skill}</span></div>
       </div>
     `;

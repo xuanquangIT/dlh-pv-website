@@ -117,8 +117,10 @@
         (val !== 'N/A' && val !== null && val !== undefined) ? (parseFloat(val).toFixed(dec) + suffix) : 'N/A';
 
       const kpis = [
-        { name: 'RMSE (MWh)',  value: formatKpi(data.rmse, 3) },
         { name: 'R2 Score',    value: formatKpi(data.r2, 4) },
+        { name: 'RMSE (%)',    value: formatKpi(data.rmse, 2, '%') },
+        { name: 'MAE (%)',     value: formatKpi(data.mae, 2, '%') },
+        { name: 'MAPE (%)',    value: formatKpi(data.mape, 2, '%') },
         { name: 'Skill Score', value: formatKpi(data.skill_score, 3) },
         { name: 'Eval Date',   value: data.date || 'N/A' }
       ];

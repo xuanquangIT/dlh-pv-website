@@ -518,11 +518,15 @@ def _get_mlflow_horizon_kpis(metrics: dict, horizon: int, eval_date: str) -> dic
             # Match daily_utils._compute_skill_score: 1 - (candidate / reference)
             skill_score = 1.0 - (float(nrmse) / float(baseline_nrmse))
 
+    mape = metrics.get(f"{stacking_prefix}_mape_pct")
+    rmse_mwh = metrics.get(f"{stacking_prefix}_rmse_mwh")
+    mae_mwh = metrics.get(f"{stacking_prefix}_mae_mwh")
+
     return {
-        "rmse": nrmse,
-        "mae": nmae,
+        "rmse": nrmse or rmse_mwh,
+        "mae": nmae or mae_mwh,
         "r2": r2,
-        "mape": None,
+        "mape": mape,
         "skill_score": skill_score,
         "date": eval_date,
     }
@@ -537,7 +541,7 @@ def get_forecast_registry_kpis(model_name: str, horizon: int) -> dict:
         "r2": [f"stacking__d_{horizon}_r2", "r2", "test_r2"],
         "rmse": [f"stacking__d_{horizon}_nrmse_pct", "nrmse_pct", "rmse_mwh", "rmse"],
         "mae": [f"stacking__d_{horizon}_nmae_pct", "nmae_pct", "mae_mwh", "mae"],
-        "mape": ["mape_pct", "mape"],
+        "mape": [f"stacking__d_{horizon}_mape_pct", "mape_pct", "mape"],
         "skill_score": [f"stacking__d_{horizon}_skill", "skill_score", "skill"],
     }
 
@@ -658,7 +662,9 @@ def get_registry_models() -> list[dict]:
             "approach": "Stacking",
             "algorithm": "Ensemble",
             "rmse": kpis.get("rmse"),
+            "mae": kpis.get("mae"),
             "r2": kpis.get("r2"),
+            "mape": kpis.get("mape"),
             "skill_score": kpis.get("skill_score"),
             "created": created,
             "champion": str(version) == champion_versions.get(name),
