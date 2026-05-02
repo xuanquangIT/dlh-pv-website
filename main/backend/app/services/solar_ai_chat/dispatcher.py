@@ -50,6 +50,7 @@ class Dispatcher:
         "inspect_table",
         "recall_metric",
         "execute_sql",
+        "query_model_registry",
         "render_visualization",
     )
 
@@ -137,6 +138,8 @@ class Dispatcher:
                 sql_executor=self._sql_executor,
                 semantic_layer=self._semantic_layer,
             )
+        if fn == "query_model_registry":
+            return primitives.query_model_registry()
         if fn == "render_visualization":
             return primitives.render_visualization(
                 spec=args["spec"],

@@ -178,6 +178,7 @@ class ChatEngine:
         PER_TOOL_DUPLICATE_THRESHOLD = {
             "recall_metric": 3,
             "discover_schema": 3,
+            "query_model_registry": 3,
         }
         banned_tools: set[str] = set()
         # Exact-call signatures we've already executed. If the model issues
@@ -344,7 +345,7 @@ class ChatEngine:
                 if (
                     key in executed_call_keys
                     and c.name not in banned_tools
-                    and c.name != "recall_metric"
+                    and c.name not in ("recall_metric", "query_model_registry")
                 ):
                     exact_dups.add(c.name)
                 executed_call_keys.add(key)
@@ -1850,7 +1851,7 @@ _CONCEPTUAL_RE = re.compile("|".join(_CONCEPTUAL_PATTERNS), re.IGNORECASE)
 
 # Live-data signals that override the conceptual fast-path. A question like
 # "What is the current ML model performance?" lexically matches `\bwhat is\b`
-# but is a DATA request (read from `model_monitoring_daily`), not a textbook
+# but is a DATA request (read from `query_model_registry`), not a textbook
 # definition. Same with "what's the latest forecast" / "what is today's
 # energy" / "hiện tại model nào đang chạy". When ANY of these tokens appears
 # in the question, force the agentic SQL path.

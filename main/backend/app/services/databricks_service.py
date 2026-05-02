@@ -422,11 +422,12 @@ def get_forecast_champion_meta(model_name: str) -> dict:
         "model_label": model_label,
     }
 
-def _get_mlflow_latest_run_payload(model_name: str) -> dict:
+def _get_mlflow_latest_run_payload(model_name: str, *, champion_only: bool = False) -> dict:
     try:
         import mlflow
         from mlflow.tracking import MlflowClient
-    except Exception:
+    except Exception as exc:
+        logger.warning("MLflow import failed for %s: %s", model_name, exc)
         return {}
 
     settings = get_solar_chat_settings()
@@ -439,37 +440,57 @@ def _get_mlflow_latest_run_payload(model_name: str) -> dict:
         mlflow.set_tracking_uri("databricks")
         mlflow.set_registry_uri("databricks-uc")
         client = MlflowClient()
-    except Exception:
+    except Exception as exc:
+        logger.warning("MlflowClient init failed for %s: %s", model_name, exc)
         return {}
 
-    try:
-        versions = client.search_model_versions(f"name='{model_name}'")
-    except Exception:
-        return {}
+    # If champion_only, resolve the champion alias first
+    target_version_obj = None
+    if champion_only:
+        try:
+            target_version_obj = client.get_model_version_by_alias(model_name, "champion")
+        except Exception as exc:
+            logger.warning("get_model_version_by_alias(%s, champion) failed: %s", model_name, exc)
+            target_version_obj = None
 
-    if not versions:
-        return {}
+    if target_version_obj:
+        version_obj = target_version_obj
+    else:
+        try:
+            versions = client.search_model_versions(f"name='{model_name}'")
+        except Exception as exc:
+            logger.warning("search_model_versions(%s) failed: %s", model_name, exc)
+            return {}
+        if not versions:
+            logger.warning("No versions found for %s", model_name)
+            return {}
+        version_obj = max(versions, key=lambda v: int(v.version))
 
-    latest = max(versions, key=lambda v: int(v.version))
-    created = latest.creation_timestamp
+    created = version_obj.creation_timestamp
     created_date = None
     if created:
         created_date = datetime.utcfromtimestamp(created / 1000).date().isoformat()
 
     try:
-        run = client.get_run(latest.run_id)
-    except Exception:
+        run = client.get_run(version_obj.run_id)
+    except Exception as exc:
+        logger.warning("get_run(%s) failed: %s", version_obj.run_id, exc)
         return {
-            "model_version": latest.version,
-            "run_id": latest.run_id,
+            "model_version": version_obj.version,
+            "run_id": version_obj.run_id,
             "date": created_date,
         }
 
+    metrics = run.data.metrics or {}
+    logger.info(
+        "MLflow run payload for %s v%s: %d metrics, keys=%s",
+        model_name, version_obj.version, len(metrics), list(metrics.keys())[:10],
+    )
     return {
-        "model_version": latest.version,
-        "run_id": latest.run_id,
+        "model_version": version_obj.version,
+        "run_id": version_obj.run_id,
         "date": created_date,
-        "metrics": run.data.metrics or {},
+        "metrics": metrics,
         "params": run.data.params or {},
     }
 
@@ -600,65 +621,129 @@ def get_forecast_registry_kpis(model_name: str, horizon: int) -> dict:
 
     return result
 
+def _get_registry_models_sql_fallback(
+    model_names: list[str], horizon_map: dict[str, int]
+) -> list[dict]:
+    """SQL-only fallback when MLflow client is unavailable.
+
+    Gets latest champion version from forecast_daily and computes metrics.
+    """
+    name_list = ", ".join(f"'{n}'" for n in model_names)
+    query = f"""
+    WITH latest AS (
+        SELECT model_name, MAX(CAST(model_version AS INT)) AS max_ver
+        FROM pv.gold.forecast_daily
+        WHERE model_name IN ({name_list})
+          AND actual_energy_mwh_daily IS NOT NULL
+        GROUP BY model_name
+    ),
+    eval_data AS (
+        SELECT f.model_name, CAST(f.model_version AS INT) AS model_version,
+               f.forecast_horizon AS horizon_days,
+               f.predicted_energy_mwh_daily AS pred,
+               f.actual_energy_mwh_daily AS actual
+        FROM pv.gold.forecast_daily f
+        JOIN latest l ON f.model_name = l.model_name
+                     AND CAST(f.model_version AS INT) = l.max_ver
+        WHERE f.actual_energy_mwh_daily IS NOT NULL
+          AND f.forecast_date >= CURRENT_DATE - 30
+    ),
+    stats AS (
+        SELECT model_name, model_version, horizon_days,
+               AVG(actual) AS avg_actual,
+               SQRT(AVG(POWER(actual - pred, 2))) AS rmse,
+               AVG(ABS(actual - pred)) AS mae,
+               COUNT(*) AS sample_count
+        FROM eval_data
+        GROUP BY model_name, model_version, horizon_days
+    ),
+    sse_sst AS (
+        SELECT e.model_name, e.model_version, e.horizon_days,
+               SUM(POWER(e.actual - e.pred, 2)) AS sse,
+               SUM(POWER(e.actual - s.avg_actual, 2)) AS sst
+        FROM eval_data e
+        JOIN stats s ON e.model_name = s.model_name
+                    AND e.model_version = s.model_version
+                    AND e.horizon_days = s.horizon_days
+        GROUP BY e.model_name, e.model_version, e.horizon_days
+    )
+    SELECT s.model_name, s.model_version, s.horizon_days,
+           ROUND(1 - ss.sse / NULLIF(ss.sst, 0), 4) AS r2,
+           ROUND(s.rmse, 2) AS rmse_mwh,
+           ROUND(s.mae, 2) AS mae_mwh,
+           ROUND(100.0 * s.mae / NULLIF(s.avg_actual, 0), 2) AS mape,
+           ROUND(100.0 * s.rmse / NULLIF(s.avg_actual, 0), 2) AS nrmse_pct,
+           s.sample_count
+    FROM stats s
+    JOIN sse_sst ss ON s.model_name = ss.model_name
+                   AND s.model_version = ss.model_version
+                   AND s.horizon_days = ss.horizon_days
+    ORDER BY s.horizon_days
+    """
+    try:
+        rows = execute_sql(query)
+    except Exception as exc:
+        logger.error("SQL fallback for registry models failed: %s", exc)
+        return []
+
+    results = []
+    for row in rows:
+        name = row.get("model_name", "")
+        results.append({
+            "model_name": name,
+            "version": str(row.get("model_version", "?")),
+            "approach": "Stacking",
+            "algorithm": "Ensemble",
+            "rmse": row.get("nrmse_pct"),
+            "mae": row.get("mae_mwh"),
+            "r2": row.get("r2"),
+            "mape": row.get("mape"),
+            "skill_score": None,
+            "created": None,
+            "champion": True,
+        })
+    return results
+
+
 def get_registry_models() -> list[dict]:
+    """Fetch champion model info: same source as Model Registry page.
+
+    Uses _get_mlflow_latest_run_payload (MLflow run metrics) + _get_mlflow_horizon_kpis
+    to extract R²/RMSE/MAE/MAPE from the training run, identical to the page.
+    """
     model_names = [
         "pv.gold.daily_forecast_d1",
         "pv.gold.daily_forecast_d3",
         "pv.gold.daily_forecast_d5",
         "pv.gold.daily_forecast_d7",
     ]
+    horizon_map = {
+        "pv.gold.daily_forecast_d1": 1,
+        "pv.gold.daily_forecast_d3": 3,
+        "pv.gold.daily_forecast_d5": 5,
+        "pv.gold.daily_forecast_d7": 7,
+    }
 
-    champion_versions: dict[str, str] = {}
-    try:
-        import mlflow
-        from mlflow.tracking import MlflowClient
-
-        settings = get_solar_chat_settings()
-        if settings.databricks_host:
-            os.environ.setdefault("DATABRICKS_HOST", settings.databricks_host)
-        if settings.databricks_token:
-            os.environ.setdefault("DATABRICKS_TOKEN", settings.databricks_token)
-
-        mlflow.set_tracking_uri("databricks")
-        mlflow.set_registry_uri("databricks-uc")
-        client = MlflowClient()
-        for name in model_names:
-            try:
-                alias = client.get_model_version_by_alias(name, "champion")
-                if alias and alias.version:
-                    champion_versions[name] = str(alias.version)
-            except Exception:
-                continue
-    except Exception:
-        champion_versions = {}
-
-    results: list[dict] = []
+    results = []
     for name in model_names:
-        payload = _get_mlflow_latest_run_payload(name)
+        try:
+            payload = _get_mlflow_latest_run_payload(name, champion_only=True)
+        except Exception as exc:
+            logger.error("get_registry_models MLflow failed for %s: %s", name, exc)
+            payload = {}
+
         if not payload:
+            logger.warning("get_registry_models: empty payload for %s", name)
             continue
 
-        version = payload.get("model_version")
+        horizon = horizon_map.get(name, 1)
+        metrics = payload.get("metrics", {})
         created = payload.get("date")
-        metrics = payload.get("metrics") or {}
-
-        horizon = None
-        if name.endswith("_d1"):
-            horizon = 1
-        elif name.endswith("_d3"):
-            horizon = 3
-        elif name.endswith("_d5"):
-            horizon = 5
-        elif name.endswith("_d7"):
-            horizon = 7
-
-        kpis = {}
-        if horizon is not None:
-            kpis = _get_mlflow_horizon_kpis(metrics, horizon, created or "N/A")
+        kpis = _get_mlflow_horizon_kpis(metrics, horizon, created or "N/A")
 
         results.append({
             "model_name": name,
-            "version": version,
+            "version": payload.get("model_version", "?"),
             "approach": "Stacking",
             "algorithm": "Ensemble",
             "rmse": kpis.get("rmse"),
@@ -667,8 +752,12 @@ def get_registry_models() -> list[dict]:
             "mape": kpis.get("mape"),
             "skill_score": kpis.get("skill_score"),
             "created": created,
-            "champion": str(version) == champion_versions.get(name),
+            "champion": True,
         })
+
+    if not results:
+        logger.warning("get_registry_models: MLflow returned nothing, falling back to SQL")
+        results = _get_registry_models_sql_fallback(model_names, horizon_map)
 
     return results
 

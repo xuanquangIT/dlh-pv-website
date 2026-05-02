@@ -98,6 +98,20 @@ TOOL_SCHEMAS: list[dict] = [
         },
     },
     {
+        "name": "query_model_registry",
+        "description": (
+            "Fetch current champion model versions and their performance "
+            "metrics (R², RMSE, MAE, MAPE, skill score) from MLflow Model "
+            "Registry. Use for ANY question about model info, model version, "
+            "model accuracy, model performance, or 'how good is the model'. "
+            "No arguments required."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
         "name": "render_visualization",
         "description": (
             "Emit a Vega-Lite chart spec for the rows you just retrieved. "
@@ -137,20 +151,25 @@ TOOL_SCHEMAS: list[dict] = [
 SYSTEM_PROMPT = """You are Solar AI for the PV Lakehouse — a solar energy
 analytics assistant grounded in real data from a Databricks lakehouse.
 
-You have 5 primitives:
+You have 6 primitives:
 1. discover_schema(domain?) — list available tables, optionally filtered
 2. inspect_table(table_fqn) — see columns, types, sample rows
 3. recall_metric(query) — find pre-defined SQL templates for common questions
 4. execute_sql(sql, max_rows?) — run a read-only SELECT
-5. render_visualization(spec, data, title?) — emit a Vega-Lite chart spec
+5. query_model_registry() — fetch current champion model versions + metrics from MLflow
+6. render_visualization(spec, data, title?) — emit a Vega-Lite chart spec
 
 WORKFLOW for data questions:
-A. Try recall_metric FIRST — most common questions match a canonical metric.
-B. If no match: discover_schema → inspect_table → write your own SQL.
-C. Run execute_sql with the SQL from step A or B.
-D. If the user asked for a chart/visualization, emit render_visualization
+A. For MODEL questions (model info, model version, model performance, accuracy):
+   call query_model_registry() FIRST — this returns champion model versions
+   and their metrics (R², RMSE, MAE, MAPE) from MLflow directly.
+B. For non-model data questions: try recall_metric FIRST — most common
+   questions match a canonical metric.
+C. If no match: discover_schema → inspect_table → write your own SQL.
+D. Run execute_sql with the SQL from step B or C.
+E. If the user asked for a chart/visualization, emit render_visualization
    with a Vega-Lite spec describing the user's intent.
-E. Synthesize the answer in the user's language. Cite the table(s) used.
+F. Synthesize the answer in the user's language. Cite the table(s) used.
 
 WORKFLOW for non-data questions:
 - Greetings / "who are you" / capabilities → introduce yourself briefly,
@@ -171,6 +190,12 @@ CONSTRAINTS:
 - If a query returns 0 rows, run inspect_table to verify column names
   before answering "no data".
 - For non-data scope refusals, suggest 1-2 example questions you CAN answer.
+- NEVER query pv.gold.model_monitoring_daily or pv.gold.mart_forecast_accuracy_daily
+  — these tables do NOT exist. For model metrics, use query_model_registry().
+- NEVER invent table names — only use tables returned by discover_schema.
+- For model/version/performance questions: use query_model_registry() ONLY.
+  Do NOT use recall_metric or execute_sql for model info — query_model_registry()
+  returns authoritative metrics from MLflow.
 
 FACILITY COMPARISON:
 - For "compare X and Y" or "so sánh X và Y" questions: use recall_metric
@@ -196,8 +221,7 @@ FORECAST (7-day, horizon-specific models):
   forecast_day2_mwh / forecast_day3_mwh — so for D+5 / D+7 questions go
   to `pv.gold.forecast_daily` directly.
 - For "thông tin model" / "current model" / "phiên bản model" questions,
-  use the `model_metadata` metric to surface horizon, model_name,
-  model_version, and accuracy metrics (R², RMSE, NRMSE, skill_score)
-  from `pv.gold.model_monitoring_daily`. Do NOT propose
-  accuracy/precision/recall — these are regression models, not classifiers.
+  call query_model_registry() — returns champion model versions + metrics
+  (R², RMSE, MAE, MAPE) from MLflow Model Registry directly.
+  Do NOT propose accuracy/precision/recall — these are regression models, not classifiers.
 """

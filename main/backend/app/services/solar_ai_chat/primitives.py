@@ -37,7 +37,7 @@ _FORBIDDEN_SQL_KEYWORDS = (
 )
 _ALLOWED_SQL_PREFIXES = ("SELECT", "WITH")
 # System catalogs we never want to expose
-_BLOCKED_CATALOG_PREFIXES = ("information_schema", "system", "pg_catalog")
+_BLOCKED_CATALOG_PREFIXES = ("information_schema", "pg_catalog")
 
 
 class SqlSafetyError(ValueError):
@@ -493,7 +493,68 @@ def execute_sql(
 
 
 # -----------------------------------------------------------------------------
-# Primitive 5: render_visualization(spec, data)
+# Primitive 5: query_model_registry()
+# -----------------------------------------------------------------------------
+
+def query_model_registry() -> dict[str, Any]:
+    """Fetch champion model metrics from MLflow — same source as Model Registry page.
+
+    Returns one row per horizon (D+1, D+3, D+5, D+7) with version, R²,
+    RMSE, MAE, MAPE. Uses MLflow run metrics (same as Model Registry page).
+    """
+    from app.services.databricks_service import get_registry_models
+
+    try:
+        models = get_registry_models()
+    except Exception as exc:
+        logger.error("query_model_registry FAILED: %s", exc, exc_info=True)
+        return {
+            "error": f"Failed to query MLflow: {type(exc).__name__}: {exc}",
+            "guidance": "Ensure Databricks credentials are configured.",
+        }
+
+    logger.info("query_model_registry returned %d models", len(models))
+    if not models:
+        return {
+            "error": "MLflow returned no champion models. The Model Registry may be empty or credentials are misconfigured.",
+            "rows": [],
+            "row_count": 0,
+            "source": "mlflow_model_registry",
+        }
+
+    horizon_map = {
+        "pv.gold.daily_forecast_d1": 1,
+        "pv.gold.daily_forecast_d3": 3,
+        "pv.gold.daily_forecast_d5": 5,
+        "pv.gold.daily_forecast_d7": 7,
+    }
+    rows = []
+    for m in models:
+        rows.append({
+            "model_name": m.get("model_name", ""),
+            "horizon_days": horizon_map.get(m.get("model_name", ""), None),
+            "model_version": str(m.get("version", "?")),
+            "approach": m.get("approach", "Stacking"),
+            "algorithm": m.get("algorithm", "Ensemble"),
+            "r2": m.get("r2"),
+            "rmse_pct": m.get("rmse"),
+            "mae_mwh": m.get("mae"),
+            "mape_pct": m.get("mape"),
+            "skill_score": m.get("skill_score"),
+            "created": m.get("created"),
+            "is_champion": m.get("champion", False),
+        })
+
+    return {
+        "rows": rows,
+        "row_count": len(rows),
+        "columns": list(rows[0].keys()) if rows else [],
+        "source": "mlflow_model_registry",
+    }
+
+
+# -----------------------------------------------------------------------------
+# Primitive 6: render_visualization(spec, data)
 # -----------------------------------------------------------------------------
 
 # v2 emits Vega-Lite spec; v1's chart_service is replaced.
