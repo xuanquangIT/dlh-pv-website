@@ -16,7 +16,6 @@ from app.api import (
     data_quality,
     frontend,
     forecast,
-    ml_training,
     model_registry,
     solar_ai_chat,
 )
@@ -46,7 +45,6 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router)
     app.include_router(data_pipeline.router)
     app.include_router(data_quality.router)
-    app.include_router(ml_training.router)
     app.include_router(model_registry.router)
     app.include_router(forecast.router)
     app.include_router(solar_ai_chat.router)

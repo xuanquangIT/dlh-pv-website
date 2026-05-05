@@ -301,6 +301,7 @@ def benchmark_solar_ai_chat_model_only(
     endpoint_started = time.perf_counter()
     effective_role = _resolve_user_chat_role(current_user)
 
+    service = _resolve_chat_service_for_request(request, current_user)
     settings = get_solar_chat_settings()
     if not settings.llm_api_key and not settings.llm_base_url:
         raise HTTPException(
@@ -308,7 +309,7 @@ def benchmark_solar_ai_chat_model_only(
             detail="LLM API key is not configured.",
         )
 
-    model_router = LLMModelRouter(settings=settings)
+    model_router = service._model_router or LLMModelRouter(settings=settings)
     prompt = (
         "You are Solar AI. Answer concisely and clearly in English (max 8 sentences).\n"
         f"User Role: {effective_role.value}\n"

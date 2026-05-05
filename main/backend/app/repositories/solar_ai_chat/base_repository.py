@@ -39,10 +39,8 @@ class BaseRepository:
         "gold.fact_energy",
         "gold.dim_facility",
         "gold.forecast_daily",
-        "gold.model_monitoring_daily",
         "gold.mart_aqi_impact_daily",
         "gold.mart_energy_daily",
-        "gold.mart_forecast_accuracy_daily",
         "gold.mart_system_kpi_daily",
         "gold.mart_weather_impact_daily",
     })
@@ -179,7 +177,6 @@ class BaseRepository:
             "silver.air_quality": "aqi_timestamp",
             "gold.mart_energy_daily": "energy_date",
             "gold.mart_system_kpi_daily": "kpi_date",
-            "gold.mart_forecast_accuracy_daily": "forecast_date",
             "gold.mart_weather_impact_daily": "weather_date",
             "gold.mart_aqi_impact_daily": "aqi_date",
         }.get(table, "date_hour")

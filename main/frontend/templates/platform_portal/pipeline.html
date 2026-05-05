@@ -19,7 +19,12 @@
         </div>
         
         <div class="header-bottom">
-            <span class="job-target">Job: <strong id="job-name">Loading...</strong></span>
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <label style="font-size:12px; color:var(--txt3); font-family:'DM Mono',monospace; white-space:nowrap;">Job:</label>
+                <select id="job-selector" class="pipeline-input" style="min-width:240px; font-size:13px;">
+                    <option value="">Loading jobs...</option>
+                </select>
+            </div>
             <button class="btn btn-sm btn-outline" type="button" id="toggle-schedule-form">Edit Schedule</button>
         </div>
 
@@ -113,26 +118,9 @@
     <div id="tasks-tab" class="tab-content">
         <section class="pipeline-card">
             <h3>Pipeline Lineage</h3>
-            <div class="pipeline-dag">
-                <div class="dag-layer layer-bronze">
-                    <div style="font-weight: 600; min-width: 120px;">BRONZE</div>
-                    <div id="layer-bronze" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
-                </div>
-                
-                <div class="dag-layer layer-silver">
-                    <div style="font-weight: 600; min-width: 120px;">SILVER</div>
-                    <div id="layer-silver" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
-                </div>
-                
-                <div class="dag-layer layer-gold">
-                    <div style="font-weight: 600; min-width: 120px;">GOLD</div>
-                    <div id="layer-gold" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
-                </div>
-
-                <div class="dag-layer layer-ml">
-                    <div style="font-weight: 600; min-width: 120px;">ML & SERVING</div>
-                    <div id="layer-ml" style="display: flex; gap: 16px; flex-wrap: wrap;"></div>
-                </div>
+            <div class="pipeline-dag" id="dag-dynamic">
+                <!-- Layers are generated dynamically by renderDAG() -->
+                <div style="text-align:center;color:var(--txt3);padding:24px;">Select a job and switch to Runs tab to load data first.</div>
             </div>
         </section>
     </div>

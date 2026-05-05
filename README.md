@@ -108,7 +108,6 @@ dlh-pv-website/
 | Data Quality | `/quality` | Per-facility quality scores, issue tracking |
 | Forecast | `/forecast` | 7-day energy forecast (D+1, D+3, D+5, D+7) with confidence intervals |
 | Pipeline | `/pipeline` | Medallion pipeline stage progress & diagnostics |
-| ML Training | `/training` | Model training metrics & evaluation |
 | Model Registry | `/registry` | Model version registry & comparison |
 | Accounts | `/settings/accounts` | User management (admin only) |
 
@@ -261,6 +260,8 @@ Creates: `auth_roles`, `auth_users`, `chat_sessions`, `chat_messages`, `chat_too
 
 ```powershell
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend
+
+.\.venv\Scripts\Activate.ps1 ; python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --app-dir main/backend --reload
 ```
 
 ### 5. Open the app

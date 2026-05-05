@@ -48,64 +48,6 @@
     });
   }
 
-  function initTrainingChart() {
-    const trainingCanvas = document.getElementById("trainingChart");
-    if (!trainingCanvas || typeof Chart === "undefined") return;
-
-    const labels = Array.from({ length: 20 }, function (_, i) { return i * 25; });
-    const trainLoss = labels.map(function (x) { return +(0.9 * Math.exp(-x / 200) + 0.04).toFixed(4); });
-    const valLoss = trainLoss.map(function (x) { return +(x * 1.1).toFixed(4); });
-
-    new Chart(trainingCanvas, {
-      type: "line",
-      data: {
-        labels: labels,
-        datasets: [
-          { label: "Train Loss", data: trainLoss, borderColor: colors.solar, tension: 0.3 },
-          { label: "Val Loss", data: valLoss, borderColor: colors.blue, tension: 0.3 }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
-    });
-  }
-
-  function initForecastChart() {
-    const canvas = document.getElementById("forecastChart");
-    if (!canvas || typeof Chart === "undefined") return;
-
-    const labels = Array.from({ length: 24 }, function (_, i) { return String(i).padStart(2, "0") + ":00"; });
-    const predicted = labels.map(function (_, i) {
-      return i >= 6 && i <= 18 ? Math.round((Math.sin((i - 6) / 12 * Math.PI) * 220) + 20) : Math.round(Math.random() * 8);
-    });
-
-    new Chart(canvas, {
-      type: "line",
-      data: {
-        labels: labels,
-        datasets: [
-          { label: "Predicted", data: predicted, borderColor: colors.blue, tension: 0.3, fill: false }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
-    });
-  }
-
-  function initCompareChart() {
-    const canvas = document.getElementById("compareChart");
-    if (!canvas || typeof Chart === "undefined") return;
-    new Chart(canvas, {
-      type: "radar",
-      data: {
-        labels: ["RMSE", "MAE", "R2", "MAPE", "Speed", "Memory"],
-        datasets: [
-          { label: "GBT-v4.2", data: [92, 90, 94, 95, 80, 75], borderColor: colors.orange, backgroundColor: "rgba(224,123,57,.1)" },
-          { label: "GBT-v4.1", data: [84, 83, 88, 87, 82, 78], borderColor: colors.blue, backgroundColor: "rgba(27,108,168,.1)" }
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
-    });
-  }
-
   function bindTopbarActions() {
     const runButton = document.getElementById("run-pipeline-btn");
     if (!runButton) return;

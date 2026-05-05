@@ -44,12 +44,6 @@ MODULE_CARDS = [
         "ui_path": "/quality",
     },
     {
-        "name": "ML Training",
-        "description": "Training experiments and model comparison.",
-        "endpoint": "/ml-training/experiments",
-        "ui_path": "/training",
-    },
-    {
         "name": "Model Registry",
         "description": "Model versions and release details.",
         "endpoint": "/model-registry/models",
@@ -76,7 +70,6 @@ UI_TEST_PAGES: dict[str, str] = {
     "dashboard": "Dashboard",
     "pipeline": "Data Pipeline",
     "quality": "Data Quality",
-    "training": "ML Training",
     "registry": "Model Registry",
     "forecast": "Forecast",
     "solar_chat": "Solar AI Chat",
@@ -218,20 +211,6 @@ def quality_page(
         template_name="platform_portal/quality.html",
         current_page="quality",
         page_title=UI_TEST_PAGES["quality"],
-        current_user=current_user,
-    )
-
-
-@router.get("/training", response_class=HTMLResponse)
-def training_page(
-    request: Request,
-    current_user: AuthUser = Depends(require_role(["admin", "ml_engineer"])),
-) -> HTMLResponse:
-    return _render_refactored_page(
-        request=request,
-        template_name="platform_portal/training.html",
-        current_page="training",
-        page_title=UI_TEST_PAGES["training"],
         current_user=current_user,
     )
 

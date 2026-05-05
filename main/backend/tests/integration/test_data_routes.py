@@ -1,4 +1,4 @@
-"""Integration tests for data pipeline, data quality, forecast and ML training routes.
+"""Integration tests for data pipeline, data quality, and forecast routes.
 
 Covers:
   Data Pipeline
@@ -20,8 +20,6 @@ Covers:
   - GET  /forecast/summary-kpi
   - GET  /forecast/daily
 
-  ML Training
-  - GET  /ml-training/monitoring
 """
 import os
 import sys
@@ -640,10 +638,18 @@ class DataQualityHeatmapTests(unittest.TestCase):
 # Forecast
 # ---------------------------------------------------------------------------
 
-_MONITORING_METRICS = [
-    {"date": "2026-04-20", "rmse": 0.5, "mae": 0.3, "r2": 0.92, "mape": 5.0, "skill_score": 0.8},
-    {"date": "2026-04-21", "rmse": 0.4, "mae": 0.2, "r2": 0.95, "mape": 4.0, "skill_score": 0.85},
-]
+_REGISTRY_KPIS = {
+    "date": "2026-04-21",
+    "rmse": 0.4,
+    "mae": 0.2,
+    "r2": 0.95,
+    "mape": 4.0,
+    "skill_score": 0.85,
+    "model_name": "pv.gold.daily_forecast_d1",
+    "model_alias": "champion",
+    "model_label": "Stacking",
+    "model_version": "32",
+}
 
 _DAILY_FORECAST = [
     {"date": "2026-04-22", "facility_id": "WRSF1", "predicted_kwh": 120.5},
@@ -666,20 +672,19 @@ class ForecastSummaryKpiTests(unittest.TestCase):
     def test_summary_kpi_admin_success(self) -> None:
         self._set_role("admin")
         with patch(
-            "app.api.forecast.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
+            "app.api.forecast.routes.get_forecast_registry_kpis",
+            return_value=_REGISTRY_KPIS,
         ):
             response = self.client.get("/forecast/summary-kpi")
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        # Should return last element (latest)
         self.assertEqual(body["date"], "2026-04-21")
 
     def test_summary_kpi_analyst_success(self) -> None:
         self._set_role("analyst")
         with patch(
-            "app.api.forecast.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
+            "app.api.forecast.routes.get_forecast_registry_kpis",
+            return_value=_REGISTRY_KPIS,
         ):
             response = self.client.get("/forecast/summary-kpi")
         self.assertEqual(response.status_code, 200)
@@ -687,8 +692,8 @@ class ForecastSummaryKpiTests(unittest.TestCase):
     def test_summary_kpi_ml_engineer_success(self) -> None:
         self._set_role("ml_engineer")
         with patch(
-            "app.api.forecast.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
+            "app.api.forecast.routes.get_forecast_registry_kpis",
+            return_value=_REGISTRY_KPIS,
         ):
             response = self.client.get("/forecast/summary-kpi")
         self.assertEqual(response.status_code, 200)
@@ -696,8 +701,8 @@ class ForecastSummaryKpiTests(unittest.TestCase):
     def test_summary_kpi_data_engineer_success(self) -> None:
         self._set_role("data_engineer")
         with patch(
-            "app.api.forecast.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
+            "app.api.forecast.routes.get_forecast_registry_kpis",
+            return_value=_REGISTRY_KPIS,
         ):
             response = self.client.get("/forecast/summary-kpi")
         self.assertEqual(response.status_code, 200)
@@ -710,8 +715,8 @@ class ForecastSummaryKpiTests(unittest.TestCase):
     def test_summary_kpi_empty_metrics_returns_na(self) -> None:
         self._set_role("admin")
         with patch(
-            "app.api.forecast.routes.get_model_monitoring_metrics",
-            return_value=[],
+            "app.api.forecast.routes.get_forecast_registry_kpis",
+            return_value={"rmse": "N/A"},
         ):
             response = self.client.get("/forecast/summary-kpi")
         self.assertEqual(response.status_code, 200)
@@ -721,7 +726,7 @@ class ForecastSummaryKpiTests(unittest.TestCase):
     def test_summary_kpi_service_error_returns_500(self) -> None:
         self._set_role("admin")
         with patch(
-            "app.api.forecast.routes.get_model_monitoring_metrics",
+            "app.api.forecast.routes.get_forecast_registry_kpis",
             side_effect=Exception("Databricks error"),
         ):
             response = self.client.get("/forecast/summary-kpi")
@@ -816,103 +821,6 @@ class ForecastDailyTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# ML Training
-# ---------------------------------------------------------------------------
-
-class MlTrainingMonitoringTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.app = create_app()
-        cls.client = TestClient(cls.app)
-
-    def tearDown(self) -> None:
-        self.app.dependency_overrides.pop(get_current_user, None)
-
-    def _set_role(self, role_id: str) -> None:
-        self.app.dependency_overrides[get_current_user] = lambda: _make_user(role_id)
-
-    def test_monitoring_admin_success(self) -> None:
-        self._set_role("admin")
-        with patch(
-            "app.api.ml_training.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
-        ):
-            response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertIsInstance(body, list)
-        self.assertEqual(len(body), 2)
-        self.assertEqual(body[0]["date"], "2026-04-20")
-
-    def test_monitoring_ml_engineer_success(self) -> None:
-        self._set_role("ml_engineer")
-        with patch(
-            "app.api.ml_training.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
-        ):
-            response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 200)
-
-    def test_monitoring_data_engineer_success(self) -> None:
-        self._set_role("data_engineer")
-        with patch(
-            "app.api.ml_training.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
-        ):
-            response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 200)
-
-    def test_monitoring_analyst_forbidden(self) -> None:
-        self._set_role("analyst")
-        response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 403)
-
-    def test_monitoring_system_forbidden(self) -> None:
-        self._set_role("system")
-        response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 403)
-
-    def test_monitoring_empty_list_returns_200(self) -> None:
-        self._set_role("admin")
-        with patch(
-            "app.api.ml_training.routes.get_model_monitoring_metrics",
-            return_value=[],
-        ):
-            response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), [])
-
-    def test_monitoring_service_error_returns_500(self) -> None:
-        self._set_role("admin")
-        with patch(
-            "app.api.ml_training.routes.get_model_monitoring_metrics",
-            side_effect=Exception("Databricks unreachable"),
-        ):
-            response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 500)
-        self.assertIn("ML monitoring", response.json()["detail"])
-
-    def test_monitoring_unauthenticated_returns_401(self) -> None:
-        app_no_auth = create_app()
-        client = TestClient(app_no_auth, raise_server_exceptions=False)
-        response = client.get("/ml-training/monitoring")
-        self.assertIn(response.status_code, (401, 403))
-
-    def test_monitoring_returns_list_with_expected_keys(self) -> None:
-        self._set_role("admin")
-        with patch(
-            "app.api.ml_training.routes.get_model_monitoring_metrics",
-            return_value=_MONITORING_METRICS,
-        ):
-            response = self.client.get("/ml-training/monitoring")
-        self.assertEqual(response.status_code, 200)
-        item = response.json()[0]
-        for key in ("date", "rmse", "mae", "r2", "mape", "skill_score"):
-            with self.subTest(key=key):
-                self.assertIn(key, item)
-
-
-# ---------------------------------------------------------------------------
 # Cross-cutting: unauthenticated access on all data routes
 # ---------------------------------------------------------------------------
 
@@ -935,7 +843,6 @@ class UnauthenticatedAccessTests(unittest.TestCase):
         ("GET", "/data-quality/heatmap-data"),
         ("GET", "/forecast/summary-kpi"),
         ("GET", "/forecast/daily"),
-        ("GET", "/ml-training/monitoring"),
     ]
 
     def test_all_endpoints_reject_unauthenticated(self) -> None:

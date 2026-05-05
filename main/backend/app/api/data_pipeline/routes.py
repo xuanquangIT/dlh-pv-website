@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from app.api.dependencies import require_role
 from app.services.databricks_service import (
     cancel_job_run,
+    get_all_jobs,
     get_job_info,
     get_job_runs,
     get_run,
@@ -30,6 +31,17 @@ def get_data_pipeline_status(
         "module": "data_pipeline",
         "message": "Data Pipeline API placeholder is ready.",
     }
+
+
+@router.get("/jobs/list")
+def list_all_jobs(
+    _: object = Depends(require_role(["data_engineer", "admin"])),
+):
+    """Return minimal info (job_id, name, pause_status) for all Databricks jobs."""
+    try:
+        return get_all_jobs()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/jobs")

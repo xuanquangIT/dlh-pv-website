@@ -358,38 +358,6 @@ catalogs:
               - {name: created_at, type: timestamp}
               - {name: updated_at, type: timestamp}
 
-          mart_forecast_accuracy_daily:
-            description: "ML forecast accuracy per facility per day — R²/RMSE/MAE/NRMSE/skill score, with 7-day rolling averages and version-over-version deltas."
-            grain: [facility_id, eval_date]
-            columns:
-              - {name: facility_id, type: string}
-              - {name: facility_name, type: string}
-              - {name: region, type: string}
-              - {name: eval_date, type: date}
-              - {name: model_name, type: string}
-              - {name: model_version, type: string}
-              - {name: approach, type: string, description: "A/B/C/D/E benchmark approach."}
-              - {name: algorithm, type: string, description: "Ridge / GBT / RF / Stacking."}
-              - {name: is_champion, type: boolean}
-              - {name: is_fallback, type: boolean}
-              - {name: daytime_rows, type: int}
-              - {name: r2, type: double, description: "Coefficient of determination (regression, can go negative)."}
-              - {name: rmse_mwh, type: double}
-              - {name: mae_mwh, type: double}
-              - {name: nrmse_pct, type: double}
-              - {name: nmae_pct, type: double}
-              - {name: mape_day_pct, type: double}
-              - {name: skill_score, type: double, description: "Skill vs persistence baseline; positive = better than persistence."}
-              - {name: mean_capacity_mw, type: double}
-              - {name: r2_7d_avg, type: double}
-              - {name: nrmse_7d_avg, type: double}
-              - {name: skill_score_7d_avg, type: double}
-              - {name: r2_vs_prev_version, type: double}
-              - {name: rmse_vs_prev_version, type: double}
-              - {name: forecast_accuracy_grade, type: string, description: "A / B / C / D / F human-readable grade."}
-              - {name: generated_at_utc, type: timestamp}
-              - {name: batch_id, type: string}
-
           forecast_daily:
             description: "Daily energy forecast per facility — predicted vs actual, with 4 horizon-specific models (D+1, D+3, D+5, D+7). For ad-hoc 'next 7 days' rollups use forecast_horizon=7 (gives the day-7 prediction); to get the timeline use forecast_horizon IN (1,3,5,7) and ORDER BY forecast_date."
             grain: [facility_id, forecast_date, forecast_horizon]
@@ -410,28 +378,6 @@ catalogs:
               - "Tomorrow's predicted production"
               - "Forecast accuracy yesterday"
               - "Forecast for D+5 by facility"
-
-          model_monitoring_daily:
-            description: "Champion model regression metrics over time — R², RMSE, MAE, NRMSE, skill score per facility per eval_date."
-            grain: [facility_id, eval_date]
-            columns:
-              - {name: monitoring_id, type: string}
-              - {name: facility_id, type: string}
-              - {name: eval_date, type: date}
-              - {name: model_name, type: string}
-              - {name: model_version, type: string}
-              - {name: approach, type: string}
-              - {name: daytime_rows, type: int}
-              - {name: r2, type: double, description: "R² (regression metric)."}
-              - {name: rmse_mwh, type: double}
-              - {name: mae_mwh, type: double}
-              - {name: nrmse_pct, type: double}
-              - {name: nmae_pct, type: double}
-              - {name: mape_day_pct, type: double}
-              - {name: skill_score, type: double}
-              - {name: mean_capacity_mw, type: double}
-              - {name: generated_at_utc, type: timestamp}
-              - {name: batch_id, type: string}
 
           pipeline_run_diagnostics:
             description: "Per-pipeline run health — bronze/silver/gold stage row counts, status, failures."
@@ -1067,7 +1013,7 @@ metrics:
       color: forecast_horizon
 
   model_metadata:
-    description: "Thông tin model ML hiện tại: tên, version, approach, accuracy metrics (R², RMSE, NRMSE, skill_score) cho mỗi horizon (D+1, D+3, D+5, D+7). Use when user asks about 'model nào đang dùng', 'phiên bản model', 'độ chính xác model', 'thông tin model', 'current model', 'model info'."
+    description: "Thông tin model ML hiện tại: tên, version, approach, accuracy metrics (R², RMSE, MAE, MAPE, skill_score) cho mỗi horizon (D+1, D+3, D+5, D+7). Computes metrics from pv.gold.forecast_daily predictions vs actuals. Always up-to-date."
     synonyms: [
       "thông tin model", "thong tin model",
       "model nào", "model nao", "phiên bản model", "phien ban model",
@@ -1085,33 +1031,63 @@ metrics:
       - "Show me the champion model + accuracy per horizon"
       - "Phiên bản model dự báo và R², RMSE bao nhiêu?"
     sql_template: |
-      WITH ranked AS (
-        SELECT model_name, model_version, approach, eval_date,
-               r2, rmse_mwh, nrmse_pct, mape_day_pct, skill_score, daytime_rows,
-               ROW_NUMBER() OVER (PARTITION BY model_name ORDER BY eval_date DESC) AS rn
-        FROM pv.gold.model_monitoring_daily
-        WHERE facility_id = 'ALL'
-          AND model_name LIKE 'pv.gold.daily_forecast_%'
-          AND eval_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      WITH latest_per_model AS (
+        SELECT model_name, forecast_horizon AS horizon_days, MAX(CAST(model_version AS INT)) AS model_version
+        FROM pv.gold.forecast_daily
+        WHERE forecast_horizon IS NOT NULL
+          AND actual_energy_mwh_daily IS NOT NULL
+          AND forecast_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+        GROUP BY model_name, forecast_horizon
+      ),
+      eval_data AS (
+        SELECT f.model_name, f.forecast_horizon AS horizon_days,
+               f.predicted_energy_mwh_daily AS pred, f.actual_energy_mwh_daily AS actual
+        FROM pv.gold.forecast_daily f
+        JOIN latest_per_model l ON f.model_name = l.model_name
+                               AND CAST(f.model_version AS INT) = l.model_version
+                               AND f.forecast_horizon = l.horizon_days
+        WHERE f.actual_energy_mwh_daily IS NOT NULL
+          AND f.forecast_date >= CURRENT_DATE - INTERVAL '{window_days}' DAY
+      ),
+      stats AS (
+        SELECT
+          model_name, horizon_days,
+          AVG(actual) AS avg_actual,
+          AVG(pred) AS avg_pred,
+          SQRT(AVG(POWER(actual - pred, 2))) AS rmse,
+          AVG(ABS(actual - pred)) AS mae,
+          COUNT(*) AS sample_count
+        FROM eval_data
+        GROUP BY model_name, horizon_days
+      ),
+      sse_sst AS (
+        SELECT
+          e.model_name, e.horizon_days,
+          SUM(POWER(e.actual - e.pred, 2)) AS sse,
+          SUM(POWER(e.actual - s.avg_actual, 2)) AS sst
+        FROM eval_data e
+        JOIN stats s ON e.model_name = s.model_name AND e.horizon_days = s.horizon_days
+        GROUP BY e.model_name, e.horizon_days, s.avg_actual
       )
-      SELECT model_name,
-             TRY_CAST(REGEXP_EXTRACT(model_name, 'd([0-9]+)$', 1) AS INT) AS horizon_days,
-             model_version,
-             approach,
-             eval_date,
-             ROUND(r2, 3)             AS r2,
-             ROUND(rmse_mwh, 2)       AS rmse_mwh,
-             ROUND(nrmse_pct, 2)      AS nrmse_pct,
-             ROUND(mape_day_pct, 2)   AS mape_pct,
-             ROUND(skill_score, 3)    AS skill_score,
-             daytime_rows             AS sample_count
-      FROM ranked
-      WHERE rn = 1
-      ORDER BY horizon_days
+      SELECT
+        s.model_name,
+        s.horizon_days,
+        CAST(l.model_version AS STRING) AS model_version,
+        'Stacking' AS approach,
+        ROUND(1 - ss.sse / NULLIF(ss.sst, 0), 3) AS r2,
+        ROUND(s.rmse, 2) AS rmse_mwh,
+        ROUND(s.mae, 2) AS mae_mwh,
+        ROUND(100.0 * s.mae / NULLIF(s.avg_actual, 0), 2) AS mape_pct,
+        ROUND(100.0 * s.rmse / NULLIF(s.avg_actual, 0), 2) AS nrmse_pct,
+        s.sample_count
+      FROM stats s
+      JOIN sse_sst ss ON s.model_name = ss.model_name AND s.horizon_days = ss.horizon_days
+      JOIN latest_per_model l ON s.model_name = l.model_name AND s.horizon_days = l.horizon_days
+      ORDER BY s.horizon_days
     parameters:
-      - {name: window_days, type: int, default: 7, range: [1, 30]}
+      - {name: window_days, type: int, default: 14, range: [7, 30]}
     suggested_chart: null
-    suggested_kpi_cards: ["model_name", "model_version", "r2", "rmse_mwh", "nrmse_pct", "skill_score"]
+    suggested_kpi_cards: ["model_name", "model_version", "r2", "rmse_mwh", "mae_mwh", "mape_pct"]
 
   # === Per-station reports ===
   station_daily_report:
@@ -1340,9 +1316,7 @@ roles:
       - pv.gold.fact_energy
       - pv.gold.mart_energy_daily
       - pv.gold.mart_system_kpi_daily
-      - pv.gold.mart_forecast_accuracy_daily
       - pv.gold.forecast_daily
-      - pv.gold.model_monitoring_daily
       - pv.silver.energy_readings
     allowed_metrics: ["*"]
 
