@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from datetime import datetime
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.jobs import CronSchedule, JobSettings, PauseStatus
@@ -7,6 +8,20 @@ from app.core.settings import get_solar_chat_settings
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
+
+# ── Defensive SQL-interpolation validators ────────────────────────
+_ALLOWED_HORIZONS = frozenset({1, 3, 5, 7})
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _assert_valid_horizon(horizon: int) -> None:
+    if horizon not in _ALLOWED_HORIZONS:
+        raise ValueError(f"Invalid horizon {horizon}; must be one of {sorted(_ALLOWED_HORIZONS)}")
+
+
+def _assert_valid_date(value: str, param_name: str) -> None:
+    if not _DATE_RE.match(value):
+        raise ValueError(f"Invalid {param_name}: must be YYYY-MM-DD, got {value!r}")
 
 @lru_cache(maxsize=1)
 def get_databricks_client() -> WorkspaceClient:
@@ -305,6 +320,11 @@ def get_daily_forecast(
 ) -> list[dict]:
     # Filter by a single forecast_horizon to avoid summing D+1+D+3+D+5+D+7
     # for the same forecast_date (which would give 4x the real predicted value).
+    _assert_valid_horizon(horizon)
+    if start_date:
+        _assert_valid_date(start_date, "start_date")
+    if end_date:
+        _assert_valid_date(end_date, "end_date")
     horizon_filter = f"AND f.forecast_horizon = {horizon}"
 
     if start_date and end_date:
@@ -395,6 +415,8 @@ def get_forecast_champion_meta(model_name: str) -> dict:
 
     Falls back to best-effort heuristics if system tables are unavailable.
     """
+    if not re.match(r"^pv\.gold\.daily_forecast_d\d+$", model_name):
+        raise ValueError(f"Unexpected model_name format: {model_name!r}")
     alias_row = {}
     try:
         alias_query = f"""
@@ -760,95 +782,3 @@ def get_registry_models() -> list[dict]:
         results = _get_registry_models_sql_fallback(model_names, horizon_map)
 
     return results
-
-def get_facility_heatmap(horizon: int) -> list[dict]:
-    return []
-
-def get_facility_drill(facility_id: str, horizon: int) -> dict:
-    model_filter = f"%daily_forecast_d{horizon}%"
-    
-    # Use forecast_daily for actual vs forecast
-    q_chart = f"""
-    SELECT
-      CAST(forecast_date AS STRING) AS date_md,
-      actual_energy_mwh_daily AS energy_mwh_daily,
-      predicted_capacity_factor_daily AS capacity_factor_pct,
-      predicted_energy_mwh_daily AS forecast_mwh
-    FROM pv.gold.forecast_daily
-    WHERE facility_id = '{facility_id}'
-      AND forecast_horizon = {horizon}
-      AND forecast_date >= current_date() - interval 30 days
-    ORDER BY forecast_date ASC
-    """
-    chart_rows = execute_sql(q_chart)
-    
-    for row in chart_rows:
-        row['date_md'] = row['date_md'][5:10] if row.get('date_md') else ''
-        row['energy_mwh_daily'] = float(row.get('energy_mwh_daily') or 0)
-        row['forecast_mwh'] = float(row.get('forecast_mwh') or 0)
-        row['capacity_factor_pct'] = float(row.get('capacity_factor_pct') or 0)
-        # Dummy weather/AQI since we can't use impact tables
-        row['cloud_pct'] = 0
-        row['aqi_value'] = 0
-        
-        weeks: list[dict] = []
-        
-    last_energy = chart_rows[-1]['energy_mwh_daily'] if chart_rows else 0
-    last_cf = chart_rows[-1]['capacity_factor_pct'] if chart_rows else 0
-    
-    return {
-        "facility": {
-            "id": facility_id,
-            "name": facility_id,
-            "region": "Unknown",
-            "state": "Unknown",
-            "capacity": 0,
-            "lat": 0, "lon": 0
-        },
-        "last": {
-            "energy_mwh_daily": last_energy,
-            "capacity_factor_pct": last_cf,
-            "specific_yield": 0,
-            "aqi_value": 0,
-            "aqi_category": "Unknown"
-        },
-        "daily_rows": chart_rows,
-        "weeks": weeks
-    }
-
-def get_forecast_waterfall(horizon: int) -> list[dict]:
-    query = f"""
-    SELECT
-      SUM(actual_energy_mwh_daily) AS actual,
-      SUM(predicted_energy_mwh_daily) AS predicted
-    FROM pv.gold.forecast_daily
-    WHERE forecast_horizon = {horizon}
-      AND forecast_date = (SELECT MAX(forecast_date) FROM pv.gold.forecast_daily)
-    """
-    res = execute_sql(query)
-    predicted = float(res[0].get('predicted') or 1000) if res else 1000
-    
-    return [
-        {"label": "Clear-sky baseline", "value": predicted * 1.4, "color": "#f4b942"},
-        {"label": "Cloud derating", "value": -predicted * 0.2, "color": "#e15759"},
-        {"label": "Temperature derating", "value": -predicted * 0.1, "color": "#f6c544"},
-        {"label": "AQI derating", "value": -predicted * 0.05, "color": "#e59aa8"},
-        {"label": "Ensemble adjustments", "value": -predicted * 0.05, "color": "#6aa8ef"}
-    ]
-
-def get_residuals_30d(horizon: int) -> list[dict]:
-    query = f"""
-    SELECT
-      CAST(forecast_date AS STRING) AS date_md,
-      SUM(actual_energy_mwh_daily) - SUM(predicted_energy_mwh_daily) AS residual
-    FROM pv.gold.forecast_daily
-    WHERE forecast_horizon = {horizon}
-      AND forecast_date >= current_date() - interval 30 days
-    GROUP BY forecast_date
-    ORDER BY forecast_date ASC
-    """
-    rows = execute_sql(query)
-    for r in rows:
-        r['date_md'] = r['date_md'][5:10] if r.get('date_md') else ''
-        r['residual'] = float(r.get('residual') or 0)
-    return rows

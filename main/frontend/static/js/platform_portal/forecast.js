@@ -267,94 +267,6 @@
     });
   }
 
-  // ─── Heatmap & Facility Drill ────────────────────────────────────
-  let fdEnergyChart = null;
-  let fdWeatherChart = null;
-  let fdCfChart = null;
-
-  async function openFacilityDrill(facId) {
-      const modal = document.getElementById('facility-drill-modal');
-      modal.classList.add('open');
-      document.getElementById('facility-drill-loading').style.display = 'block';
-      document.getElementById('facility-drill-content').style.display = 'none';
-      
-      try {
-          const res = await fetch(`/forecast/facility-drill/${facId}?horizon=${selectedHorizon}`);
-          const data = await res.json();
-          
-          document.getElementById('fd-code').textContent = data.facility.id;
-          document.getElementById('fd-name').textContent = data.facility.name;
-          document.getElementById('fd-meta').textContent = `${data.facility.region} · ${data.facility.state} · ${data.facility.capacity} MW · ${data.facility.lat}, ${data.facility.lon}`;
-          
-          document.getElementById('fd-today-energy').textContent = data.last.energy_mwh_daily.toFixed(1) + " MWh";
-          document.getElementById('fd-cf').textContent = data.last.capacity_factor_pct.toFixed(1) + "%";
-          document.getElementById('fd-yield').textContent = data.last.specific_yield.toFixed(2) + " kWh/kWp";
-          document.getElementById('fd-aqi').textContent = data.last.aqi_value + " (" + data.last.aqi_category + ")";
-          
-          document.getElementById('fd-grades').innerHTML = data.weeks.map(w => {
-            let bg = 'rgba(225,87,89,0.28)';
-            if (w.grade === 'A') bg = 'rgba(127,201,127,0.18)';
-            else if (w.grade === 'B') bg = 'rgba(246,197,68,0.22)';
-            else if (w.grade === 'C') bg = 'rgba(255,150,66,0.25)';
-            return `<div style="background:${bg}; padding: 4px 8px; border-radius: 4px; text-align:center;">
-                <div style="font-size:10px; color:#556075;">${w.week}</div>
-                <div style="font-weight:bold;">${w.r2.toFixed(2)} ${w.grade}</div>
-            </div>`;
-          }).join('');
-
-          renderFdCharts(data.daily_rows);
-
-          document.getElementById('facility-drill-loading').style.display = 'none';
-          document.getElementById('facility-drill-content').style.display = 'block';
-      } catch(err) {
-          console.error(err);
-          document.getElementById('facility-drill-loading').textContent = "Error loading facility data.";
-      }
-  }
-
-  function renderFdCharts(rows) {
-      if (fdEnergyChart) fdEnergyChart.destroy();
-      if (fdWeatherChart) fdWeatherChart.destroy();
-      if (fdCfChart) fdCfChart.destroy();
-
-      const labels = rows.map(r => r.date_md);
-
-      fdEnergyChart = new Chart(document.getElementById('fdEnergyChart'), {
-          type: 'line',
-          data: {
-              labels,
-              datasets: [
-                  { label: "Actual", data: rows.map(r=>r.energy_mwh_daily), borderColor: "#f6c544", backgroundColor: "rgba(246,197,68,0.2)", fill:true, tension:0.3 },
-                  { label: "Forecast", data: rows.map(r=>r.forecast_mwh), borderColor: "#6aa8ef", borderDash: [5,5], tension:0.3 }
-              ]
-          },
-          options: { responsive: true, maintainAspectRatio: false }
-      });
-
-      fdWeatherChart = new Chart(document.getElementById('fdWeatherChart'), {
-          type: 'line',
-          data: {
-              labels,
-              datasets: [
-                  { label: "Cloud %", data: rows.map(r=>r.cloud_pct), borderColor: "#7da3c4", backgroundColor: "rgba(125,163,196,0.2)", fill:true, tension:0.3, yAxisID: 'y' },
-                  { label: "AQI", data: rows.map(r=>r.aqi_value), borderColor: "#e59aa8", tension:0.3, yAxisID: 'y1' }
-              ]
-          },
-          options: { responsive: true, maintainAspectRatio: false, scales: { y: {position:'left'}, y1: {position:'right', grid:{drawOnChartArea:false}} } }
-      });
-
-      fdCfChart = new Chart(document.getElementById('fdCfChart'), {
-          type: 'line',
-          data: {
-              labels,
-              datasets: [
-                  { label: "CF %", data: rows.map(r=>r.capacity_factor_pct), borderColor: "#4fb8a8", backgroundColor: "rgba(79,184,168,0.2)", fill:true, tension:0.3 }
-              ]
-          },
-          options: { responsive: true, maintainAspectRatio: false }
-      });
-  }
-
   // ─── Navigation ────────────────────────────────────────────────
   function shiftWeek(direction) {
     weekStart = addDays(weekStart, direction * 7);
@@ -394,10 +306,6 @@
       weekStart = newStart;
       updateWeekLabel();
       loadForecastDaily();
-    });
-
-    document.getElementById('facility-drill-close')?.addEventListener('click', () => {
-        document.getElementById('facility-drill-modal').classList.remove('open');
     });
 
     loadForecastSummary();
